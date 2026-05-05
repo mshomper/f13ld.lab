@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/lab.css">
+<link rel="stylesheet" href="lab.css">
 </head>
 <body>
 <div id="app">
@@ -118,14 +118,16 @@
 </div>
 
 <!-- ===== JS load order: lower numbers load first ===== -->
-<script src="js/00-mock-data.js"></script>
-<script src="js/10-hardware.js"></script>
-<script src="js/20-svg-mocks.js"></script>
-<script src="js/30-view-tabs.js"></script>
-<script src="js/40-design-grid.js"></script>
-<script src="js/50-controls.js"></script>
-<script src="js/60-add-design.js"></script>
-<script src="js/99-init.js"></script>
+<!-- NOTE: flat paths to match current repo structure.
+     If you later move files into js/ subfolder, restore js/ prefix. -->
+<script src="00-mock-data.js"></script>
+<script src="10-hardware.js"></script>
+<script src="20-svg-mocks.js"></script>
+<script src="30-view-tabs.js"></script>
+<script src="40-design-grid.js"></script>
+<script src="50-controls.js"></script>
+<script src="60-add-design.js"></script>
+<script src="99-init.js"></script>
 
 </body>
 </html>
