@@ -1,5 +1,5 @@
 /* ============================================================
-   F13LD.lab · v0.1.0-shell
+   F13LD.lab · v0.2.0-fft
    Design tokens, layout, and components.
    Tokens match the F13LD suite (Grain reference);
    --lab amber is the F13LD.lab tool accent.
@@ -334,7 +334,7 @@ html, body {
 .spec-pill[onclick] { cursor:pointer; transition:border-color 0.15s }
 .spec-pill[onclick]:hover { border-color:var(--lab) }
 
-.run-block { display:flex; flex-direction:column; align-items:flex-end; gap:8px }
+.run-block { display:flex; flex-direction:column; align-items:flex-end; gap:6px }
 .run-btn {
   font-size:13px; padding:10px 28px; border-radius:24px;
   border:0.5px solid var(--purple); background:var(--purple);
@@ -350,6 +350,20 @@ html, body {
 .run-btn.done {
   background:transparent; color:var(--good); border-color:var(--good);
 }
+
+/* ============ SELF-TEST LINK (Phase 2) ============ */
+.selftest-link {
+  font-size:10px; color:var(--ink-dim);
+  font-family:'JetBrains Mono', monospace; cursor:pointer;
+  letter-spacing:0.06em; padding:4px 8px;
+  user-select:none; transition:color 0.15s;
+  text-align:right; white-space:nowrap;
+  max-width:380px; overflow:hidden; text-overflow:ellipsis;
+}
+.selftest-link:hover { color:var(--lab) }
+.selftest-link.running { color:var(--lab) }
+.selftest-link.pass    { color:var(--good) }
+.selftest-link.fail    { color:var(--bad) }
 
 /* progress row */
 .prog-row {
@@ -379,6 +393,7 @@ html, body {
   .design-col:nth-child(3) { grid-column:auto }
   .controls { grid-template-columns:1fr; gap:14px }
   .run-block { align-items:stretch }
+  .selftest-link { text-align:left; max-width:none }
   .view-strip { flex-wrap:wrap; gap:10px }
   .view-strip .right { width:100% }
 }

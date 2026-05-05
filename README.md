@@ -1,13 +1,11 @@
 # F13LD.lab
 
-**Status:** v0.1.0-shell · alpha · UI shell only, no compute yet
+**Status:** v0.2.0-fft · alpha · WebGPU foundation + WGSL 3D FFT
 **License:** All rights reserved · License under review
 
 GPU-accelerated qualification tool for deep structural evaluation of metamaterial scaffolds. Browser-resident, statically hosted, designed for side-by-side comparison of up to three designs from F13LD.vault.
 
 Part of the [F13LD](https://f13ld.app) computational design suite.
-
-🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
 
 ---
 
@@ -34,12 +32,22 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 10-minute ceiling for default tier. F13LD = FAST.
 
+## What's new in v0.2.0-fft
+
+Phase 2 lands the WebGPU compute foundation that every subsequent solver builds on.
+
+- **WebGPU device** — lazy-init singleton with device-lost handling and uncaptured-error capture (`11-webgpu-device.js`)
+- **3D Stockham FFT** in WGSL — FP32 complex, ping-pong buffers, pre-baked per-stage uniform buffers, runs both forward and inverse with 1/N³ normalization (`12-fft-plan.js`)
+- **Self-test** — round-trip impulse, Gaussian round-trip, cosine spike, and forward-FFT timing (`70-selftest.js`)
+
+No new visible functionality — the UI is unchanged except for a small `▸ Self-test FFT` link in the lower-right of the controls panel. Click it to verify the FFT is working on your hardware. Expected: `✓ FFT 64³ · err ~1e-5 · forward ~0.5–2 ms` depending on GPU.
+
 ## Roadmap
 
-This is Phase 1 of a 10-phase build. Current state: UI shell, mock data, no compute.
+10-phase build. Each phase ships visible value while keeping a buildable codebase.
 
-- **Phase 1** ← *here* · UI shell, hardware detection, design ingest scaffolding
-- **Phase 2** · WebGPU foundation, WGSL FFT kernel
+- **Phase 1** · UI shell, hardware detection, design ingest scaffolding ✓
+- **Phase 2** ← *here* · WebGPU foundation, WGSL 3D FFT kernel ✓
 - **Phase 3** · SDF rasterizer (ports F13LD.sweep family code), linear elastic FFT-CG
 - **Phase 4** · Stiffness directional surface viz, 3-design comparison
 - **Phase 5** · Linear buckling (LOBPCG)
