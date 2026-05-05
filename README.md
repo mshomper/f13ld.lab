@@ -7,6 +7,8 @@ GPU-accelerated qualification tool for deep structural evaluation of metamateria
 
 Part of the [F13LD](https://f13ld.app) computational design suite.
 
+🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
+
 ---
 
 ## What this is
