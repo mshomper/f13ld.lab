@@ -8,7 +8,6 @@
 (function init(){
   // 1. Hardware detection (async — paints the pill when done)
   detectHardware().then(function(){
-    // Auto-pick grid based on detected hardware
     if (GRID_STATE.mode === 'auto'){
       GRID_STATE.N = autoPickGrid();
       paintGridPill();
@@ -38,8 +37,10 @@
     }, 150);
   });
 
-  console.log('%c F13LD.lab · v0.3.0-rc1 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
-  console.log('Phase 3 · in progress · field kernels ported (TPMS · Noise · Grain) · CPU rasterizer live');
-  console.log('  Run "▸ Self-test FFT" to verify GPU FFT.  Run "▸ Rasterize 3 demos" to verify the geometry pipeline.');
+  console.log('%c F13LD.lab · v0.3.0-rc2 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
+  console.log('Phase 3 · push 2 of 3 · GPU elastic FFT-CG live (normal-strain only · shear cases land in Phase 4)');
+  console.log('  ▸ Self-test FFT       · GPU FFT round-trip + cosine spike + timing');
+  console.log('  ▸ Rasterize 3 demos   · CPU geometry pipeline · VF + timing');
+  console.log('  ▸ Run elastic · 3 demos · GPU CG homogenization · Ex/Ey/Ez + iters + checks');
   console.log('Loaded demo recipes: ' + Object.keys(DEMO_RECIPES).join(', '));
 })();

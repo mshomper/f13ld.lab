@@ -1,15 +1,20 @@
 /* ============================================================
-   F13LD.lab · 12-fft-plan.js
+   F13LD.lab · 12-fft-plan.js  (v0.3.0 — encoded mode added)
    3D FFT via Stockham 1D passes along each axis.
    FP32 complex (vec2<f32>), pre-baked stage params, ping-pong
    buffers. Forward and inverse share kernels (twiddle sign flip).
 
-   Memory layout: index = i + N*j + N²*k, with i innermost.
-   Axis convention: 0 = i (innermost), 1 = j, 2 = k.
+   v0.3.0 additions for the elastic solver:
+     forwardEncoded(encoder), inverseEncoded(encoder)
+        — append FFT compute passes to an EXTERNAL command encoder
+          without submitting. Lets the elastic CG iteration batch
+          6 FFTs + a dozen small kernels into one submit.
+     loadFromBuffer(encoder, srcBuffer)
+     storeToBuffer (encoder, dstBuffer)
+        — GPU-side copies between FFTPlan's internal scratch (bufA)
+          and external buffers held by the elastic solver.
 
-   Buffer roles: bufA holds the user-provided input on upload(),
-   forward()/inverse() ping-pong A↔B internally and return the
-   buffer holding the final result.
+   Memory layout: index = i + N*j + N²*k, with i innermost.
    ============================================================ */
 
 /* WGSL: one Stockham butterfly pass over a single axis ----- */
@@ -35,7 +40,6 @@ var FFT_WGSL = [
 '  let tid = gid.x;',
 '  if (tid >= total) { return; }',
 '',
-'  // Decode (butterfly_id, pencil_a, pencil_b) from a flat 1D dispatch',
 '  let butterfly_id = tid % half_N;',
 '  let rest         = tid / half_N;',
 '  let pencil_a     = rest % N;',
@@ -48,18 +52,15 @@ var FFT_WGSL = [
 '  let b_block = butterfly_id / L;',
 '  let p       = butterfly_id % L;',
 '',
-'  // Stockham positions (within the 1D pencil being transformed)',
 '  let src_lo_pos = b_block * L + p;',
 '  let src_hi_pos = (b_block + M) * L + p;',
 '  let dst_lo_pos = b_block * (2u * L) + p;',
 '  let dst_hi_pos = dst_lo_pos + L;',
 '',
-'  // Twiddle: forward sign = -, inverse sign = +',
 '  let sign  = select(1.0, -1.0, params.sign_neg == 1u);',
 '  let theta = sign * 6.283185307179586 * f32(p) / f32(2u * L);',
 '  let twid  = vec2<f32>(cos(theta), sin(theta));',
 '',
-'  // Map pencil-relative positions to actual buffer indices, by axis',
 '  var s_lo: u32; var s_hi: u32; var d_lo: u32; var d_hi: u32;',
 '  if (params.axis == 0u) {',
 '    s_lo = buf_index(src_lo_pos, pencil_a, pencil_b, N);',
@@ -81,13 +82,11 @@ var FFT_WGSL = [
 '  let a     = src[s_lo];',
 '  let b_raw = src[s_hi];',
 '',
-'  // Complex multiply: b = b_raw * twid',
 '  let b = vec2<f32>(',
 '    b_raw.x * twid.x - b_raw.y * twid.y,',
 '    b_raw.x * twid.y + b_raw.y * twid.x',
 '  );',
 '',
-'  // Butterfly',
 '  dst[d_lo] = a + b;',
 '  dst[d_hi] = a - b;',
 '}'
@@ -110,10 +109,9 @@ var NORM_WGSL = [
 '}'
 ].join('\n');
 
+
 /* ============================================================
    FFTPlan — encapsulates buffers + pipelines + bind groups
-   for a fixed-size 3D FFT. Cheap to instantiate and reuse;
-   creating one per N (64 or 128) and reusing across solves.
    ============================================================ */
 function FFTPlan(N){
   this.N = N;
@@ -122,8 +120,8 @@ function FFTPlan(N){
     throw new Error('FFT size must be a power of 2 — got ' + N);
   }
   this.totalElements = N * N * N;
-  this.bufferSize    = this.totalElements * 8;     // vec2<f32> = 8 bytes
-  this.totalStages   = 3 * this.logN;              // 3 axes × logN stages
+  this.bufferSize    = this.totalElements * 8;
+  this.totalStages   = 3 * this.logN;
 
   this.device = WGPU.device;
   if (!this.device){
@@ -173,7 +171,6 @@ FFTPlan.prototype._allocateBuffers = function(){
 
   this.normParamsBuffer = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
 
-  // Pre-write normalize params (1/N³ scale, total elements)
   var npBuf = new ArrayBuffer(16);
   new Uint32Array(npBuf, 0, 1)[0]  = this.totalElements;
   new Float32Array(npBuf, 4, 1)[0] = 1.0 / this.totalElements;
@@ -195,22 +192,12 @@ FFTPlan.prototype._allocateBuffers = function(){
   });
 };
 
-/* ----------------------------------------------------------
-   Pre-bake per-stage uniform buffers and bind groups.
-
-   This avoids the writeBuffer-then-multiple-dispatches pitfall
-   (where only the LAST writeBuffer's value is observed by all
-   subsequent dispatches in a single submit).
-
-   Memory is trivial — for N=128, 6×7=42 stages × 32 bytes =
-   1.3 KB of uniform buffer total.
-   ---------------------------------------------------------- */
 FFTPlan.prototype._prebakeStageParams = function(){
   var d = this.device;
   var BU = GPUBufferUsage;
   var N = this.N, logN = this.logN;
 
-  this.stages = [];   // entry per stage: { fwdBg, invBg, srcBuf, dstBuf }
+  this.stages = [];
 
   for (var axis = 0; axis < 3; axis++){
     for (var stage = 0; stage < logN; stage++){
@@ -219,7 +206,6 @@ FFTPlan.prototype._prebakeStageParams = function(){
       var srcBuf   = isEven ? this.bufA : this.bufB;
       var dstBuf   = isEven ? this.bufB : this.bufA;
 
-      // Two uniform buffers per stage — forward (sign_neg=1) and inverse (sign_neg=0)
       var fwdParamsBuf = d.createBuffer({ size: 32, usage: BU.UNIFORM | BU.COPY_DST });
       var invParamsBuf = d.createBuffer({ size: 32, usage: BU.UNIFORM | BU.COPY_DST });
 
@@ -251,21 +237,19 @@ FFTPlan.prototype._prebakeStageParams = function(){
     }
   }
 
-  // After all stages, where does the result live?
-  // After totalStages alternations starting at A:
-  //   even count of stages → final dst = B (because the LAST stage writes to B)
-  // Wait: stage 0 writes A→B. After 1 stage, result in B. After 2, result in A.
-  // So result buf after K stages is B if K is odd, A if K is even.
+  /* Result parity: stage 0 writes A→B. After K stages, result is
+     in B if K is odd, A if K is even. */
   this.fwdResultBuf = (this.totalStages % 2 === 0) ? this.bufA : this.bufB;
   this.invResultBuf = this.fwdResultBuf;
 };
+
 
 /* ============================================================
    Public API
    ============================================================ */
 
-/* upload(complexInterleaved) — Float32Array of length 2 * N³,
-   interleaved (re, im, re, im, ...). Writes into bufA. */
+/* upload(complexArray) — Float32Array of length 2*N³, interleaved (re, im, re, im, ...).
+   Writes to bufA via queue.writeBuffer (CPU → GPU). */
 FFTPlan.prototype.upload = function(complexArray){
   if (complexArray.length !== 2 * this.totalElements){
     throw new Error('Array length mismatch — expected ' + (2 * this.totalElements) + ', got ' + complexArray.length);
@@ -274,15 +258,43 @@ FFTPlan.prototype.upload = function(complexArray){
   this.lastResultBuffer = this.bufA;
 };
 
-/* forward() — returns the GPUBuffer holding the FFT result. */
-FFTPlan.prototype.forward = function(){ return this._runFFT(true); };
+/* loadFromBuffer(encoder, srcBuffer) — GPU-side copy of an external complex
+   buffer into bufA, encoded into the given command encoder.  Use this when the
+   FFT input lives on the GPU already (elastic solver hot path). */
+FFTPlan.prototype.loadFromBuffer = function(encoder, srcBuffer){
+  encoder.copyBufferToBuffer(srcBuffer, 0, this.bufA, 0, this.bufferSize);
+  this.lastResultBuffer = this.bufA;
+};
 
-/* inverse() — returns the GPUBuffer holding the IFFT result, normalized by 1/N³. */
-FFTPlan.prototype.inverse = function(){ return this._runFFT(false); };
+/* storeToBuffer(encoder, dstBuffer) — GPU-side copy of the most recent FFT
+   result (lastResultBuffer) into an external buffer, encoded. */
+FFTPlan.prototype.storeToBuffer = function(encoder, dstBuffer){
+  encoder.copyBufferToBuffer(this.lastResultBuffer, 0, dstBuffer, 0, this.bufferSize);
+};
 
-FFTPlan.prototype._runFFT = function(forward){
-  var d = this.device;
-  var encoder = d.createCommandEncoder();
+/* forward() / inverse() — standalone variants that submit their own encoder.
+   Used by the FFT self-test and other one-shot consumers. */
+FFTPlan.prototype.forward = function(){
+  var enc = this.device.createCommandEncoder();
+  this._encodeFFT(enc, true);
+  this.device.queue.submit([enc.finish()]);
+  return this.lastResultBuffer;
+};
+FFTPlan.prototype.inverse = function(){
+  var enc = this.device.createCommandEncoder();
+  this._encodeFFT(enc, false);
+  this.device.queue.submit([enc.finish()]);
+  return this.lastResultBuffer;
+};
+
+/* forwardEncoded(encoder) / inverseEncoded(encoder) — append FFT compute
+   passes to an existing encoder.  Caller submits.  This is the hot path
+   for the elastic CG iteration. */
+FFTPlan.prototype.forwardEncoded = function(encoder){ this._encodeFFT(encoder, true);  return this.lastResultBuffer; };
+FFTPlan.prototype.inverseEncoded = function(encoder){ this._encodeFFT(encoder, false); return this.lastResultBuffer; };
+
+/* _encodeFFT — adds passes for one full 3D FFT to the given encoder.  No submit. */
+FFTPlan.prototype._encodeFFT = function(encoder, forward){
   var pass = encoder.beginComputePass();
   pass.setPipeline(this.fftPipeline);
 
@@ -295,7 +307,6 @@ FFTPlan.prototype._runFFT = function(forward){
   }
   pass.end();
 
-  // Inverse needs 1/N³ scaling
   if (!forward){
     pass = encoder.beginComputePass();
     pass.setPipeline(this.normPipeline);
@@ -306,12 +317,10 @@ FFTPlan.prototype._runFFT = function(forward){
     pass.end();
   }
 
-  d.queue.submit([encoder.finish()]);
   this.lastResultBuffer = forward ? this.fwdResultBuf : this.invResultBuf;
-  return this.lastResultBuffer;
 };
 
-/* readback(buffer) — Promise<Float32Array> of complex values. */
+/* readback(buffer) — Promise<Float32Array> of complex values (re/im interleaved). */
 FFTPlan.prototype.readback = async function(buffer){
   var d = this.device;
   var rb = d.createBuffer({
@@ -329,7 +338,6 @@ FFTPlan.prototype.readback = async function(buffer){
   return copy;
 };
 
-/* destroy() — release GPU resources. */
 FFTPlan.prototype.destroy = function(){
   this.bufA.destroy();
   this.bufB.destroy();
