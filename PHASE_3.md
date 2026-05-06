@@ -280,3 +280,130 @@ Updated in Phase 3:
 - Live at https://mshomper.github.io/f13ld.lab
 - Three working self-tests in the controls panel, each passing on Matt's NVIDIA desktop
 - Push 3 (Stokes) ready to start; no blockers identified
+
+---
+
+# Push 3 · Step 1 — CPU Stokes-Brinkman reference
+
+## Goal
+
+A CPU-side reference solver for fluid permeability K_ij that the GPU port (Step 2) can be checked against. Same role as the elastic CPU reference would have served if Push 2 had had one — except this time we built it before the GPU code, not after.
+
+## Final architecture (option C)
+
+The solver implements the **direct formulation** of the Stokes-Brinkman homogenization:
+
+```
+L · u = F̄,   L = -μ∇² + α(x),   ∇·u = 0,   ⟨u⟩ = ē_j
+```
+
+with `u = ē_j + u'`, `⟨u'⟩ = 0`, `∇·u' = 0`. The PCG outer loop solves `A·u' = b` where:
+
+- `A·u' = -μ∇²u' + P·(α(x)·u')` — Helmholtz-projected Brinkman operator
+- `b = -P·(α(x)·ē_j)` — forcing from the velocity boundary condition
+- `P = (I − n⊗n)` in Fourier space — incompressibility projection
+- `M⁻¹ = (-μ∇² + α₀)⁻¹` — diagonal Fourier-multiplier preconditioner
+
+After convergence: `F̄_i = ⟨α(x)·u_i⟩^(j)`, `M_ij = F̄_i/μ`, `K = M⁻¹` (3×3 invert).
+
+This is **not** the Lippmann-Schwinger polarization scheme used by the elastic solver. The architectural symmetry was tried and abandoned (see "lessons" below). Step 2's GPU Stokes solver will not reuse the gammaAccum WGSL kernel — it gets its own applyL + applyM⁻¹ + Helmholtz-projection kernels.
+
+## Verification at end of Step 1
+
+Schwarz P at N=16, ρ=0.5, μ=0.001 Pa·s, L_cell=5 mm, α_pen=1e6·μ/d_voxel² = 1.024e+10 Pa·s/m², α₀ = α_pen/2:
+
+| Metric | Result | Notes |
+| --- | --- | --- |
+| Kx / Ky / Kz | 9.557e-8 / 9.669e-8 / 9.577e-8 m² | TOL=1e-6, maxiter=2000 |
+| K eigenvalues (a±2b, a−b) | 9.601e-8 / 9.601e-8 m² | Cubic-symmetric to all printed digits |
+| Cubic isotropy error | 1.16% | < 5% threshold |
+| Off-diagonal K_ij | 1e-22 to 1e-20 | Machine-zero |
+| K positive definite | ✓ | Both eigenvalues positive |
+| k* = K/L² | 3.84e-3 (dimensionless) | Slightly above lit. band [1e-4, 1e-3] for N=16 |
+| PCG iters per LC | 1187 / 1103 / 1269 | Per-LC convergence |
+| Wall time | ~16 s | Acceptable for ref-test (devtest button) |
+
+At tighter tolerance (1e-7, 5000 iters) the solver converges to **Kx = Ky = Kz = 9.6823e-8 m² exactly** — perfect cubic isotropy.
+
+## Lessons (option B → option C arc)
+
+This step took three failed architectural attempts before landing on a working solver. The compressed timeline:
+
+### Attempt A — LS + plain CG (Moulinec-Suquet α₀ = α_pen/2)
+**Failed: wrong fixed point.** With α₀ = α_pen/2, the polarization δα = α(x) − α₀ is sign-indefinite. The operator A = I + Γ_S·δα is non-SPD; CG converges to the wrong fixed point. The lab's elastic solver in 16-elastic-solver.js uses C₀ = C_s (upper bound) which is implicitly **Brisard convention**, not M-S. Decision 2 in the original Push 3 plan ("M-S, more robust") was incorrectly framed for the CG context.
+
+### Attempt B — LS + plain CG (Brisard α₀ = α_pen)
+**Failed: extreme conditioning, oscillating answer.** With sign-fixed δα ≤ 0, CG finds the physical fixed point but extremely slowly. K_diag oscillates non-monotonically with iter count: 4.9e-9 → 2.5e-9 → 4.0e-8 → 7.2e-8 → 9.5e-8 across iters 100/500/1000/2000/5000. The problem: A = I + Γ_S·δα is **fundamentally non-symmetric** in L², because Γ_S is Fourier-diagonal and δα is real-space-diagonal, and these don't commute. For elastic this works empirically because the tensor structure of Γ:δC has more degrees of freedom and the asymmetry is small. For Stokes-Brinkman with a rank-2 transverse projector (I−n⊗n) inside Γ_S, asymmetry bites hard.
+
+### Attempt B' — LS + PCG with Fourier-multiplier preconditioner
+**Failed: divergent.** Adding `M⁻¹ = 1/(μ|ξ|² + α₀)` as a preconditioner. Mathematical reason: no Fourier- or real-space-diagonal preconditioner can make A self-adjoint — the asymmetry comes from the Γ_S · δα ordering, which no diagonal W fixes. PCG was actively destabilizing relative to plain CG.
+
+### Attempt C — Direct formulation L·u = F̄
+**Worked, after one bug fix.** The direct operator L = -μ∇² + α(x) is genuinely SPD on the divergence-free zero-mean subspace. PCG converges fast and monotonically. But initial implementation oscillated similar to Attempt B — diagnostic showed `div(u') = 4e-12` at iter 1 jumping to `1.5e+3` at iter 2. Hypothesized FP-leak through applyA, but a re-projection patch did not help.
+
+### Root cause of Attempt C oscillation: Nyquist treatment
+Direct test of the Helmholtz projector: project a random field, IFFT, measure divergence. With standard wavenumber assignment `k_i ∈ {0, 1, ..., N/2, -N/2+1, ..., -1}`, the projection produced `div(v)/‖v‖ = 3.16e+1` — 13 orders of magnitude worse than expected. Fourier-domain projection itself was exact (`div_hat ≈ 1e-12`). The bug: **at Nyquist bins (i = N/2)**, applying (I − n⊗n) with non-zero n_dir breaks conjugate symmetry of the Fourier representation of a real field. After IFFT the result has non-trivial imaginary parts, and the standard "discard imaginary" step introduces real-space divergence.
+
+The fix is a 3-line patch: zero `k_i` (and consequently `n_dir` and `k2_phys` and `M_inv`) when `i === N/2`, and same for j and k. The Nyquist plane becomes inert under all spectral operators. With this fix:
+
+- Helmholtz projection: `div(v)/‖v‖ = 9.17e-14` (machine epsilon) ✓
+- PCG iterates stay in div-free subspace
+- K_diag converges monotonically: 4.0e-9 → 2.1e-8 → 3.6e-8 → 4.5e-8 → ... → 9.68e-8
+- Off-diagonals stay machine-zero (1e-22)
+- Cubic isotropy is exact at converged solution
+
+This is a known issue in pseudospectral PDE solvers for real-valued fields, but easy to forget. Worth flagging permanently.
+
+## Compiled lessons for Step 2 (GPU port) and beyond
+
+1. **Don't force architectural symmetry between Stokes and elastic.** They look superficially similar (both are FFT-CG homogenization with α/C contrast and a Helmholtz-like projector), but the Stokes operator has rank-2 incompressibility which breaks the symmetry-friendly properties of the elastic LS scheme. Direct formulation is mandatory; gammaAccum kernel reuse is gone.
+
+2. **For real-valued field FFT solvers, zero the Nyquist plane.** Always. In every Fourier-domain operator that uses `n_dir`, `k_i`, or `|k|²`. The cost is ~3/N ≈ 19% of bins at N=16, but the alternative is silent symmetry violation that compounds across PCG iterations.
+
+3. **The diagonal preconditioner `M⁻¹ = (-μ∇² + α₀)⁻¹` works for Stokes-Brinkman.** ~800-1300 iters at TOL=1e-6 for N=16 Schwarz P. This is more than the elastic solver's 16 iters/LC, but tractable. Multigrid preconditioning could likely cut this 5-10× and is on the table for Phase 4 if Stokes runs become a bottleneck.
+
+4. **Diagnostic: check `div(u_pri)` at each PCG iter.** If it grows, the iterate has left the SPD subspace and the answer cannot be trusted regardless of residual. This is the canary; it's how the Nyquist bug was found.
+
+5. **Verify Helmholtz projection in isolation.** Before running PCG, project a known random field and confirm `div/‖v‖ ≈ 1e-13`. If it isn't, the projector is broken (almost certainly Nyquist). 5-line standalone test that takes 30 seconds to write.
+
+## File inventory after Push 3 Step 1
+
+New:
+```
+18-stokes-cpu-ref.js   — CPU PCG solver, ~580 lines
+                          fft1dCpu, fft3dCpu, solveCPUStokes, homogenizeCPUStokes,
+                          solveDesignCPUStokes, runCPUStokesSmokeTest
+                          (M⁻¹ preconditioner is computed inline in solveCPUStokes;
+                           applyA / applyMinv / applyHelmholtz are nested closures)
+```
+
+Updated:
+```
+14-rasterizer.js       — added buildStokesGamma (kept for reference; not called by
+                          the option C direct formulation but useful for diagnostics
+                          and any future LS-based experiments)
+index.html             — added 18-stokes-cpu-ref.js script tag and
+                          "▸ CPU Stokes ref · Schwarz P (N=16)" selftest link
+```
+
+## Decisions log
+
+| # | Decision | Status |
+| --- | --- | --- |
+| 1 | α_pen scale = 1e6 (default) | Held |
+| 2 | α₀ = α_pen/2 (M-S midpoint) | **Overturned twice.** First to Brisard α_pen for LS; then back to α_pen/2 as preconditioner reference for direct formulation. |
+| 3 | Ship CPU reference in Push 3 (not deferred) | Held — done |
+| 4 | Sync commit before Push 3 | Held — done |
+| 5 | Velocity-driven (not force-driven) formulation | Held |
+| 6 | File numbering 18/19/20 for stokes-cpu-ref/solver/test | Held |
+| 7 | Switch from LS to direct formulation (option C) | New, approved during Step 1 |
+| 8 | Smoke test thresholds: TOL=1e-6, maxiter=2000 | New |
+| 9 | Step 2 GPU solver does not reuse gammaAccum kernel | New, follows from #7 |
+
+## Handoff state (Push 3 Step 1 complete)
+
+- 18-stokes-cpu-ref.js working in browser via `▸ CPU Stokes ref · Schwarz P (N=16)` button
+- Schwarz P at N=16: K = 9.60e-8 m², isotropy 1.16%, ~16 sec wall time
+- Step 2 (GPU StokesSolver) not yet started
+- Step 3 (Self-test 4: GPU vs CPU comparison) not yet started
+

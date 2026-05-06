@@ -205,6 +205,45 @@ function buildGamma(N, mu0, lam0) {
 
 
 /* ============================================================
+   buildStokesGamma — discrete Green operator for the Stokes-
+   Brinkman Lippmann-Schwinger iteration. (See full doc above.)
+   ============================================================ */
+function buildStokesGamma(N, mu, alpha0, L_cell_m) {
+  var N3 = N * N * N;
+  var Gamma = [
+    [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)],
+    [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)],
+    [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)]
+  ];
+  var k_scale = 2 * Math.PI / L_cell_m;
+  var k_scale_sq = k_scale * k_scale;
+  for (var i = 0; i < N; i++) {
+    var ki = i <= N/2 ? i : i - N;
+    for (var j = 0; j < N; j++) {
+      var kj = j <= N/2 ? j : j - N;
+      for (var k = 0; k < N; k++) {
+        var kk = k <= N/2 ? k : k - N;
+        var ksq = ki*ki + kj*kj + kk*kk;
+        var idx = i*N*N + j*N + k;
+        if (ksq === 0) continue;
+        var rk = 1.0 / Math.sqrt(ksq);
+        var n0 = ki*rk, n1 = kj*rk, n2 = kk*rk;
+        var nv = [n0, n1, n2];
+        var inv_denom = 1.0 / (mu * k_scale_sq * ksq + alpha0);
+        for (var p = 0; p < 3; p++) {
+          for (var q = 0; q < 3; q++) {
+            var kron = (p === q) ? 1 : 0;
+            Gamma[p][q][idx] = (kron - nv[p]*nv[q]) * inv_denom;
+          }
+        }
+      }
+    }
+  }
+  return Gamma;
+}
+
+
+/* ============================================================
    resolveMode — pulls the lab geometry mode from a recipe.
 
    Recipe schema convention for lab (matches sweep where stable):
