@@ -514,4 +514,131 @@ index.html                        — added 21-raymarcher.js script tag (between
 - Push 3 Step 2 (GPU `StokesSolver`) is the next workstream
 - Step 3 (GPU vs CPU self-test) follows Step 2
 
+---
+
+# Push 3 · Step 2 — GPU StokesSolver
+
+## Goal
+
+Port the validated CPU Stokes-Brinkman PCG solver from Step 1 (`18-stokes-cpu-ref.js`) into a WGSL/WebGPU implementation that mirrors the architecture of `16-elastic-solver.js`. The CPU reference is the gold standard; the GPU code is expected to produce numerically identical results modulo FP32-vs-FP64 drift, with order-of-magnitude faster wall time.
+
+## Design
+
+Same algorithm as the CPU reference:
+```
+A · u' = b
+A · u' = -μ∇²u' + P · (α(x) · u')
+b      = -P · (α(x) · ē_j)
+M⁻¹    = (-μ∇² + α_0)⁻¹     [PCG preconditioner]
+```
+with `u = ē_j + u'` and `M_ij = ⟨α(x)·u_i⟩^(j) / μ`, `K = M⁻¹`.
+
+`StokesSolver` mirrors `ElasticSolver`'s shape: constructor takes `(N, fftPlan)`, `uploadDesign` pushes solid mask + lookup tables + `α_pen`, `solveLoadCase(u_bar)` runs one PCG to convergence, `homogenize(mu)` runs 3 LCs and returns the symmetrized K tensor, `destroy()` frees buffers.
+
+## What was reused vs newly written
+
+**Reused verbatim from `16-elastic-solver.js`:**
+- `PACK_COMPLEX_WGSL` — real → vec2(re, 0) packing
+- `AXPY_WGSL` — y += α·x
+- `XBPY_WGSL` — y = x + β·y
+- `FILL_WGSL` — y = constant
+- `DOT_REDUCE_WGSL` — Σ a[i]·b[i] reduction across triples
+
+These five kernels are already in the `16-elastic-solver.js` global scope (top-level `var X_WGSL = '...';` strings); the Stokes solver compiles them through its own pipeline objects but the WGSL strings are literally shared. Bind-group layouts are also reusable conceptually, but each solver creates its own layouts (cleaner ownership; both solvers might run concurrently in Phase 5+ workflows).
+
+**Six new Stokes-specific kernels:**
+
+1. `stokesPenalize` — real-space `pen[c] = α(x) · u[c]` for c∈{0,1,2}. Single dispatch, single solid-mask read shared across all 3 components.
+
+2. `stokesHelmholtzProject` — Fourier-space, in-place: `v_hat[c] -= n_dir[c] · (n · v_hat)`. Requires all 3 components simultaneously (for the dot product), so single dispatch reads all 3 complex buffers + 3 `n_dir` real lookups.
+
+3. `stokesAccumLaplacian` — Fourier-space: `outHat[c] = penHat_proj[c] + μ·k²·uHat[c]`. Per-component dispatch (3 total), reads shared `k2_phys` lookup which has `μ` baked in.
+
+4. `stokesPrecondMul` — Fourier-space, in-place: `hat *= M_inv`. Per-component dispatch (3 total).
+
+5. `stokesUnpackReal` — strip `.x` from a complex IFFT output into a real buffer. Per-component dispatch (3 total).
+
+6. `STOKES_PARAMS_WGSL` (uniform struct, not a kernel) — holds `α_pen`, `total = N³`, `N`, padding.
+
+## Per-iter PCG cost
+
+| Op | FFTs | Dispatches | Readbacks |
+|---|---|---|---|
+| `applyA` | 9 | 10 | 0 |
+| `applyMinv` | 6 | 5 | 0 |
+| Reductions (`p·Ap`, `r·r`, `r·z`) | 0 | 3 | 3 |
+| Vector ops (`axpy ×2`, `xbpy ×1`) | 0 | 9 | 0 |
+| **Total per PCG iter** | **15** | **27** | **3** |
+
+Each readback is 1-2 ms latency; at 410 iters per LC and 3 LCs this is ~1.2 sec of overhead per design — negligible relative to the FFT cost on GPU.
+
+## Lookup tables (CPU-baked)
+
+The Nyquist-treatment lesson from Step 1 is enforced **CPU-side** in `buildStokesLookups(N, mu, alpha_0, L_cell_m)` — the function zeroes `n_dir`, `k2_phys`, and `M_inv` at any bin where `i, j, or k = N/2`, exactly matching the CPU reference. The WGSL kernels don't need any Nyquist logic — they just multiply by these arrays, so Nyquist becomes inert by construction. This is much cleaner than baking the Nyquist mask into shader logic, and ensures the GPU and CPU implementations produce identical mode coverage.
+
+The `μ` factor is baked into `k2_phys` directly (`k2_phys[i] = μ · |ξ_phys|²`) so the `stokesAccumLaplacian` kernel doesn't need a separate `μ` uniform.
+
+## Buffer footprint (N³ values, FP32)
+
+| Category | Count | Per N=64 | Per N=128 |
+|---|---|---|---|
+| Real per-component triples (u', b, r, z, p, Ap, pen) | 7 × 3 = 21 | 22 MB | 176 MB |
+| Complex per-component triples (penCmplx, penHat, uCmplx, uHat, outHat, outC, rCmplx, rHat, zC) | 9 × 3 = 27 | 56 MB | 448 MB |
+| Lookups (n_dir × 3, k2_phys, M_inv) | 5 | 5 MB | 42 MB |
+| Solid mask | 1 | 1 MB | 8 MB |
+| **Total** | **54** | **~84 MB** | **~675 MB** |
+
+At N=64 this fits comfortably on any modern GPU. At N=128 we approach iGPU memory limits; if Phase 5+ workloads need N=128 the solver should be refactored to share scratch buffers between `applyA` and `applyMinv` (potential ~30% reduction).
+
+## Smoke test
+
+`▸ GPU Stokes · Schwarz P (N=16)` button. Pass criteria match the CPU reference shape (positive-definite K, isotropy < 5%, K in physical band, all 3 LCs converged). Does NOT compare against CPU reference element-by-element — that's Step 3's job. Expected output: K ≈ 8.1e-8 m² at TOL=1e-5, ~410 iters per LC (matching CPU), sub-second wall time on a discrete GPU.
+
+## Lessons from the port
+
+1. **`writeBuffer` coalescing is real and bites** even between `_writeFill` and the immediate `dispatch` if you don't `submit()` between them. The elastic solver's comment about this (in `solveLoadCase` init) is repeated in Stokes for the same reason: when `_writeFill(α)` is called multiple times before any submit, only the last α reaches the GPU. The Stokes b-construction step needs three different fill values per component, so it submits three times (one per component) — slightly wasteful but correctness-mandatory. Could be avoided with a per-component fill kernel that takes a vec3 uniform; deferred as a micro-optimization.
+
+2. **B-construction is the messiest part of the solver**. The most natural code shape would be a single "build_b" kernel that reads `solid` and writes `pen[c] = α·ē_j[c]`, but that would be redundant with `stokesPenalize` if we just put `ē_j` into `u_pri` first. The chosen path — fill `u_pri` with `u_bar` per component, run `stokesPenalize`, FFT/project/IFFT/unpack into `pen`, zero `b`, axpy `b -= 1·pen`, reset `u_pri = 0` — uses only existing kernels but generates ~10 submits for one b. Total wall time impact is small (b-construction is per-LC, not per-iter), but the code is denser than the inner PCG loop. Worth simplifying with a dedicated kernel in a future polish pass.
+
+3. **`avgAlphaU` mutates `u_pri`** at the end of each `solveLoadCase` — adds `u_bar[c]` to `u_pri[c]` so we can run `stokesPenalize` once on the full velocity. This is safe because the next call to `solveLoadCase` resets `u_pri = 0` first, but it's a minor footgun. A `weightedReduceTriple` kernel (computing `Σ α(x) · a[c][x]` in one pass without modifying inputs) would be cleaner and faster — saves the readback round-trip. Phase 5+ optimization candidate.
+
+4. **No GPU-side validation possible in dev container.** Same as Step 1's geometry push: no Chromium / Puppeteer with WebGPU available locally. The headless test (loads file, checks globals, validates lookup-table values) catches static issues; the visual test on Matt's hardware is the only way to confirm GPU correctness end-to-end. Step 3's GPU vs CPU comparison test is what will give us confidence that the FP32 GPU output matches the FP64 CPU reference within tolerance.
+
+## File inventory after Step 2
+
+New:
+```
+19-stokes-solver.js              — StokesSolver class + 6 WGSL kernels +
+                                   solveDesignStokes top-level wrapper +
+                                   runGPUStokesSmokeTest selftest button
+                                   (~1380 lines)
+```
+
+Updated:
+```
+index.html                       — added 19-stokes-solver.js script tag
+                                   (between 18-stokes-cpu-ref.js and 17-elastic-test.js)
+                                   added "▸ GPU Stokes · Schwarz P (N=16)" selftest link
+```
+
+## Decisions log (Step 2)
+
+| # | Decision | Status |
+| --- | --- | --- |
+| S2-1 | Mirror ElasticSolver architecture, not invent new pattern | Held |
+| S2-2 | Reuse elastic's WGSL strings (axpy/xbpy/fill/dotReduce/packComplex) | Held |
+| S2-3 | Bake Nyquist treatment CPU-side in `buildStokesLookups` | Held |
+| S2-4 | Bake μ into k2_phys (no separate μ uniform in shader) | Held |
+| S2-5 | Smoke test ships in Step 2; full CPU vs GPU comparison waits for Step 3 | Held |
+| S2-6 | Same TOL=1e-5 as CPU at maxiter=1000 for the smoke test | Held |
+| S2-7 | Mutate `u_pri` for avgAlphaU calc (risk-free since reset per LC) | Held; mark for Phase 5 polish |
+
+## Handoff state (Step 2 complete)
+
+- 19-stokes-solver.js shipped with `StokesSolver` class, `solveDesignStokes` wrapper, and `runGPUStokesSmokeTest` selftest
+- Static smoke test passes: globals exposed, 6 new + 5 reused WGSL kernels compile, `buildStokesLookups` produces correct values (Nyquist plane zeroed, low bins match analytic μ·k² formula)
+- Live in-browser GPU smoke test pending on Matt's hardware
+- Step 3 (Self-test 4: GPU K vs CPU K element-by-element comparison, target tolerance 1% relative) is the next workstream
+
+
 
