@@ -1,19 +1,17 @@
 # F13LD.lab
 
-**Status:** v0.2.0-fft · alpha · WebGPU foundation + WGSL 3D FFT
+**Status:** v0.3.0-rc1 · alpha · Phase 3 in progress · field kernels ported, CPU rasterizer live
 **License:** All rights reserved · License under review
 
 GPU-accelerated qualification tool for deep structural evaluation of metamaterial scaffolds. Browser-resident, statically hosted, designed for side-by-side comparison of up to three designs from F13LD.vault.
 
 Part of the [F13LD](https://f13ld.app) computational design suite.
 
-🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
-
 ---
 
 ## What this is
 
-F13LD's design tools (TPMS, Grain, Noise, Bundle) are fast and exploratory — built around real-time WebGL raymarching with MIL-HS for design-time property estimation. F13LD.lab is the qualification half of the workflow: same browser tab, but compute-deep instead of compute-fast. Linear elastic, linear buckling, nonlinear plasticity, thermal — at solver fidelities the design tools deliberately don't reach for.
+F13LD's design tools (TPMS, Grain, Noise, Bundle) are fast and exploratory — built around real-time WebGL raymarching with MIL-HS for design-time property estimation. F13LD.lab is the qualification half of the workflow: same browser tab, but compute-deep instead of compute-fast. Linear elastic, linear buckling, nonlinear plasticity, thermal, and Stokes permeability — at solver fidelities the design tools deliberately don't reach for.
 
 Where design tools answer *"what does this look like?"*, lab answers *"is this design actually good for production?"*
 
@@ -31,27 +29,30 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 | Linear elastic                | ~2 s            | ~6 s             |
 | + Linear buckling             | ~35 s           | ~1.7 min         |
 | + Nonlinear (J2 + geom)       | ~2.5 min        | ~7.5 min         |
+| + Stokes permeability         | ~3 min          | ~9–10 min        |
 
 10-minute ceiling for default tier. F13LD = FAST.
 
-## What's new in v0.2.0-fft
+## What's new in v0.3.0-rc1
 
-Phase 2 lands the WebGPU compute foundation that every subsequent solver builds on.
+Phase 3 push 1 lands the field kernel layer ported verbatim from F13LD.sweep.
 
-- **WebGPU device** — lazy-init singleton with device-lost handling and uncaptured-error capture (`11-webgpu-device.js`)
-- **3D Stockham FFT** in WGSL — FP32 complex, ping-pong buffers, pre-baked per-stage uniform buffers, runs both forward and inverse with 1/N³ normalization (`12-fft-plan.js`)
-- **Self-test** — round-trip impulse, Gaussian round-trip, cosine spike, and forward-FFT timing (`70-selftest.js`)
+- **TpmsKernel · NoiseKernel · GrainKernel** ported intact from sweep — same recipe parsing, same evaluation math (`13-kernels.js`)
+- **CPU rasterizer** (`buildVoxels`) handles all three families and all eight modes (solid/shell/pi-tpms, noise-{sheet,half,solid}, grain-{sheet,half,solid}) — verbatim port (`14-rasterizer.js`)
+- **isoC + buildGamma** — isotropic Voigt stiffness and discrete Green operator, ready for the WGSL elastic solver in push 2 (`14-rasterizer.js`)
+- **Three demo recipes** — Schwarz P (TPMS), Spinodoid z-aligned (Grain), Hyperuniform trabecular-like (Grain) (`15-demo-recipes.js`)
+- **Rasterize self-test** — runs all three demos through `parseRecipe → buildVoxels` at N=64, reports volume fraction and timing per design (`71-rasterize-test.js`)
 
-No new visible functionality — the UI is unchanged except for a small `▸ Self-test FFT` link in the lower-right of the controls panel. Click it to verify the FFT is working on your hardware. Expected: `✓ FFT 64³ · err ~1e-5 · forward ~0.5–2 ms` depending on GPU.
+UI is unchanged except a new `▸ Rasterize 3 demos` link in the controls panel below the FFT self-test. Click it to verify the geometry pipeline. Real volume fractions paint into the design column ρ values.
+
+The full elastic + Stokes solver lights up in push 2.
 
 ## Roadmap
 
-10-phase build. Each phase ships visible value while keeping a buildable codebase.
-
 - **Phase 1** · UI shell, hardware detection, design ingest scaffolding ✓
-- **Phase 2** ← *here* · WebGPU foundation, WGSL 3D FFT kernel ✓
-- **Phase 3** · SDF rasterizer (ports F13LD.sweep family code), linear elastic FFT-CG
-- **Phase 4** · Stiffness directional surface viz, 3-design comparison
+- **Phase 2** · WebGPU foundation, WGSL 3D FFT kernel ✓
+- **Phase 3** ← *here · push 1 of 3* · SDF rasterizer, linear elastic FFT-CG, Stokes-Brinkman flow
+- **Phase 4** · Stiffness directional surface viz, full Voigt 6×6 with shear cases, connectivity gating
 - **Phase 5** · Linear buckling (LOBPCG)
 - **Phase 6** · Nonlinear (Newton + J2 plasticity)
 - **Phase 7** · Deformed-geometry domain warp, stress field overlay

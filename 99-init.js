@@ -32,13 +32,14 @@
 
   // 5. Window resize — re-render to keep responsive layout sane
   window.addEventListener('resize', function(){
-    // Debounce
     clearTimeout(window.__labResizeTimer);
     window.__labResizeTimer = setTimeout(function(){
       renderDesignGrid();
     }, 150);
   });
 
-  console.log('%c F13LD.lab · v0.1.0-shell ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
-  console.log('Phase 1 · UI shell · no compute yet · all run output is mock');
+  console.log('%c F13LD.lab · v0.3.0-rc1 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
+  console.log('Phase 3 · in progress · field kernels ported (TPMS · Noise · Grain) · CPU rasterizer live');
+  console.log('  Run "▸ Self-test FFT" to verify GPU FFT.  Run "▸ Rasterize 3 demos" to verify the geometry pipeline.');
+  console.log('Loaded demo recipes: ' + Object.keys(DEMO_RECIPES).join(', '));
 })();
