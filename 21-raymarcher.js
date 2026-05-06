@@ -214,7 +214,7 @@ function LabRaymarcher() {
     thickness: 0.3, isoLevel: 0.0, topoMode: 0, halfInvert: 0,
     pipeR: 0.1, pipeOffset: [0, 0, 0],
     fieldMin: -1, fieldMax: 1, lipschitz: 1.0, tile: 1.0,
-    nrmStep: 0.004, zoom: 16.0   /* matches F13LD.grain default; valid range ≈ [6, 40] */
+    nrmStep: 0.004, zoom: 20.0   /* ~15% margin from viewport edges; F13LD.grain default is 16 (closer) */
   };
 }
 
