@@ -565,7 +565,12 @@ ElasticSolver.prototype._applyA = function(enc, epsIn, out){
 };
 
 
-/* ── Encoded AXPY: y[*] += alpha · x[*]  for all three components ─ */
+/* ── Encoded AXPY: y[*] += alpha · x[*]  for all three components ─
+       CRITICAL: never call this twice on the same encoder with different
+       alphas.  Each call does one writeBuffer to axpyParamsBuf followed
+       by 3 dispatches; sequential writes coalesce (only the last value
+       persists), so two back-to-back calls would have both sets of
+       dispatches read the second alpha.  Submit between calls. */
 ElasticSolver.prototype._axpyTriple = function(enc, alpha, xs, ys){
   this._writeAxpy(alpha);
   for (var c = 0; c < 3; c++){
@@ -581,7 +586,8 @@ ElasticSolver.prototype._axpyTriple = function(enc, alpha, xs, ys){
   }
 };
 
-/* ── Encoded XBPY: y[*] = x[*] + beta · y[*]  for all three components ── */
+/* ── Encoded XBPY: y[*] = x[*] + beta · y[*]  for all three components ──
+       Same writeBuffer-coalescing rule as _axpyTriple — one call per encoder. */
 ElasticSolver.prototype._xbpyTriple = function(enc, beta, xs, ys){
   this._writeXbpy(beta);
   for (var c = 0; c < 3; c++){
@@ -597,7 +603,8 @@ ElasticSolver.prototype._xbpyTriple = function(enc, beta, xs, ys){
   }
 };
 
-/* ── Encoded fill: set all three components of `triple` to `value` ── */
+/* ── Encoded fill: set all three components of `triple` to `value` ──
+       Same writeBuffer-coalescing rule — one call per encoder. */
 ElasticSolver.prototype._fillTriple = function(enc, triple, value){
   this._writeFill(value);
   for (var c = 0; c < 3; c++){
@@ -677,10 +684,15 @@ ElasticSolver.prototype._readbackTriple = async function(triple){
 ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
   var d = this.device;
 
-  /* 1. Initialize eps = b = uniform macroscopic strain */
-  var initEnc = d.createCommandEncoder();
+  /* 1. Initialize eps = b = uniform macroscopic strain.
+        IMPORTANT — writeBuffer coalescing: WebGPU's queue executes ops
+        in submission order, but multiple writeBuffer calls to the same
+        buffer BEFORE a submit get coalesced (only the last value
+        persists by dispatch time).  We submit after each writeFill so
+        the dispatch sees the correct per-component value. */
   for (var c = 0; c < 3; c++) {
     this._writeFill(eps_bar[c]);
+    var encInit = d.createCommandEncoder();
     var bgEps = d.createBindGroup({
       layout: this.fillLayout,
       entries: [{ binding: 0, resource: { buffer: this.eps[c] } }, { binding: 1, resource: { buffer: this.fillParamsBuf } }]
@@ -689,18 +701,18 @@ ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
       layout: this.fillLayout,
       entries: [{ binding: 0, resource: { buffer: this.b[c] } }, { binding: 1, resource: { buffer: this.fillParamsBuf } }]
     });
-    var pass1 = initEnc.beginComputePass();
+    var pass1 = encInit.beginComputePass();
     pass1.setPipeline(this.fillPipeline);
     pass1.setBindGroup(0, bgEps);
     pass1.dispatchWorkgroups(Math.ceil(this.N3 / 64), 1, 1);
     pass1.end();
-    var pass2 = initEnc.beginComputePass();
+    var pass2 = encInit.beginComputePass();
     pass2.setPipeline(this.fillPipeline);
     pass2.setBindGroup(0, bgB);
     pass2.dispatchWorkgroups(Math.ceil(this.N3 / 64), 1, 1);
     pass2.end();
+    d.queue.submit([encInit.finish()]);
   }
-  d.queue.submit([initEnc.finish()]);
 
   /* bNorm = sqrt(dot(b, b)) — needed for relative residual */
   var bNorm = Math.sqrt(await this._dotTriple(this.b, this.b)) + 1e-30;
@@ -732,11 +744,18 @@ ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
     if (Math.abs(pAp) < 1e-30) break;
     var alpha = rr / pAp;
 
-    /* eps += alpha·p,  r -= alpha·Ap   (batched into one encoder) */
-    var encU = d.createCommandEncoder();
-    this._axpyTriple(encU, alpha, this.p, this.eps);
-    this._axpyTriple(encU, -alpha, this.Ap, this.r);
-    d.queue.submit([encU.finish()]);
+    /* eps += alpha·p,  r -= alpha·Ap
+       Two separate submits: each axpy writes alpha to the SAME uniform
+       buffer, and we need its dispatches to read the correct value
+       before the next write changes it.  See solveLoadCase init for
+       the same pattern explanation. */
+    var encE = d.createCommandEncoder();
+    this._axpyTriple(encE, alpha, this.p, this.eps);
+    d.queue.submit([encE.finish()]);
+
+    var encR = d.createCommandEncoder();
+    this._axpyTriple(encR, -alpha, this.Ap, this.r);
+    d.queue.submit([encR.finish()]);
 
     var rrNew = await this._dotTriple(this.r, this.r);
     var relRes = Math.sqrt(rrNew) / bNorm;
