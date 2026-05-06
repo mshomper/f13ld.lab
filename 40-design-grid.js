@@ -94,14 +94,39 @@ function renderDesignGrid(){
 
   // Render each design column
   var html = '';
+  /* Designs whose geometry tile should be raymarcher-backed in this render.
+     We figure out the recipe NOW so we can pre-create the LabRaymarcher and
+     bake the field BEFORE the grid HTML is committed; that way the canvas is
+     already populated when mountRaymarcherTiles attaches it.  Designs with
+     no recipe (e.g. mock RD designs lacking a lab kernel) fall back to SVG. */
+  var rmDesigns = [];   /* [{i, id, recipe}, …] */
+  if (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform') {
+    for (var ri = 0; ri < LAB_STATE.designs.length && ri < 3; ri++) {
+      var rd = LAB_STATE.designs[ri];
+      var rcp = (typeof recipeForDesign === 'function') ? recipeForDesign(rd) : null;
+      if (rcp) {
+        if (typeof getOrCreateRaymarcher === 'function') {
+          getOrCreateRaymarcher(rd.id, rcp);
+        }
+        rmDesigns.push({ i: ri, id: rd.id });
+      }
+    }
+  }
+  function isRMDesign(idx){ for (var k = 0; k < rmDesigns.length; k++) if (rmDesigns[k].i === idx) return true; return false; }
+
   for (var i = 0; i < LAB_STATE.designs.length && i < 3; i++){
     var d = LAB_STATE.designs[i];
     var fam = familyKey(d);
     var amp = getDeformAmp(d.id);
     var svgInner = '';
+    var useRM = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform') && isRMDesign(i);
 
-    if (VIEW_STATE.mode === 'geom')        svgInner = svgGeom(fam, false, 0);
-    else if (VIEW_STATE.mode === 'deform') svgInner = svgGeom(fam, true, amp);
+    if (VIEW_STATE.mode === 'geom') {
+      if (!useRM) svgInner = svgGeom(fam, false, 0);
+    }
+    else if (VIEW_STATE.mode === 'deform') {
+      if (!useRM) svgInner = svgGeom(fam, true, amp);
+    }
     else if (VIEW_STATE.mode === 'stress'){
       if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stress field');
       else svgInner = svgStress(fam, i);
@@ -127,6 +152,10 @@ function renderDesignGrid(){
     else if (RUN_STATE && RUN_STATE.running && i === RUN_STATE.currentIndex) statusClass = 'running';
     else statusClass = 'idle';
 
+    var viewportInner = useRM
+      ? '<div class="rm-mount" data-design-id="'+d.id+'" style="width:100%;height:100%;"></div>'
+      : '<svg viewBox="0 0 400 320" preserveAspectRatio="xMidYMid meet">'+svgInner+'</svg>';
+
     html += '<div class="design-col">' +
       '<div class="dc-head">' +
         '<div class="dc-name">' +
@@ -141,7 +170,7 @@ function renderDesignGrid(){
         '</div>' +
       '</div>' +
       '<div class="dc-viewport">' +
-        '<svg viewBox="0 0 400 320" preserveAspectRatio="xMidYMid meet">'+svgInner+'</svg>' +
+        viewportInner +
         '<div class="vp-axis">+Z<br>↑ +Y<br>→ +X</div>' +
         (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
         (showDeform ? buildDeformControl(d.id, amp) : '') +
@@ -150,6 +179,15 @@ function renderDesignGrid(){
       '</div>';
   }
   grid.innerHTML = html;
+
+  /* Mount any raymarcher canvases into their .rm-mount placeholders */
+  if (typeof mountRaymarcherTiles === 'function') mountRaymarcherTiles();
+  /* Pause raymarchers if we're in a non-geometry view (defensive — they
+     wouldn't have been mounted, but registry instances might still be
+     registered as "running" from a previous geom render). */
+  if (typeof pauseRaymarcherTilesForViewMode === 'function') {
+    pauseRaymarcherTilesForViewMode(VIEW_STATE.mode);
+  }
 
   // Wire up amp sliders after DOM injection
   var sliders = document.querySelectorAll('.amp-slider');
@@ -212,6 +250,10 @@ function setBaseline(designId){
    Remove a design from the comparison.
    ---------------------------------------------------------- */
 function removeDesign(designId){
+  /* Dispose any LabRaymarcher attached to this design before pulling it
+     from state, so its GL context and texture are freed immediately. */
+  if (typeof disposeRaymarcher === 'function') disposeRaymarcher(designId);
+
   LAB_STATE.designs = LAB_STATE.designs.filter(function(d){ return d.id !== designId; });
   if (LAB_STATE.baselineId === designId && LAB_STATE.designs.length > 0){
     LAB_STATE.baselineId = LAB_STATE.designs[0].id;

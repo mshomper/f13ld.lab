@@ -151,6 +151,50 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
 
 
 /* ============================================================
+   buildRawField — produce the raw scalar field (pre-topology)
+   for shader-side display. Mirrors buildVoxels' Pass 1 but
+   returns the Float32Array of kernel.evaluate values plus
+   min/max for R8 texture normalization.
+
+   The shader (LabRaymarcher) applies isoLevel / thickness /
+   topology via uniforms, so changing topology does not require
+   a re-bake — only the raw field needs to be present.
+
+   Domain: [-π, π]³, matching the kernel's internal coordinate
+   convention. Lab kernels (TpmsKernel, GrainKernel, NoiseKernel)
+   all consume coordinates in this domain regardless of the
+   recipe's cellSizeMm — physical scaling is a downstream concern.
+
+   Returns: { data: Float32Array(N³), fieldMin: number, fieldMax: number }
+   ============================================================ */
+function buildRawField(family, params, N) {
+  var L    = Math.PI;
+  var step = (2 * L) / N;
+  var N3   = N * N * N;
+  var kernel = KERNELS[family || 'tpms'];
+  if (!kernel) throw new Error('buildRawField: unknown family "' + family + '"');
+
+  var data = new Float32Array(N3);
+  var minV = Infinity, maxV = -Infinity;
+
+  for (var i = 0; i < N; i++) {
+    var x = -L + (i + 0.5) * step;
+    for (var j = 0; j < N; j++) {
+      var y = -L + (j + 0.5) * step;
+      for (var k = 0; k < N; k++) {
+        var z = -L + (k + 0.5) * step;
+        var v = kernel.evaluate(params, x, y, z);
+        data[i*N*N + j*N + k] = v;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+    }
+  }
+  return { data: data, fieldMin: minV, fieldMax: maxV };
+}
+
+
+/* ============================================================
    buildGamma — discrete Green operator for the elastic Lippmann-
    Schwinger iteration.
 

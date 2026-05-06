@@ -1,0 +1,657 @@
+/* ============================================================
+   F13LD.lab · 21-raymarcher.js
+   Per-design-card geometry preview using a WebGL2 raymarcher.
+
+   Ported from F13LD.grain's Raymarcher with extensions for the
+   five lab topology modes (sheet/half/solid/pi-tpms/shell).
+
+   Key architectural facts
+   -----------------------
+   • One <canvas> + WebGL2 context per design card.  GL contexts
+     are bounded by the browser (Chrome ≈16); we keep the canvas
+     element alive across grid re-renders by stashing it in a
+     hidden cache div, and the design grid moves it into the
+     active tile via appendChild.
+
+   • The 3D field texture (R8, REPEAT-wrapped) holds the raw
+     scalar field f(x,y,z) BEFORE topology is applied.  The
+     fragment shader applies isoLevel/thickness/halfInvert/pipeR
+     via uniforms — switching topology never requires a re-bake.
+
+   • Coordinate domain is [-π, π]³, matching what the lab
+     kernels (TpmsKernel, GrainKernel, NoiseKernel) consume.
+
+   Topology mapping (lab mode → uTopoMode)
+   ---------------------------------------
+     'solid'         (TPMS default)  → 1 (half, halfInvert=1, isoLevel=offset)
+     'shell'                         → 0 (sheet, isoLevel=offset, thickness=wt)
+     'noise-sheet'   'grain-sheet'   → 0 (sheet, isoLevel/halfWidth)
+     'noise-half'    'grain-half'    → 1 (half,  isoLevel/halfInvert)
+     'noise-solid'   'grain-solid'   → 2 (anti-sheet, isoLevel/halfWidth)
+     'pi-tpms'                       → 3 (max(|a|,|b|) < pipeR)
+
+   Public API
+   ----------
+     var rm = new LabRaymarcher();   // creates rm.canvas internally
+     rm.canvas                       // <canvas> to insert in DOM
+     rm.setRecipe(recipe)            // bakes raw field, kicks render
+     rm.setActive(bool)              // start/stop animation loop
+     rm.destroy()                    // release GL resources
+   ============================================================ */
+
+
+/* ════════════════════════════════════════════════════════════
+   Shader source — radix-2 raymarcher with iridescent lighting
+   borrowed line-for-line from F13LD.grain.  Topology branches
+   extended to cover all five lab modes.
+   ════════════════════════════════════════════════════════════ */
+var LAB_RM_VS = '#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }';
+
+function buildLabRaymarcherFS(stepCount) {
+  var STEPS = String(stepCount || 192);
+  return [
+    '#version 300 es',
+    'precision highp float; precision highp sampler3D;',
+    'out vec4 fragColor;',
+    'uniform vec2 res; uniform mat3 rot; uniform float zoom;',
+    'uniform float thickness; uniform float isoLevel; uniform float uTopoMode;',
+    'uniform float uHalfInvert; uniform float uPipeR;',
+    'uniform vec3  uPipeOffset;',
+    'uniform float uLipschitz;',
+    'uniform highp sampler3D uField;',
+    'uniform float uFieldMin; uniform float uFieldMax; uniform float uTile;',
+    'uniform float uNrmStep;',
+
+    'const float H = 3.141593;',
+
+    /* sampleF: uvw is fract-tiled (REPEAT wrap is set on the texture
+       too, but explicit fract here lets us scale via uTile) */
+    'float sampleF(vec3 p) {',
+    '  vec3 uvw = uTile > 1.0 ? fract(p/(2.0*H)*uTile + 0.5) : fract(p/(2.0*H) + 0.5);',
+    '  float t = texture(uField, uvw).r;',
+    '  return t * (uFieldMax - uFieldMin) + uFieldMin;',
+    '}',
+
+    /* implicit: SDF combining raw field and topology uniforms.
+       Tested branches: 0=sheet, 1=half, 2=anti-sheet (solid via
+       inverted sheet), 3=pi-tpms (dual-sample) */
+    'float implicit(vec3 p) {',
+    '  if (uTopoMode > 2.5) {',
+    /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
+    '    float a = sampleF(p) - isoLevel;',
+    '    float b = sampleF(p + uPipeOffset) - isoLevel;',
+    '    return max(abs(a), abs(b)) - uPipeR;',
+    '  }',
+    '  float raw = sampleF(p);',
+    '  float adj = raw - isoLevel;',
+    '  if (uTopoMode < 0.5) return abs(adj) - thickness;',                      /* sheet */
+    '  if (uTopoMode < 1.5) return uHalfInvert < 0.5 ? -adj : adj;',            /* half */
+    '  return -(abs(adj) - thickness);',                                        /* anti-sheet */
+    '}',
+
+    /* boxNormal — used for near-cap shading when the ray enters
+       the unit-cell box already inside the solid */
+    'vec3 boxNormal(vec3 pos) {',
+    '  vec3 ap = abs(pos) / H;',
+    '  if (ap.x > ap.y && ap.x > ap.z) return vec3(sign(pos.x), 0.0, 0.0);',
+    '  if (ap.y > ap.z)                return vec3(0.0, sign(pos.y), 0.0);',
+    '  return                                vec3(0.0, 0.0, sign(pos.z));',
+    '}',
+
+    'vec3 nrmField(vec3 p) {',
+    '  float e = uNrmStep;',
+    '  return normalize(vec3(',
+    '    implicit(p+vec3(e,0,0)) - implicit(p-vec3(e,0,0)),',
+    '    implicit(p+vec3(0,e,0)) - implicit(p-vec3(0,e,0)),',
+    '    implicit(p+vec3(0,0,e)) - implicit(p-vec3(0,0,e))));',
+    '}',
+
+    /* Iridescent palette — same coefficients as F13LD.grain */
+    'vec3 palette(float t) {',
+    '  vec3 a = vec3(0.55,0.57,0.42), b = vec3(0.43,0.42,0.30),',
+    '       c = vec3(1.0,1.0,1.0),    d = vec3(0.02,0.0,0.05);',
+    '  return clamp(a + b*cos(6.28318*(c*t + d)), 0.0, 1.0);',
+    '}',
+
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - res*0.5) / min(res.x, res.y);',
+    '  vec3 ro = rot * vec3(0.0, 0.0, zoom);',
+    '  vec3 rd = normalize(rot * vec3(uv.x, uv.y, -1.6));',
+    '  float r = clamp(length(uv) * 1.1, 0.0, 1.0);',
+    '  vec3 bgCol = mix(vec3(0.07,0.07,0.07), vec3(0.03,0.03,0.03), r*r);',
+
+    /* AABB intersect [-π,π]³ */
+    '  vec3 iv = vec3(1.0) / rd;',
+    '  vec3 tb = (-vec3(H,H,H) - ro) * iv;',
+    '  vec3 tt = ( vec3(H,H,H) - ro) * iv;',
+    '  vec3 tmi = min(tb, tt), tma = max(tb, tt);',
+    '  float tEn = max(max(tmi.x, tmi.y), tmi.z);',
+    '  float tEx = min(min(tma.x, tma.y), tma.z);',
+    '  if (tEn > tEx || tEx < 0.0) { fragColor = vec4(bgCol, 1.0); return; }',
+
+    '  float t = max(tEn, 0.001);',
+    '  bool hit = false; bool nearCap = false;',
+    '  float thresh = max(-(thickness*0.08), -0.008);',
+    '  float maxStep = H / 14.0;',
+
+    '  if (implicit(ro + rd*t) < thresh) nearCap = true;',
+    '  if (!nearCap) {',
+    '    for (int i = 0; i < ' + STEPS + '; i++) {',
+    '      if (t > tEx) break;',
+    '      vec3 p = ro + rd*t;',
+    '      float d = implicit(p);',
+    '      if (d < thresh) { hit = true; break; }',
+    '      t += clamp(d / uLipschitz * 0.85, abs(thresh)*0.5, maxStep);',
+    '    }',
+    '  }',
+
+    '  vec3 pos; vec3 n;',
+    '  if (nearCap) { pos = ro + rd*tEn; n = boxNormal(pos); if (dot(n,-rd) < 0.0) n = -n; t = tEn; }',
+    '  else if (hit) { pos = ro + rd*t; n = nrmField(pos); if (dot(n,-rd) < 0.0) n = -n; }',
+    '  else {',
+    '    if (implicit(ro + rd*tEx) < thresh) {',
+    '      pos = ro + rd*tEx; n = boxNormal(pos);',
+    '      if (dot(n,-rd) < 0.0) n = -n; t = tEx;',
+    '    } else { fragColor = vec4(bgCol, 1.0); return; }',
+    '  }',
+
+    /* Lighting — verbatim from grain */
+    '  float dy = dot(n, vec3(0.0,1.0,0.0));',
+    '  float dz = dot(n, vec3(0.0,0.0,1.0));',
+    '  float hue = dy*dy*0.33 + dz*dz*0.67;',
+    '  vec3 iridBase = palette(hue);',
+    '  vec3 l1 = normalize(vec3(1.0,1.8,2.0));',
+    '  vec3 l2 = normalize(vec3(-0.8,-0.3,0.6));',
+    '  float l3fill = max(dot(n, normalize(vec3(-0.5,-1.0,-1.5))), 0.0) * 0.3;',
+    '  float diff = 0.35 + max(dot(n, l1), 0.0)*0.7 + max(dot(n, l2), 0.0)*0.25 + l3fill;',
+    '  float spec1 = pow(max(dot(reflect(-l1, n), -rd), 0.0), 120.0) * 0.7;',
+    '  float spec2 = pow(max(dot(reflect(-l1, n), -rd), 0.0),  20.0) * 0.2;',
+    '  float rim   = pow(1.0 - max(dot(n, -rd), 0.0), 2.5) * 0.8;',
+    '  vec3 green = vec3(0.784, 0.961, 0.259);',
+    '  vec3 col = iridBase*diff + vec3(1.0)*spec1 + green*spec2*0.6 + green*rim*0.45;',
+    '  col = mix(bgCol, col, exp(-t * 0.010));',
+    '  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);',
+    '}'
+  ].join('\n');
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   LabRaymarcher class
+   ════════════════════════════════════════════════════════════ */
+function LabRaymarcher() {
+  this.canvas = document.createElement('canvas');
+  this.canvas.width  = 400;
+  this.canvas.height = 320;
+  this.canvas.style.width  = '100%';
+  this.canvas.style.height = '100%';
+  this.canvas.style.display = 'block';
+
+  this.gl = this.canvas.getContext('webgl2', { antialias: true, alpha: false, preserveDrawingBuffer: false });
+  if (!this.gl) {
+    /* WebGL2 not available — caller falls back to SVG mock */
+    this.failed = true;
+    return;
+  }
+
+  this._setupGL();
+  if (!this._compileShader()) {
+    this.failed = true;
+    return;
+  }
+
+  this._dirty = true;
+  this._running = false;
+  this._rafId = null;
+  this._rotY = 0.7;
+  this._rotX = -0.4;
+  this._lastFrame = 0;
+  this._fieldUploaded = false;
+  this._recipe = null;
+
+  /* Default uniform values; overwritten by setRecipe → _refreshTopologyUniforms */
+  this._u = {
+    thickness: 0.3, isoLevel: 0.0, topoMode: 0, halfInvert: 0,
+    pipeR: 0.1, pipeOffset: [0, 0, 0],
+    fieldMin: -1, fieldMax: 1, lipschitz: 1.0, tile: 1.0,
+    nrmStep: 0.004, zoom: 6.0
+  };
+}
+
+LabRaymarcher.prototype._setupGL = function() {
+  var gl = this.gl;
+  this._quadBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, this._quadBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+};
+
+LabRaymarcher.prototype._mkShader = function(type, src) {
+  var gl = this.gl;
+  var sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    console.error('[LabRaymarcher] shader compile failed:\n' + gl.getShaderInfoLog(sh));
+    gl.deleteShader(sh);
+    return null;
+  }
+  return sh;
+};
+
+LabRaymarcher.prototype._compileShader = function() {
+  var gl = this.gl;
+  var vs = this._mkShader(gl.VERTEX_SHADER,   LAB_RM_VS);
+  var fs = this._mkShader(gl.FRAGMENT_SHADER, buildLabRaymarcherFS(192));
+  if (!vs || !fs) return false;
+  var prg = gl.createProgram();
+  gl.attachShader(prg, vs);
+  gl.attachShader(prg, fs);
+  gl.linkProgram(prg);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(prg, gl.LINK_STATUS)) {
+    console.error('[LabRaymarcher] program link failed:\n' + gl.getProgramInfoLog(prg));
+    return false;
+  }
+  this._prog = prg;
+  gl.useProgram(prg);
+  /* Bind quad attribute */
+  gl.bindBuffer(gl.ARRAY_BUFFER, this._quadBuf);
+  var loc = gl.getAttribLocation(prg, 'p');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  /* Cache uniform locations */
+  var L = {};
+  ['res','rot','zoom','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset',
+   'uLipschitz','uField','uFieldMin','uFieldMax','uTile','uNrmStep'].forEach(function(name){
+    L[name] = gl.getUniformLocation(prg, name);
+  });
+  this._uloc = L;
+  return true;
+};
+
+
+/* ─── Topology uniform translation ─────────────────────────── */
+
+/* Map a lab recipe to the shader's (uTopoMode + auxiliary) uniforms.
+   Returns an object that can be merged into this._u verbatim. */
+function labModeToUniforms(family, params, args) {
+  var mode = args.mode || 'solid';
+  var u = {
+    thickness: 0.3, isoLevel: 0, topoMode: 0, halfInvert: 0,
+    pipeR: 0.1, pipeOffset: [0, 0, 0]
+  };
+
+  if (mode === 'pi-tpms') {
+    var ps = args.phaseShift || { x: 0, y: 0, z: 0 };
+    var TWO_PI = 2 * Math.PI;
+    u.topoMode  = 3;
+    u.isoLevel  = args.offset || 0;
+    u.pipeR     = args.pipeR  || 0.1;
+    u.pipeOffset = [(ps.x||0) * TWO_PI, (ps.y||0) * TWO_PI, (ps.z||0) * TWO_PI];
+    return u;
+  }
+
+  if (mode === 'shell') {
+    u.topoMode  = 0;
+    u.isoLevel  = args.offset || 0;
+    u.thickness = args.wt || 0.3;
+    return u;
+  }
+
+  if (mode === 'noise-sheet' || mode === 'grain-sheet') {
+    u.topoMode  = 0;
+    u.isoLevel  = params.isoLevel != null ? params.isoLevel : 0;
+    u.thickness = params.halfWidth != null ? params.halfWidth : 0.3;
+    return u;
+  }
+
+  if (mode === 'noise-half' || mode === 'grain-half') {
+    u.topoMode   = 1;
+    u.isoLevel   = params.isoLevel != null ? params.isoLevel : 0;
+    u.halfInvert = params.halfInvert ? 1 : 0;
+    return u;
+  }
+
+  if (mode === 'noise-solid' || mode === 'grain-solid') {
+    u.topoMode  = 2;
+    u.isoLevel  = params.isoLevel != null ? params.isoLevel : 0;
+    u.thickness = params.halfWidth != null ? params.halfWidth : 0.3;
+    return u;
+  }
+
+  /* Default: TPMS solid — solid where raw < offset → half mode with invert */
+  u.topoMode   = 1;
+  u.isoLevel   = args.offset || 0;
+  u.halfInvert = 1;
+  return u;
+}
+
+
+/* ─── Recipe loading & field bake ──────────────────────────── */
+
+LabRaymarcher.prototype.setRecipe = function(recipe) {
+  if (this.failed) return;
+  if (!recipe || !KERNELS[recipe.family]) {
+    console.warn('[LabRaymarcher] unknown family in recipe:', recipe && recipe.family);
+    return;
+  }
+  this._recipe = recipe;
+  this._bakeAndUpload();
+};
+
+LabRaymarcher.prototype._bakeAndUpload = function() {
+  var gl = this.gl;
+  var recipe = this._recipe;
+  if (!recipe) return;
+
+  var family = recipe.family;
+  var params = KERNELS[family].parseRecipe(recipe);
+  var args   = resolveBuildArgs(recipe);
+
+  /* N=48 is a good balance: ~30-400ms bake, 110KB texture, sharp visuals */
+  var N = 48;
+
+  var t0 = performance.now();
+  var fr = buildRawField(family, params, N);
+  var tBake = performance.now() - t0;
+
+  /* Lipschitz from gradient sweep over interior — same logic as F13LD.grain */
+  var step = 2 * Math.PI / N;
+  var maxG = 0;
+  for (var iz = 1; iz < N - 1; iz++) {
+    for (var iy = 1; iy < N - 1; iy++) {
+      for (var ix = 1; ix < N - 1; ix++) {
+        var idx = ix + iy*N + iz*N*N;
+        var gx = (fr.data[idx + 1]   - fr.data[idx - 1])   / (2*step);
+        var gy = (fr.data[idx + N]   - fr.data[idx - N])   / (2*step);
+        var gz = (fr.data[idx + N*N] - fr.data[idx - N*N]) / (2*step);
+        var g  = Math.sqrt(gx*gx + gy*gy + gz*gz);
+        if (g > maxG) maxG = g;
+      }
+    }
+  }
+  this._u.lipschitz = Math.max(maxG * 1.1, 0.05);
+  this._u.fieldMin  = fr.fieldMin;
+  this._u.fieldMax  = fr.fieldMax;
+  this._u.nrmStep   = step * 0.5;
+
+  /* Apply topology uniforms */
+  var topoU = labModeToUniforms(family, params, args);
+  this._u.thickness  = topoU.thickness;
+  this._u.isoLevel   = topoU.isoLevel;
+  this._u.topoMode   = topoU.topoMode;
+  this._u.halfInvert = topoU.halfInvert;
+  this._u.pipeR      = topoU.pipeR;
+  this._u.pipeOffset = topoU.pipeOffset;
+  this._u.tile       = 1.0;
+
+  /* Upload texture */
+  var range = Math.max(fr.fieldMax - fr.fieldMin, 1e-6);
+  var bytes = new Uint8Array(N*N*N);
+  for (var i = 0; i < fr.data.length; i++) {
+    bytes[i] = Math.round(Math.max(0, Math.min(1, (fr.data[i] - fr.fieldMin) / range)) * 255);
+  }
+  if (!this._fieldTex) this._fieldTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, N, N, 0, gl.RED, gl.UNSIGNED_BYTE, bytes);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+  gl.bindTexture(gl.TEXTURE_3D, null);
+
+  this._fieldUploaded = true;
+  this._dirty = true;
+  this._tBakeMs = tBake;
+};
+
+
+/* ─── Render loop ─────────────────────────────────────────── */
+
+LabRaymarcher.prototype._render = function(t) {
+  if (!this._running) return;
+  this._rafId = requestAnimationFrame(this._render.bind(this));
+
+  var gl = this.gl;
+  if (!this._fieldUploaded || !this._prog) return;
+
+  /* Auto-rotate */
+  if (this._lastFrame === 0) this._lastFrame = t;
+  var dt = (t - this._lastFrame) * 0.001;
+  this._lastFrame = t;
+  this._rotY += dt * 0.30;
+
+  /* Build rotation matrix (Y then X) */
+  var cy = Math.cos(this._rotY), sy = Math.sin(this._rotY);
+  var cx = Math.cos(this._rotX), sx = Math.sin(this._rotX);
+  /* mat3, column-major:  Rx · Ry */
+  var rot = new Float32Array([
+    cy,        0,    -sy,
+    sx*sy,    cx,    sx*cy,
+    cx*sy,   -sx,    cx*cy
+  ]);
+
+  /* Resize viewport to canvas backbuffer if needed */
+  var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  var cssW = this.canvas.clientWidth || 400;
+  var cssH = this.canvas.clientHeight || 320;
+  var w = Math.max(1, Math.floor(cssW * dpr));
+  var h = Math.max(1, Math.floor(cssH * dpr));
+  if (this.canvas.width !== w || this.canvas.height !== h) {
+    this.canvas.width = w;
+    this.canvas.height = h;
+  }
+  gl.viewport(0, 0, w, h);
+
+  /* Draw */
+  gl.useProgram(this._prog);
+  var u = this._uloc, S = this._u;
+  gl.uniform2f(u.res, w, h);
+  gl.uniformMatrix3fv(u.rot, false, rot);
+  gl.uniform1f(u.zoom,        S.zoom);
+  gl.uniform1f(u.thickness,   S.thickness);
+  gl.uniform1f(u.isoLevel,    S.isoLevel);
+  gl.uniform1f(u.uTopoMode,   S.topoMode);
+  gl.uniform1f(u.uHalfInvert, S.halfInvert);
+  gl.uniform1f(u.uPipeR,      S.pipeR);
+  gl.uniform3f(u.uPipeOffset, S.pipeOffset[0], S.pipeOffset[1], S.pipeOffset[2]);
+  gl.uniform1f(u.uLipschitz,  S.lipschitz);
+  gl.uniform1f(u.uFieldMin,   S.fieldMin);
+  gl.uniform1f(u.uFieldMax,   S.fieldMax);
+  gl.uniform1f(u.uTile,       S.tile);
+  gl.uniform1f(u.uNrmStep,    S.nrmStep);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
+  gl.uniform1i(u.uField, 0);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+};
+
+
+/* ─── Lifecycle ─────────────────────────────────────────── */
+
+LabRaymarcher.prototype.setActive = function(active) {
+  if (this.failed) return;
+  if (active && !this._running) {
+    this._running = true;
+    this._lastFrame = 0;
+    this._rafId = requestAnimationFrame(this._render.bind(this));
+  } else if (!active && this._running) {
+    this._running = false;
+    if (this._rafId != null) cancelAnimationFrame(this._rafId);
+    this._rafId = null;
+  }
+};
+
+LabRaymarcher.prototype.destroy = function() {
+  if (this.failed) return;
+  this.setActive(false);
+  var gl = this.gl;
+  if (this._fieldTex) gl.deleteTexture(this._fieldTex);
+  if (this._prog)     gl.deleteProgram(this._prog);
+  if (this._quadBuf)  gl.deleteBuffer(this._quadBuf);
+  /* Force-lose context to free GPU memory immediately */
+  var ext = gl.getExtension('WEBGL_lose_context');
+  if (ext) ext.loseContext();
+  this.gl = null;
+  this._prog = null;
+  this._fieldTex = null;
+  this._quadBuf = null;
+  this.canvas = null;
+  this.failed = true;
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   Recipe lookup for mock designs (placeholder for Phase 10
+   import path).  Maps a mock-design entry to a full lab recipe
+   when possible; returns null when the design references a
+   structure family the lab doesn't yet know how to bake (e.g.
+   reaction-diffusion / Gray-Scott — F13LD.mesh has it but lab
+   doesn't, so those cards keep the SVG mock for now).
+   ════════════════════════════════════════════════════════════ */
+function recipeForDesign(design) {
+  if (!design) return null;
+  /* Direct embed: if a future design carries its own recipe field */
+  if (design.recipe) return design.recipe;
+
+  /* Mock-design variant lookup */
+  if (design.family === 'tpms') {
+    /* All TPMS variants → schwarzP demo for now */
+    return DEMO_RECIPES.schwarzP;
+  }
+  if (design.family === 'grain') {
+    if (design.variant === 'spinodoid')   return DEMO_RECIPES.spinodoid;
+    if (design.variant === 'hyperuniform') return DEMO_RECIPES.hyperuniform;
+    /* reaction_diffusion has no lab kernel — fall back to SVG */
+    return null;
+  }
+  return null;
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   Per-design registry — keep LabRaymarcher instances alive
+   across grid re-renders.  Canvases are stashed in a hidden
+   cache div between renders so their GL contexts persist.
+   ════════════════════════════════════════════════════════════ */
+var LAB_RM_REGISTRY = {};   /* designId → LabRaymarcher */
+var LAB_RM_CACHE_DIV = null;
+
+function ensureRMCacheDiv() {
+  if (LAB_RM_CACHE_DIV) return LAB_RM_CACHE_DIV;
+  var d = document.createElement('div');
+  d.id = 'rm-canvas-cache';
+  d.style.display = 'none';
+  d.style.position = 'absolute';
+  d.style.width = '0';
+  d.style.height = '0';
+  document.body.appendChild(d);
+  LAB_RM_CACHE_DIV = d;
+  return d;
+}
+
+function getOrCreateRaymarcher(designId, recipe) {
+  var rm = LAB_RM_REGISTRY[designId];
+  if (rm && !rm.failed) return rm;
+  rm = new LabRaymarcher();
+  if (rm.failed) return null;
+  rm.setRecipe(recipe);
+  LAB_RM_REGISTRY[designId] = rm;
+  /* Park canvas in cache div until the grid mounts it */
+  ensureRMCacheDiv().appendChild(rm.canvas);
+  return rm;
+}
+
+function disposeRaymarcher(designId) {
+  var rm = LAB_RM_REGISTRY[designId];
+  if (!rm) return;
+  if (rm.canvas && rm.canvas.parentNode) rm.canvas.parentNode.removeChild(rm.canvas);
+  rm.destroy();
+  delete LAB_RM_REGISTRY[designId];
+}
+
+function pauseAllRaymarchers() {
+  for (var id in LAB_RM_REGISTRY) {
+    if (LAB_RM_REGISTRY.hasOwnProperty(id)) LAB_RM_REGISTRY[id].setActive(false);
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   IntersectionObserver — pauses raymarchers for off-screen
+   cards.  Single shared observer for the whole grid.
+   ════════════════════════════════════════════════════════════ */
+var LAB_RM_IO = null;
+
+function ensureRMObserver() {
+  if (LAB_RM_IO) return LAB_RM_IO;
+  if (typeof IntersectionObserver === 'undefined') return null;
+  LAB_RM_IO = new IntersectionObserver(function(entries) {
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var id = e.target.getAttribute('data-design-id');
+      if (!id) continue;
+      var rm = LAB_RM_REGISTRY[id];
+      if (!rm) continue;
+      /* Only run when intersecting AND the document is visible */
+      var shouldRun = e.isIntersecting && !document.hidden;
+      rm.setActive(shouldRun);
+    }
+  }, { threshold: 0.01 });
+  /* Tab-visibility pause — saves GPU when user is in another tab */
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      pauseAllRaymarchers();
+    } else {
+      /* Reapply observer states by triggering a re-scan: not directly
+         possible, but the IO will refire when scroll / resize happens.
+         For immediate resume, mark all observed cards visible if their
+         bounding rect intersects viewport. */
+      for (var id in LAB_RM_REGISTRY) {
+        if (!LAB_RM_REGISTRY.hasOwnProperty(id)) continue;
+        var rm = LAB_RM_REGISTRY[id];
+        var mount = document.querySelector('[data-design-id="' + id + '"]');
+        if (!mount) continue;
+        var r = mount.getBoundingClientRect();
+        var visible = r.bottom > 0 && r.top < window.innerHeight;
+        rm.setActive(visible);
+      }
+    }
+  });
+  return LAB_RM_IO;
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   mountRaymarcherTiles — called by 40-design-grid.js after each
+   grid render.  Walks all .rm-mount placeholders, attaches the
+   matching canvas, registers IntersectionObserver.
+   ════════════════════════════════════════════════════════════ */
+function mountRaymarcherTiles() {
+  var io = ensureRMObserver();
+  var mounts = document.querySelectorAll('.rm-mount');
+  for (var i = 0; i < mounts.length; i++) {
+    var mount = mounts[i];
+    var id = mount.getAttribute('data-design-id');
+    if (!id) continue;
+    var rm = LAB_RM_REGISTRY[id];
+    if (!rm) continue;
+    /* Move canvas into the mount tile */
+    if (rm.canvas && rm.canvas.parentNode !== mount) {
+      mount.appendChild(rm.canvas);
+    }
+    if (io) io.observe(mount);
+  }
+}
+
+/* Pause all when grid loses geom view (e.g. user clicks Stress tab) */
+function pauseRaymarcherTilesForViewMode(mode) {
+  if (mode !== 'geom' && mode !== 'deform') {
+    pauseAllRaymarchers();
+  }
+}

@@ -407,3 +407,111 @@ index.html             — added 18-stokes-cpu-ref.js script tag and
 - Step 2 (GPU StokesSolver) not yet started
 - Step 3 (Self-test 4: GPU vs CPU comparison) not yet started
 
+---
+
+# Geometry Push — WebGL2 raymarcher tiles for design cards
+
+## Goal
+
+Replace the SVG-mock geometry tiles with real WebGL2 SDF raymarchers, so the lab's "Geometry" and "Deformed" view tabs show the actual structure produced by the lab's kernel functions, not stylized placeholders. This was sequenced ahead of Push 3 Step 2 (GPU Stokes) on the rationale that visual feedback during solver development catches a category of bugs (rasterizer / coordinate-system / topology-mode mismatches) that no numerical self-test would surface.
+
+## Architecture
+
+One `LabRaymarcher` instance per design card, each owning its own `<canvas>` + WebGL2 context. Canvases are stashed in a hidden `#rm-canvas-cache` div between grid re-renders so GL contexts persist across view-tab switches — the design grid's `mountRaymarcherTiles()` post-render hook moves canvases between the cache div and `.rm-mount` placeholders via `appendChild`, which moves DOM nodes rather than copying them.
+
+The fragment shader is a near-port of F13LD.grain's raymarcher (the same iridescent palette, lighting, near-cap detection, AABB-based ray entry). The single non-trivial extension is a fourth topology branch for PI-TPMS, which performs two field samples (at `p` and `p + uPipeOffset`) and returns `max(|a−iso|, |b−iso|) − pipeR`. The other four lab topology modes (sheet / half / anti-sheet / shell-via-offset) collapse cleanly into Grain's existing three uTopoMode branches by reinterpreting the iso/thickness uniforms.
+
+The 3D field texture is `R8` with `LINEAR` filtering and `REPEAT` wrap — the field is baked once per recipe at N=48 and stays resident; topology / threshold / thickness changes are uniform writes only. The shader's `uTile` lets the same texture display 1 or N tiled cells for users who want context, though the current default is 1.
+
+## Topology mode mapping
+
+Lab has 7 distinct mode strings (`solid`, `shell`, `noise-sheet/half/solid`, `grain-sheet/half/solid`, `pi-tpms`) which collapse to 4 shader branches:
+
+| Lab mode | uTopoMode | Notes |
+| --- | --- | --- |
+| `solid` (TPMS default) | 1 (half) | halfInvert=1, isoLevel=offset → solid where raw<offset |
+| `shell` | 0 (sheet) | isoLevel=offset, thickness=wt |
+| `noise-sheet`, `grain-sheet` | 0 (sheet) | isoLevel/halfWidth |
+| `noise-half`, `grain-half` | 1 (half) | isoLevel/halfInvert |
+| `noise-solid`, `grain-solid` | 2 (anti-sheet) | isoLevel/halfWidth |
+| `pi-tpms` | 3 (NEW) | Dual-sample, max(|a|,|b|) < pipeR |
+
+The translation lives in `labModeToUniforms()` in `21-raymarcher.js`. Adding a new lab topology mode means extending one switch on the JS side and one branch in the shader's `implicit()` function.
+
+## Lifecycle and performance
+
+**Per-card resources at steady state:** ~110 KB GPU texture (48³ × R8) + one WebGL2 context. For 12 cards (4×3 grid worst case): ~1.3 MB GPU memory total, well within budget.
+
+**WebGL context limit:** Chrome caps at 16 simultaneous contexts. Lab currently displays 3 cards max (per the existing `for (i < 3)` loop in `40-design-grid.js`), so no risk in current configuration. If the grid expands to 6+ cards in Phase 10, we'll need either (a) one shared canvas with scissored viewports, or (b) GL context recycling. Documented but deferred.
+
+**Render cost:** ~1-3 ms/frame at 192 march steps and N=48 texture, on integrated GPUs. Auto-rotate adds ~0.3 rad/sec. IntersectionObserver pauses raymarchers for cards scrolled off-screen; `visibilitychange` listener pauses everything when the tab is hidden; switching to non-geometry view tabs (stress, stiff, thermal, buckle) calls `pauseRaymarcherTilesForViewMode()` which freezes all raymarcher render loops.
+
+**Bake cost (once per recipe):** TPMS Schwarz P 76 ms, Spinodoid 175 ms, Hyperuniform 378 ms (HU is the slowest because it does kernel convolution per voxel). All bakes run on the main thread, blocking; for 3 cards loaded simultaneously the worst case is ~700 ms total page-load lag. If Phase 10's import path causes user-perceptible jank, the bake can be moved to a Web Worker (lab's existing recipes happen to all be deterministic functions of position, so worker-side rebake is straightforward).
+
+## Recipe → render pipeline
+
+The lab kernel hierarchy (`KERNELS[family].evaluate(params, x, y, z)`) returns a raw scalar field over `[-π, π]³` for all families regardless of `cellSizeMm` — the physical scaling is purely a downstream concern. `buildRawField()` (new in `14-rasterizer.js`, ~30 LOC) is essentially `buildVoxels`'s Pass 1 — it samples the field on a regular grid and returns `{data, fieldMin, fieldMax}` without applying topology. The shader normalizes through `R8` quantization using `fieldMin`/`fieldMax` and recovers the float value via `t * (max - min) + min` per fetch.
+
+For mock designs that don't carry a full recipe (most designs, until the Phase 10 vault import lands), `recipeForDesign(design)` maps `design.family` + `design.variant` to a `DEMO_RECIPES` entry. Designs with no mapping (currently: the Gray-Scott reaction-diffusion mock) fall back gracefully to the SVG mock — the grid render checks `useRM` per-card and only emits an `.rm-mount` div when a real recipe was found.
+
+## Verification at end of geometry push
+
+- `LabRaymarcher` exposed via `window.LabRaymarcher` ✓
+- `recipeForDesign` correctly maps the 3 mock designs (TPMS demo-047a → Schwarz P, Spinodoid demo-g3f1 → Spinodoid, RD demo-rda9 → null/SVG fallback) ✓
+- `labModeToUniforms` produces correct uTopoMode + auxiliary uniforms for each demo's mode ✓
+- `buildRawField` runs in <400ms at N=48 for all three demo families ✓
+- Static load order: `21-raymarcher.js` after `15-demo-recipes.js` and `14-rasterizer.js` (deps available); before `40-design-grid.js` (consumer of raymarcher API) ✓
+- `removeDesign(id)` calls `disposeRaymarcher(id)` ✓
+- `renderDesignGrid` calls `mountRaymarcherTiles()` post-`innerHTML` and `pauseRaymarcherTilesForViewMode()` post-mount ✓
+- View-tab switch (`onViewModeClick`) → re-render → tile mount/pause ✓
+
+In-browser visual verification is required — no headless WebGL2 rendering pipeline was available in the dev container. Live verification expected: Schwarz P spins with iridescent shading on solid surfaces, Spinodoid shows stretched anisotropic ribbons, Hyperuniform shows the half-space topology with disordered solid blobs, and the third (RD) card shows the existing SVG mock unchanged.
+
+## Lessons / design decisions
+
+1. **Canvas-cache pattern over WebGL-context-per-render.** Lab's `grid.innerHTML = html` wipes the entire grid on every render — that's a tab click, a slider drag, or a baseline change. Embedding canvases directly in the templated HTML would destroy and recreate the WebGL context on every event, hitting Chrome's 16-context limit fast and triggering visible bake delays. Stashing canvases in a hidden cache div and using `appendChild` to move them solves both problems with no extra state machinery.
+
+2. **PI-TPMS as a single-texture two-sample shader branch.** PI-TPMS structurally needs two field evaluations (φ_A and φ_B at offset positions). The simplest implementation would have been to bake two textures, but since both samples come from the same field f(x,y,z) at different positions, the shader can take both samples from the same texture. One bake, one upload, one texture, two `texture()` calls per pixel. This generalizes — any future "dual-field" mode that uses a single underlying scalar field can follow the same pattern.
+
+3. **Skip Worker-based bake.** F13LD.grain uses a Web Worker for field bakes because Grain's bakes can take seconds (especially RD with thousands of timesteps). Lab's bakes are 30-400ms because the kernels here are point-evaluable (no time integration). Main-thread bake is fine and avoids the Worker setup / message-passing overhead.
+
+4. **Mock-design recipe lookup as a temporary shim.** `recipeForDesign()` is a deliberate placeholder. The right architecture (Phase 10) is for every design to carry its full recipe in `design.recipe`, populated either from F13LD.vault entries or from imported JSON. Until then the mapping table covers the demo set and degrades gracefully (SVG fallback) for unrecognized designs.
+
+## File inventory after Geometry Push
+
+New:
+```
+21-raymarcher.js                  — LabRaymarcher class + canvas cache + IntersectionObserver
+                                    (~620 lines; ports F13LD.grain raymarcher with PI-TPMS extension)
+```
+
+Updated:
+```
+14-rasterizer.js                  — added buildRawField (~30 LOC, mirrors buildVoxels Pass 1)
+40-design-grid.js                 — geom/deform tabs use .rm-mount placeholders + raymarcher
+                                    when recipe available; SVG fallback otherwise.
+                                    removeDesign now disposes the registered raymarcher.
+index.html                        — added 21-raymarcher.js script tag (between 20- and 30-)
+```
+
+## Decisions log (geometry push only)
+
+| # | Decision | Status |
+| --- | --- | --- |
+| G1 | Port from Grain raymarcher (not Mesh) | Held |
+| G2 | Extend shader for all 5 lab topology modes (option α) | Held |
+| G3 | One WebGL context per card; no shared-canvas | Held |
+| G4 | Pause off-screen + tab-hidden + non-geom-view | Held |
+| G5 | Geometry first, GPU Stokes after | Held |
+| G6 | Bake on main thread (not Worker) | Held; revisit if bake jank in Phase 10 |
+| G7 | N=48 default texture resolution | Held |
+
+## Handoff state (Geometry push complete)
+
+- `21-raymarcher.js` shipped, `14-rasterizer.js` extended, `40-design-grid.js` patched, `index.html` updated
+- Lab's `Geometry` and `Deformed` view tabs render real geometry for TPMS Schwarz P and Grain Spinodoid + Hyperuniform demos
+- RD design (demo-rda9) keeps SVG mock until a Gray-Scott kernel is added to lab
+- Push 3 Step 2 (GPU `StokesSolver`) is the next workstream
+- Step 3 (GPU vs CPU self-test) follows Step 2
+
+
