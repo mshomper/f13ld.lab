@@ -56,6 +56,11 @@ async function runElasticTest() {
     return;
   }
 
+  /* Drain any pre-existing uncaptured GPU errors so we attribute fresh ones
+     to this run.  Pipeline-creation errors from a prior solver instance
+     could otherwise leak into our diagnostics. */
+  drainGpuErrors();
+
   var N = 64;
   var results = [];
   var allOK   = true;
@@ -72,6 +77,19 @@ async function runElasticTest() {
       var res = await solveDesignElastic(recipe, N);
       var totalThis = performance.now() - t0;
       totalMs += totalThis;
+
+      /* Surface any uncaptured GPU errors that happened during this design.
+         Silent pipeline failures (e.g., kernel exceeded a per-stage limit)
+         leave the dispatches as no-ops, which produces wrong numbers
+         WITHOUT throwing.  Drain after each design to attribute. */
+      var gpuErrs = drainGpuErrors();
+      if (gpuErrs.length) {
+        console.error('[elastic-test] GPU errors during ' + entry.id + ':\n  ' + gpuErrs.join('\n  '));
+        allOK = false;
+        results.push({ id: entry.id, gpuErrors: gpuErrs, res: res, totalMs: totalThis });
+        paintElasticLink('fail', '✗ ' + entry.id + ' · GPU errors · check console');
+        return;
+      }
 
       /* ── Per-design pass checks ─────────────────────────────────── */
       var checks = checkResult(entry.id, res);
@@ -100,6 +118,7 @@ async function runElasticTest() {
   /* Final summary line */
   var summary = results.map(function(r){
     if (r.error) return r.id + ':err';
+    if (r.gpuErrors) return r.id + ':gpu-err';
     var avgE = (r.res.Ex_MPa + r.res.Ey_MPa + r.res.Ez_MPa) / 3;
     return (avgE / 1000).toFixed(1) + ' GPa';
   }).join(' / ');
@@ -175,6 +194,16 @@ function logResult(id, res, totalMs, checks) {
   var bg = checks.ok ? '#34d399' : '#fb7185';
   var fg = checks.ok ? '#06080f' : '#fff';
 
+  /* Per-LC breakdown helps diagnose silent solver failures (e.g., a kernel
+     that no-ops will show iters=1 with breakReason='pAp_zero' across all
+     three LCs — a fingerprint we don't want to hide in the totals). */
+  var lcLine = '';
+  if (res.perLC && res.perLC.length === 3) {
+    lcLine = '\n  per-LC:        ' + res.perLC.map(function(p){
+      return p.axis + ':' + p.iters + '·' + p.breakReason;
+    }).join('  ');
+  }
+
   console.log(
     '%c ' + (checks.ok ? '✓' : '✗') + ' ' + res.name + ' ',
     'background:' + bg + '; color:' + fg + '; font-weight:bold; padding:2px 8px; border-radius:3px;',
@@ -188,6 +217,7 @@ function logResult(id, res, totalMs, checks) {
     '\n  Voigt upper:   ' + (voigtUpper/1000).toFixed(2) + ' GPa  (ρ·Es)' +
     '\n  anisotropy:    ' + aniso + '%  (|max-min|/max)' +
     '\n  CG iters:      ' + res.iters + ' total · converged: ' + res.converged +
+    lcLine +
     '\n  rasterize:     ' + res.tRast_ms.toFixed(0) + ' ms' +
     '\n  Γ build:       ' + res.tGamma_ms.toFixed(0) + ' ms' +
     '\n  CG solve:      ' + res.tCG_ms.toFixed(0) + ' ms' +

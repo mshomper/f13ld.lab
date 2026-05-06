@@ -8,20 +8,25 @@
 
    ensureDevice() returns the cached device on subsequent calls,
    or the in-flight init promise if a request is already pending.
+
+   Limits requested above default:
+     maxStorageBuffersPerShaderStage : 16  (default 8) — needed by
+        the elastic solver's tauCompute kernel (9 storage bindings)
+        and any future kernel with similar fan-in.  Most modern
+        hardware supports 16 or higher; we cap at 16 to keep the
+        request honoured on integrated GPUs that don't go further.
+     maxStorageBufferBindingSize    : adapter-max  — 64³ vec2<f32> = 2 MB,
+        128³ = 16 MB, well under typical 128 MB cap.
+     maxBufferSize                  : adapter-max
    ============================================================ */
 
 var WGPU = {
   device: null,
   initialized: false,
-  initializing: null,    // Promise during init
+  initializing: null,
   errors: []
 };
 
-/* ----------------------------------------------------------
-   Lazy device init. Returns a Promise that resolves to the
-   device, or rejects if WebGPU is unavailable or device
-   creation fails.
-   ---------------------------------------------------------- */
 async function ensureDevice(){
   if (WGPU.initialized) return WGPU.device;
   if (WGPU.initializing) return WGPU.initializing;
@@ -33,20 +38,31 @@ async function ensureDevice(){
 
     try {
       var lim = HW.adapter.limits || {};
+
+      /* Helper: cap our request at min(adapter-supported, our-target).
+         Some integrated adapters don't go above 8 for storage buffers;
+         requesting more than supported throws.  We probe and fall back. */
+      function reqLim(name, target) {
+        var supported = lim[name];
+        if (supported == null) return target;
+        return Math.min(supported, target);
+      }
+
       var device = await HW.adapter.requestDevice({
         requiredFeatures: [],
-        // Pull every limit up to the adapter's ceiling so 64³ and 128³ FFTs work
         requiredLimits: {
+          /* Storage buffers — elastic solver needs 9 in tauCompute */
+          maxStorageBuffersPerShaderStage: reqLim('maxStorageBuffersPerShaderStage', 16),
+          /* Buffer sizes — N=128 vec2<f32> is 16 MB, well under default 128 MB */
           maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize || 134217728,
           maxBufferSize:               lim.maxBufferSize               || 268435456,
+          /* Workgroup limits — match Phase 2 reduction kernel's WG_SIZE=256 */
           maxComputeWorkgroupSizeX:    lim.maxComputeWorkgroupSizeX    || 256,
           maxComputeInvocationsPerWorkgroup: lim.maxComputeInvocationsPerWorkgroup || 256,
           maxComputeWorkgroupsPerDimension:  lim.maxComputeWorkgroupsPerDimension  || 65535
         }
       });
 
-      // Surface device-lost events. We don't try to recover here —
-      // user gets a visible "device lost" indicator and reload is the path.
       device.lost.then(function(info){
         console.error('[webgpu] device lost · reason:', info.reason, '· msg:', info.message);
         WGPU.device = null;
@@ -57,7 +73,6 @@ async function ensureDevice(){
         }
       });
 
-      // Capture validation errors so we can surface them in the self-test
       device.addEventListener('uncapturederror', function(ev){
         console.error('[webgpu] uncaptured error:', ev.error && ev.error.message);
         WGPU.errors.push(ev.error && ev.error.message);
@@ -69,7 +84,8 @@ async function ensureDevice(){
       console.log(
         '%c WebGPU device ready ',
         'background:#1D9E75; color:#fff; font-weight:bold; padding:2px 8px; border-radius:3px;',
-        HW.adapter_name || 'GPU'
+        HW.adapter_name || 'GPU',
+        '· storage-bufs/stage:', device.limits.maxStorageBuffersPerShaderStage
       );
       return device;
 
@@ -88,10 +104,8 @@ async function ensureDevice(){
   }
 }
 
-/* ----------------------------------------------------------
-   Drain any uncaptured errors accumulated since last call.
-   Used by the self-test to verify a clean run.
-   ---------------------------------------------------------- */
+/* Drain accumulated uncaptured errors. Self-tests call this BEFORE and
+   AFTER their workload to detect silent pipeline / dispatch failures. */
 function drainGpuErrors(){
   var errs = WGPU.errors.slice();
   WGPU.errors.length = 0;

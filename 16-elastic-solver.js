@@ -679,7 +679,8 @@ ElasticSolver.prototype._readbackTriple = async function(triple){
 /* ════════════════════════════════════════════════════════════
    solveLoadCase — one CG run for a single macroscopic strain.
    eps_bar: [exx, eyy, ezz] (unit vector typically: [1,0,0] etc.)
-   Returns Promise<{ sigma: [sxx, syy, szz], iters, converged }>
+   Returns Promise<{ sigma, iters, converged, breakReason }>
+     breakReason: 'converged' | 'max_iter' | 'pAp_zero' | 'pAp_negative'
    ════════════════════════════════════════════════════════════ */
 ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
   var d = this.device;
@@ -730,6 +731,7 @@ ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
   var rr = await this._dotTriple(this.r, this.r);
   var iters = 0;
   var converged = false;
+  var breakReason = 'max_iter';
 
   /* 3. CG loop */
   for (var it = 0; it < CG_MAXITER; it++) {
@@ -741,7 +743,10 @@ ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
     d.queue.submit([encA.finish()]);
 
     var pAp = await this._dotTriple(this.p, this.Ap);
-    if (Math.abs(pAp) < 1e-30) break;
+    if (Math.abs(pAp) < 1e-30) {
+      breakReason = (pAp < 0) ? 'pAp_negative' : 'pAp_zero';
+      break;
+    }
     var alpha = rr / pAp;
 
     /* eps += alpha·p,  r -= alpha·Ap
@@ -759,7 +764,11 @@ ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
 
     var rrNew = await this._dotTriple(this.r, this.r);
     var relRes = Math.sqrt(rrNew) / bNorm;
-    if (relRes < CG_TOL) { converged = true; break; }
+    if (relRes < CG_TOL) {
+      converged = true;
+      breakReason = 'converged';
+      break;
+    }
 
     var beta = rrNew / rr;
     /* p = r + beta·p */
@@ -795,7 +804,8 @@ ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
   return {
     sigma: [s0 / this.N3, s1 / this.N3, s2 / this.N3],
     iters: iters,
-    converged: converged
+    converged: converged,
+    breakReason: breakReason
   };
 };
 
@@ -807,6 +817,7 @@ ElasticSolver.prototype.homogenize = async function(){
   var C_eff = [[0,0,0],[0,0,0],[0,0,0]];
   var totalIters = 0;
   var allConverged = true;
+  var perLC = [];
 
   for (var lc = 0; lc < 3; lc++) {
     var eps_bar = [lc===0?1:0, lc===1?1:0, lc===2?1:0];
@@ -814,6 +825,7 @@ ElasticSolver.prototype.homogenize = async function(){
     totalIters += res.iters;
     if (!res.converged) allConverged = false;
     for (var p = 0; p < 3; p++) C_eff[p][lc] = res.sigma[p];
+    perLC.push({ axis: ['x','y','z'][lc], iters: res.iters, converged: res.converged, breakReason: res.breakReason });
   }
   /* Symmetrise */
   for (var pp = 0; pp < 3; pp++) for (var qq = 0; qq < 3; qq++)
@@ -825,7 +837,7 @@ ElasticSolver.prototype.homogenize = async function(){
           - C[0][1]*(C[1][0]*C[2][2]-C[1][2]*C[2][0])
           + C[0][2]*(C[1][0]*C[2][1]-C[1][1]*C[2][0]);
   if (Math.abs(det) < 1e-30) {
-    return { Ex: 0, Ey: 0, Ez: 0, C_eff: C_eff, totalIters: totalIters, allConverged: allConverged, valid: false };
+    return { Ex: 0, Ey: 0, Ez: 0, C_eff: C_eff, totalIters: totalIters, allConverged: allConverged, valid: false, perLC: perLC };
   }
   var invDet = 1 / det;
   var S00 = (C[1][1]*C[2][2] - C[1][2]*C[2][1]) * invDet;
@@ -837,7 +849,8 @@ ElasticSolver.prototype.homogenize = async function(){
     C_eff: C_eff,
     totalIters: totalIters,
     allConverged: allConverged,
-    valid: true
+    valid: true,
+    perLC: perLC
   };
 };
 
@@ -923,6 +936,7 @@ async function solveDesignElastic(recipe, N) {
     iters:    hom.totalIters,
     converged: hom.allConverged,
     valid:    hom.valid,
+    perLC:    hom.perLC,
     tRast_ms: tRast,
     tGamma_ms: tGamma,
     tCG_ms:   tCG
