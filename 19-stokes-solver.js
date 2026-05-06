@@ -759,8 +759,11 @@ StokesSolver.prototype._readbackReal = async function(buf) {
      u' = 0; b = -P · (α · ē_j); r = b; z = M⁻¹·r; p = z
      PCG loop with α = (r·z)/(p·Ap), β = (r·z_new)/(r·z), p = z + β·p
    ════════════════════════════════════════════════════════════ */
-StokesSolver.prototype.solveLoadCase = async function(u_bar) {
+StokesSolver.prototype.solveLoadCase = async function(u_bar, opts) {
   var d = this.device;
+  opts = opts || {};
+  var tol     = opts.tol     != null ? opts.tol     : STOKES_CG_TOL;
+  var maxiter = opts.maxiter != null ? opts.maxiter : STOKES_CG_MAXITER;
 
   /* 1. Initialize u' = 0 (fillTriple needs distinct submits because the
         same fillParamsBuf is reused — but here all three components want
@@ -924,7 +927,7 @@ StokesSolver.prototype.solveLoadCase = async function(u_bar) {
   var breakReason = 'max_iter';
 
   /* 5. PCG outer loop */
-  for (var it = 0; it < STOKES_CG_MAXITER; it++) {
+  for (var it = 0; it < maxiter; it++) {
     iters = it + 1;
 
     /* Ap = A·p */
@@ -951,7 +954,7 @@ StokesSolver.prototype.solveLoadCase = async function(u_bar) {
 
     var rrNew = await this._dotTriple(this.r, this.r);
     var relRes = Math.sqrt(rrNew) / bNorm;
-    if (relRes < STOKES_CG_TOL) {
+    if (relRes < tol) {
       converged = true;
       breakReason = 'converged';
       break;
@@ -1070,7 +1073,7 @@ StokesSolver.prototype.solveLoadCase = async function(u_bar) {
 /* ════════════════════════════════════════════════════════════
    homogenize — full 3-load-case run, returns K tensor + diagnostics.
    ════════════════════════════════════════════════════════════ */
-StokesSolver.prototype.homogenize = async function(mu) {
+StokesSolver.prototype.homogenize = async function(mu, opts) {
   var M = [[0,0,0],[0,0,0],[0,0,0]];
   var totalIters = 0;
   var allConverged = true;
@@ -1078,7 +1081,7 @@ StokesSolver.prototype.homogenize = async function(mu) {
 
   for (var lc = 0; lc < 3; lc++) {
     var u_bar = [lc===0?1:0, lc===1?1:0, lc===2?1:0];
-    var res = await this.solveLoadCase(u_bar);
+    var res = await this.solveLoadCase(u_bar, opts);
     totalIters += res.iters;
     if (!res.converged) allConverged = false;
     for (var p = 0; p < 3; p++) M[p][lc] = res.avgAlphaU[p] / mu;
@@ -1240,7 +1243,7 @@ async function solveDesignStokes(recipe, N, opts) {
   solver.uploadDesign(solid_f32, lk.n_dir, lk.k2_phys, lk.M_inv, alpha_pen);
 
   var t2 = performance.now();
-  var hom = await solver.homogenize(mu);
+  var hom = await solver.homogenize(mu, opts);
   var tCG = performance.now() - t2;
 
   solver.destroy();
