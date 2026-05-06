@@ -4,6 +4,7 @@
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
+📓 **[Per-phase engineering logs](./docs/)** — handoff-quality records of every phase, decision, and bug
 
 GPU-accelerated qualification tool for deep structural evaluation of metamaterial scaffolds. Browser-resident, statically hosted, designed for side-by-side comparison of up to three designs from F13LD.vault.
 
