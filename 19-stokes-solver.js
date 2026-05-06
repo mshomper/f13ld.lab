@@ -1273,15 +1273,16 @@ async function solveDesignStokes(recipe, N, opts) {
 /* ════════════════════════════════════════════════════════════
    Smoke test — Schwarz P at N=16 on GPU.
    Pass criteria:
-     1. PCG converges on all 3 LCs at TOL=1e-5, maxiter=1000
+     1. PCG converges on all 3 LCs at TOL=5e-5, maxiter=800
      2. K positive definite (cubic eigenvalues a+2b > 0, a-b > 0)
      3. K_avg in [1e-12, 1e-6] m²
-     4. Per-LC iters within ±10% of CPU reference (410, 410, 532)
-   Expected: K ≈ 8.1e-8 m² at TOL=1e-5 (matching CPU ref at same TOL),
-             ~410 iters per LC, sub-second wall time on a discrete GPU
-             (vs CPU ref's ~9 sec at the same tolerance).
-   This test does NOT compare K element-by-element to CPU — that's
-   Step 3's job (Self-test 4 in the next push).
+     4. Cubic isotropy < 5% (matches CPU ref expectation)
+   TOL=5e-5 chosen to clear FP32's residual-norm floor.  At N=16
+   with bNorm ~2.7e11 and FP32 ε ~1.2e-7, the relative residual
+   can plateau near 1e-5 to 5e-5 due to accumulated reduction
+   roundoff across 4096 voxels.  CPU ref at FP64 hits TOL=1e-5
+   cleanly in ~410 iters; GPU at FP32 should hit TOL=5e-5 in
+   the same ballpark of iters (~400-500 per LC).
    ════════════════════════════════════════════════════════════ */
 var GPU_STOKES_SMOKE = { state: 'idle', lastResult: null };
 
@@ -1298,7 +1299,7 @@ async function runGPUStokesSmokeTest() {
       }
     }
     var t0 = performance.now();
-    var res = await solveDesignStokes(DEMO_RECIPES.schwarzP, 16, { tol: 1e-5, maxiter: 1000 });
+    var res = await solveDesignStokes(DEMO_RECIPES.schwarzP, 16, { tol: 5e-5, maxiter: 800 });
     var totalMs = performance.now() - t0;
 
     var passed = true;
