@@ -134,6 +134,7 @@ function startRun(){
   RUN_STATE.running = true;
   RUN_STATE.progress = 0;
   RUN_STATE.currentIndex = 0;
+  RUN_STATE.cancelled = false;       /* cancel token — checked between designs */
   LAB_STATE.runHasCompleted = false;
   LAB_STATE.winningId = null;
 
@@ -148,63 +149,223 @@ function startRun(){
 
   paintSolverPill('solving', 'warn');
 
-  var totalSec = parseEstimateSeconds();
-  if (totalSec < 5) totalSec = 5;             // floor for the mock
-  if (totalSec > 30) totalSec = 30;           // cap so the demo doesn't take 7 minutes
+  /* Pick run resolution.  For real CPU/GPU elastic, N=32 is the sweet spot
+     for interactive use (~2-5 sec/design on most hardware).  N=64 is 8× more
+     work; N=128 is 64× more.  If the user explicitly picked a manual N via
+     the grid pill, respect it.  Auto mode → cap at 32 for real runs because
+     autoPickGrid's default of 64 was tuned for the mock and is too slow. */
+  var runN = GRID_STATE.N;
+  if (GRID_STATE.mode === 'auto') runN = 32;
 
-  var ticks = totalSec * 10;                  // 100 ms per tick
-  var t = 0;
+  /* Kick off the real sweep.  Don't await here — we let the function run in
+     the background while the UI stays responsive (each design's compute is
+     itself async, yielding to the browser between FFTs and readbacks). */
+  runRealSweep(runN);
+}
 
-  RUN_STATE.timer = setInterval(function(){
-    t++;
-    var p = t / ticks;
-    if (p > 1) p = 1;
-    RUN_STATE.progress = p;
 
-    // Stage transitions
-    var stageMsg, designIdx;
-    if (p < 0.10){
-      stageMsg = 'Rasterizing geometry · <span class="v">' + LAB_STATE.designs.length + ' designs</span>';
-      designIdx = 0;
-    } else if (p < 0.30){
-      designIdx = Math.floor((p - 0.10) / 0.20 * LAB_STATE.designs.length);
-      designIdx = Math.min(designIdx, LAB_STATE.designs.length - 1);
-      stageMsg = '<span class="v">Elastic</span> · Design ' + letterFor(designIdx);
-    } else if (p < 0.55){
-      designIdx = Math.floor((p - 0.30) / 0.25 * LAB_STATE.designs.length);
-      designIdx = Math.min(designIdx, LAB_STATE.designs.length - 1);
-      stageMsg = '<span class="v">Buckling · LOBPCG</span> · Design ' + letterFor(designIdx);
-    } else if (p < 1.0){
-      designIdx = Math.floor((p - 0.55) / 0.45 * LAB_STATE.designs.length);
-      designIdx = Math.min(designIdx, LAB_STATE.designs.length - 1);
-      var iter = Math.floor((p - 0.55) / 0.45 * 15) + 1;
-      stageMsg = '<span class="v">Nonlinear</span> · Design ' + letterFor(designIdx) + ' · iter <span class="v">' + iter + '</span> / 15';
+/* ============================================================
+   runRealSweep — drives real elastic homogenization across all
+   loaded designs sequentially.  Replaces the mock setInterval
+   pipeline.
+
+   Per-design pipeline:
+     1. Resolve recipe via recipeForDesign(d) (returns null for
+        designs without a usable recipe — e.g. RD demos).
+     2. If recipe is null, populate d.results with sentinel
+        "(stub)" values and continue.  This lets the existing
+        comparison UI render without crashing while clearly
+        indicating the result is not real.
+     3. Otherwise, await solveDesignElastic(recipe, N) and map
+        return value into d.results schema.
+
+   Progress: one tick per design completion, plus an inner tick
+   while a design is mid-solve.  Cancel honored between designs.
+
+   Tabs supported by real numbers:
+     ✓ Geometry (already working from raymarcher)
+     ✓ Stiffness — uses E11/zener
+     ✓ Stress — heuristic (E11-derived) via existing svg
+   Tabs that get sentinel values for now (physics not yet wired):
+     × Buckling      — lambda_cr, pcr_py     (stub)
+     × Thermal       — kappa_z               (stub)
+     × Nonlinear     — sigma_y_z, hardening  (stub)
+   ============================================================ */
+async function runRealSweep(N){
+  var nDesigns = LAB_STATE.designs.length;
+  var t0 = performance.now();
+
+  /* Make sure WebGPU is alive — solveDesignElastic requires it */
+  if (typeof ensureDevice === 'function'){
+    var ok = false;
+    try { ok = await ensureDevice(); } catch (e) { ok = false; }
+    if (!ok){
+      paintRunStatus('WebGPU unavailable — cannot run real elastic solver');
+      paintSolverPill('webgpu unavailable', 'bad');
+      finishRunFailed('WebGPU not available');
+      return;
     }
-    RUN_STATE.currentIndex = designIdx;
+  }
 
-    var statusEl = document.getElementById('progStatus');
-    if (statusEl) statusEl.innerHTML = stageMsg;
+  for (var i = 0; i < nDesigns; i++){
+    if (RUN_STATE.cancelled) return;     /* cancel between designs */
+    RUN_STATE.currentIndex = i;
+    var d = LAB_STATE.designs[i];
 
-    var fill = document.getElementById('progFill');
-    if (fill) fill.style.width = (p * 100).toFixed(1) + '%';
-
-    var remain = (1 - p) * totalSec;
-    var m = Math.floor(remain / 60);
-    var sec = Math.floor(remain % 60);
-    var etaEl = document.getElementById('progEta');
-    if (etaEl) etaEl.textContent = m + ':' + (sec < 10 ? '0' : '') + sec;
-
+    /* Inner progress: rough fractional progress assuming each design takes
+       roughly equal time.  Update before solve starts so the bar moves
+       smoothly even for the first design. */
+    var pStart = i / nDesigns;
+    RUN_STATE.progress = pStart;
+    paintRunProgress(pStart);
+    paintRunStatus('<span class="v">Elastic</span> · Design ' + letterFor(i) +
+                   ' · N=' + N + ' · solving…');
     renderDesignGrid();
 
-    if (p >= 1){
-      finishRun();
+    /* Resolve recipe */
+    var recipe = (typeof recipeForDesign === 'function') ? recipeForDesign(d) : null;
+
+    if (!recipe){
+      /* No real recipe (e.g. RD design with no lab kernel).  Keep any
+         pre-populated mock results, or fill sentinel values so the UI
+         doesn't crash. */
+      if (!d.results) d.results = stubResults();
+      d.results._runSource = 'stub (no kernel)';
+      continue;
     }
-  }, 100);
+
+    /* Real solve */
+    var elasticResult = null;
+    var solveErr = null;
+    try {
+      elasticResult = await solveDesignElastic(recipe, N);
+    } catch (err){
+      solveErr = err;
+      console.error('[run] design ' + d.id + ' elastic solve failed:', err);
+    }
+
+    if (RUN_STATE.cancelled) return;
+
+    if (solveErr || !elasticResult || !elasticResult.valid){
+      d.results = stubResults();
+      d.results._runSource = solveErr ? ('error: ' + solveErr.message) : 'invalid (singular C)';
+      d.results._error = true;
+    } else {
+      d.results = mapElasticToResults(elasticResult);
+      d.results._runSource = 'real elastic · N=' + N + ' · ' + (elasticResult.tCG_ms|0) + ' ms';
+    }
+  }
+
+  if (RUN_STATE.cancelled) return;
+
+  RUN_STATE.progress = 1;
+  paintRunProgress(1);
+  paintRunStatus('<span class="v">Run complete</span> · ' + ((performance.now()-t0)/1000).toFixed(1) + ' s');
+  finishRun();
+}
+
+
+/* mapElasticToResults — build the d.results object the comparison UI expects
+   from a solveDesignElastic return value.  Fields the elastic 3-LC normal-block
+   pipeline doesn't compute (shears, buckling, yield, thermal) get either a
+   computed surrogate or a sentinel that the UI displays gracefully. */
+function mapElasticToResults(R){
+  var Ex = R.Ex_MPa / 1000;     /* MPa → GPa for UI */
+  var Ey = R.Ey_MPa / 1000;
+  var Ez = R.Ez_MPa / 1000;
+
+  /* Anisotropy ratio — true Zener needs C44; we don't have shear LCs.  Use
+     diagonal-Young anisotropy as a labeled surrogate.  Values near 1.0 → 
+     near-isotropic; values >>1 → anisotropic.  This matches user intuition
+     for the existing UI's "0.91 near-isotropic / 1.34 diagonal dominant" copy. */
+  var Emin = Math.min(Ex, Ey, Ez);
+  var Emax = Math.max(Ex, Ey, Ez);
+  var aniso = (Emin > 1e-6) ? (Emax / Emin) : 1.0;
+
+  /* Poisson surrogate from compliance off-diagonals.  C_eff is the 3×3
+     normal block; full Poisson would need the inverted compliance.  Use
+     the recipe nu as a fallback — keeps the UI populated without lying
+     about precision. */
+  var nu_use = (R.nu != null) ? R.nu : 0.30;
+
+  return {
+    /* Real elastic results */
+    E11: Ex, E22: Ey, E33: Ez,
+    zener: aniso,
+    nu12: nu_use, nu13: nu_use, nu23: nu_use,
+    /* Shear surrogate — G ≈ E / (2(1+ν)), rough-only.  Would need a
+       6-LC homogenization to compute properly. */
+    G12: Ex / (2 * (1 + nu_use)),
+    G13: Ex / (2 * (1 + nu_use)),
+    G23: Ey / (2 * (1 + nu_use)),
+    /* Stress / Yield / Buckling / Thermal — physics not yet wired into lab.
+       Use sentinel zeros so the UI's `.toFixed()` doesn't crash; the views
+       will get a "(stub)" decoration via _runSource. */
+    sigma_y_z:    0,
+    sigma_peak:   0,
+    hardening:    0,
+    lambda_cr:    0,
+    pcr_py:       0,
+    kappa_z:      0,
+    failure_mode: 'not-computed',
+    /* Solver provenance for the UI's run-source pill */
+    rho:          R.rho,
+    iters:        R.iters,
+    converged:    R.converged
+  };
+}
+
+
+/* stubResults — sentinel values for designs without a real recipe (e.g. RD)
+   or for solves that failed.  Keeps the UI from crashing while signalling
+   that the numbers are not from a real solve.  */
+function stubResults(){
+  return {
+    E11: 0, E22: 0, E33: 0,
+    zener: 0,
+    nu12: 0, nu13: 0, nu23: 0,
+    G12: 0, G13: 0, G23: 0,
+    sigma_y_z: 0, sigma_peak: 0, hardening: 0,
+    lambda_cr: 0, pcr_py: 0, kappa_z: 0,
+    failure_mode: 'no-data'
+  };
+}
+
+
+/* paintRunProgress / paintRunStatus — small helpers extracted from the
+   inlined mock so runRealSweep stays compact. */
+function paintRunProgress(p){
+  var fill = document.getElementById('progFill');
+  if (fill) fill.style.width = (p * 100).toFixed(1) + '%';
+  /* No useful ETA for real runs (each design's wall time is unpredictable);
+     hide the ETA element until we have per-design timing data. */
+  var etaEl = document.getElementById('progEta');
+  if (etaEl) etaEl.textContent = '—';
+}
+
+function paintRunStatus(html){
+  var statusEl = document.getElementById('progStatus');
+  if (statusEl) statusEl.innerHTML = html;
+}
+
+function finishRunFailed(reason){
+  RUN_STATE.running = false;
+  RUN_STATE.progress = 0;
+  var btn = document.getElementById('runBtn');
+  if (btn){
+    btn.classList.remove('running');
+    btn.innerHTML = '▶ Run All';
+  }
+  var prog = document.getElementById('progRow');
+  if (prog) prog.style.display = 'none';
 }
 
 function finishRun(){
-  clearInterval(RUN_STATE.timer);
-  RUN_STATE.timer = null;
+  /* Defensive: any legacy mock timer */
+  if (RUN_STATE.timer){
+    clearInterval(RUN_STATE.timer);
+    RUN_STATE.timer = null;
+  }
   RUN_STATE.running = false;
   LAB_STATE.runHasCompleted = true;
 
@@ -245,8 +406,16 @@ function finishRun(){
 }
 
 function cancelRun(){
-  clearInterval(RUN_STATE.timer);
-  RUN_STATE.timer = null;
+  /* Defensive: clear any legacy mock timer if one is still set */
+  if (RUN_STATE.timer){
+    clearInterval(RUN_STATE.timer);
+    RUN_STATE.timer = null;
+  }
+  /* Set the cancel flag — the async runRealSweep loop checks this between
+     designs and aborts.  A solve-in-progress will still complete (we don't
+     have mid-solve cancellation in the GPU CG loop), but no further designs
+     are started.  This typically aborts within seconds at N=32. */
+  RUN_STATE.cancelled = true;
   RUN_STATE.running = false;
   RUN_STATE.progress = 0;
   RUN_STATE.currentIndex = 0;
