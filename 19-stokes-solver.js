@@ -1351,7 +1351,16 @@ async function runGPUStokesSmokeTest() {
       '\n  Kx / Ky / Kz:  ' + res.Kx_m2.toExponential(3) + ' / ' +
                               res.Ky_m2.toExponential(3) + ' / ' +
                               res.Kz_m2.toExponential(3) + ' m²' +
-      '\n  K eigenvalues: iso=' + eig_iso.toExponential(3) + ', dev=' + eig_dev.toExponential(3) +
+      '\n  K off-diag:    Kxy=' + res.K_full[0][1].toExponential(3) +
+                            ', Kxz=' + res.K_full[0][2].toExponential(3) +
+                            ', Kyz=' + res.K_full[1][2].toExponential(3) +
+      '\n  M_full diag:   Mxx=' + res.M_full[0][0].toExponential(3) +
+                            ', Myy=' + res.M_full[1][1].toExponential(3) +
+                            ', Mzz=' + res.M_full[2][2].toExponential(3) +
+      '\n  M off-diag:    Mxy=' + res.M_full[0][1].toExponential(3) +
+                            ', Mxz=' + res.M_full[0][2].toExponential(3) +
+                            ', Myz=' + res.M_full[1][2].toExponential(3) +
+      '\n  K eigenvalues (cubic-symmetric assumed): iso=' + eig_iso.toExponential(3) + ', dev=' + eig_dev.toExponential(3) +
       '\n  isotropy:      ' + (aniso * 100).toFixed(2) + '%' +
       '\n  mean K:        ' + Kavg.toExponential(3) + ' m²' +
       '\n  k* (K/L²):     ' + k_star.toExponential(3) + '  (dimensionless)' +
