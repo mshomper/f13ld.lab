@@ -103,7 +103,16 @@ function normalizeDesignJson(json, filename){
   var palette = ['#22d3ee','#fbbf24','#fb7185'];
 
   var family = json.family || json.tool || 'unknown';
-  var variant = json.variant || json.field || json.fieldType || 'custom';
+  /* Derive a SHORT STRING variant name.  Some recipe shapes have
+     `field` as a structured block (Grain/Noise) — we don't want that
+     as the variant; use only string-typed sources. */
+  var variant = 'custom';
+  if (typeof json.variant === 'string') variant = json.variant;
+  else if (typeof json.fieldType === 'string') variant = json.fieldType;
+  else if (typeof json.field === 'string') variant = json.field;     /* legacy: field-as-string */
+  else if (json.field && typeof json.field.type === 'string') variant = json.field.type;
+  else if (json.surface && typeof json.surface.type === 'string') variant = json.surface.type;
+
   var topology = json.topology || (json.geometry && json.geometry.mode) || 'sheet';
   var rho = json.rho_rel || json.density || json.relative_density || 0.40;
   var cell = json.cell_mm || json.cellSize || (json.geometry && json.geometry.cellSizeMm) || 4.0;
@@ -114,8 +123,11 @@ function normalizeDesignJson(json, filename){
     if (family === 'tpms') title = (json.tpms_type || 'TPMS') + ' · ' + topology;
     else if (variant === 'spinodoid') title = 'Spinodoid · VMF';
     else if (variant === 'reaction_diffusion' || variant === 'reactiondiffusion') title = 'Trabecular · GS';
-    else if (variant) title = variant.charAt(0).toUpperCase() + variant.slice(1);
-    else title = 'Custom design';
+    else if (typeof variant === 'string' && variant !== 'custom'){
+      title = variant.charAt(0).toUpperCase() + variant.slice(1);
+    } else {
+      title = 'Custom design';
+    }
   }
 
   /* Derive a renderable recipe from the JSON.  A "valid lab recipe"
