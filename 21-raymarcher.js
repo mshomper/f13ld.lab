@@ -511,14 +511,24 @@ LabRaymarcher.prototype.destroy = function() {
      1. design.recipe — populated by 60-add-design.js when the
         imported JSON is a recognized lab recipe shape (preferred).
      2. Demo lookup — maps mock-design entries (without imported
-        recipes) to DEMO_RECIPES by family/variant.
+        recipes) to DEMO_RECIPES by family/variant.  Only fires
+        for in-app mock designs (those without raw_json).
      3. null — design has no usable recipe (RD, unknown family,
-        or invalid imported JSON).  Card falls back to SVG mock.
+        invalid imported JSON).  Card falls back to SVG mock.
+
+   Imports that didn't produce a recipe (e.g. Fischer-Koch S
+   raw_preset) skip the demo lookup and go straight to SVG —
+   showing the demo's Schwarz P would mislead the user into
+   thinking their import succeeded.
    ════════════════════════════════════════════════════════════ */
 function recipeForDesign(design) {
   if (!design) return null;
   /* Imported recipe takes priority — the user explicitly loaded this */
   if (design.recipe) return design.recipe;
+
+  /* Imports without a recipe go straight to SVG fallback (don't
+     mislead the user with a demo recipe pretending to be their import). */
+  if (design.raw_json) return null;
 
   /* Mock-design variant lookup (the three pre-loaded demos) */
   if (design.family === 'tpms') {

@@ -86,118 +86,209 @@ function ingestDesignFile(file){
 
 /* ----------------------------------------------------------
    Normalize incoming JSON to the LAB_STATE design shape.
-   Permissive — accepts mesh handoff format, Grain export,
-   raw param dumps. Real solver values come from a future run.
 
    Two outputs share the design:
      - The grid metadata (label/title/source/family/topology/etc.)
        used by the design-card header and SVG-mock fallback.
      - A `recipe` field — the full lab recipe shape that the
        raymarcher and CPU solvers consume directly.  This is set
-       when the JSON is recognized as a valid lab recipe (has a
-       `family` field that maps into KERNELS); otherwise it's null
-       and the card falls back to SVG mock.
+       when the JSON is recognized as a valid lab recipe shape;
+       otherwise it's null and the card falls back to SVG mock.
+
+   Supports two input dialects:
+
+     A) LAB-INTERNAL shape (15-demo-recipes.js):
+        - Top-level `family` key
+        - camelCase geometry: cellSizeMm, wallThickness, pipeR, phaseShift
+        - Family-prefixed modes: 'noise-sheet', 'grain-half', etc.
+        - Material as `material: { Es_MPa, nu, ks_WmK, muFluid_PaS }`
+
+     B) EXTERNAL F13LD tools (TPMS/Noise/Grain export):
+        - No top-level `family` (inferred from meta.tool, surface.type, field presence)
+        - snake_case geometry: cell_scale, wall_thickness, pipe_radius, phase_shift
+        - Bare mode strings: 'half', 'sheet' (need family prefix added)
+        - Material absent (uses `homogenization.E_solid_GPa, poisson` instead)
+        - Noise has its surface in a `surface` block with type='noise'
+        - TPMS surface.type can be 'terms' (full) or 'raw_preset' (preset name only)
    ---------------------------------------------------------- */
 function normalizeDesignJson(json, filename){
   var letter = String.fromCharCode(65 + LAB_STATE.designs.length);
   var palette = ['#22d3ee','#fbbf24','#fb7185'];
 
-  var family = json.family || json.tool || 'unknown';
-  /* Derive a SHORT STRING variant name.  Some recipe shapes have
-     `field` as a structured block (Grain/Noise) — we don't want that
-     as the variant; use only string-typed sources. */
+  /* ── 1. Family inference ─────────────────────────────────── */
+  var family = json.family || json.tool || null;
+  if (!family){
+    if (json.meta && json.meta.tool === 'grain') family = 'grain';
+    else if (json.meta && json.meta.tool === 'noise-scaffold-explorer') family = 'noise';
+    else if (json.field && typeof json.field === 'object') family = 'grain';
+    else if (json.surface && json.surface.type === 'noise') family = 'noise';
+    else if (json.surface && (json.surface.type === 'terms' || json.surface.type === 'raw_preset')) family = 'tpms';
+    else family = 'unknown';
+  }
+
+  /* ── 2. Variant (short string label, never an object) ────── */
   var variant = 'custom';
   if (typeof json.variant === 'string') variant = json.variant;
   else if (typeof json.fieldType === 'string') variant = json.fieldType;
-  else if (typeof json.field === 'string') variant = json.field;     /* legacy: field-as-string */
   else if (json.field && typeof json.field.type === 'string') variant = json.field.type;
   else if (json.surface && typeof json.surface.type === 'string') variant = json.surface.type;
+  else if (json.meta && typeof json.meta.preset === 'string') variant = json.meta.preset;
 
-  var topology = json.topology || (json.geometry && json.geometry.mode) || 'sheet';
-  var rho = json.rho_rel || json.density || json.relative_density || 0.40;
-  var cell = json.cell_mm || json.cellSize || (json.geometry && json.geometry.cellSizeMm) || 4.0;
+  /* ── 3. Topology / mode (external uses bare strings) ─────── */
+  var rawMode = (json.geometry && json.geometry.mode) || json.topology || null;
+  /* Add family prefix where lab requires it.  TPMS modes (solid/shell/pi-tpms)
+     don't take a prefix; Noise/Grain bare 'half'/'sheet'/'solid' need one. */
+  var topology = rawMode || 'sheet';
+  var labMode = rawMode;
+  if (rawMode && (family === 'noise' || family === 'grain')){
+    if (rawMode === 'half')  labMode = family + '-half';
+    else if (rawMode === 'sheet') labMode = family + '-sheet';
+    else if (rawMode === 'solid') labMode = family + '-solid';
+    /* else: rawMode is already prefixed or is something else (e.g. 'shell' for noise) */
+  }
 
-  // Try to derive a reasonable title
+  /* ── 4. Cell size — external uses dimensionless cell_scale, lab uses cellSizeMm.
+        For visualization the kernel works in [-π, π] regardless, so cell size only
+        matters for permeability calc.  Use cellSizeMm if given (lab dialect),
+        otherwise default to 5 mm.  cell_scale from external recipes is preserved
+        in the geometry block but not consumed by lab solvers. */
+  var cellSizeMm = (json.geometry && (json.geometry.cellSizeMm || json.geometry.cell_size_mm)) || 5.0;
+
+  var rho = json.rho_rel || json.density || json.relative_density ||
+            (json.homogenization && json.homogenization.volume_fraction != null
+              ? json.homogenization.volume_fraction / 100  /* external uses percentage */
+              : 0.40);
+
+  /* ── 5. Title derivation ─────────────────────────────────── */
+  var presetLabel = (json.meta && json.meta.preset) || (json.surface && json.surface.label);
   var title = json.title || json.name;
   if (!title){
-    if (family === 'tpms') title = (json.tpms_type || 'TPMS') + ' · ' + topology;
-    else if (variant === 'spinodoid') title = 'Spinodoid · VMF';
-    else if (variant === 'reaction_diffusion' || variant === 'reactiondiffusion') title = 'Trabecular · GS';
-    else if (typeof variant === 'string' && variant !== 'custom'){
+    if (presetLabel){
+      title = presetLabel;
+      if (family === 'tpms' && rawMode) title += ' · ' + rawMode;
+    } else if (family === 'tpms') {
+      title = (json.tpms_type || 'TPMS') + (rawMode ? ' · ' + rawMode : '');
+    } else if (variant === 'spinodoid') {
+      title = 'Spinodoid · VMF';
+    } else if (variant === 'reaction_diffusion' || variant === 'reactiondiffusion') {
+      title = 'Trabecular · GS';
+    } else if (typeof variant === 'string' && variant !== 'custom'){
       title = variant.charAt(0).toUpperCase() + variant.slice(1);
     } else {
       title = 'Custom design';
     }
   }
 
-  /* Derive a renderable recipe from the JSON.  A "valid lab recipe"
-     has a recognized `family` and the kernel-specific block needed
-     for that family (surface for tpms, field for grain/noise).
-     If anything is missing, recipe stays null and the design falls
-     back to the SVG mock; we surface a console note so the user can
-     fix the JSON. */
+  /* ── 6. Build a renderable lab recipe ─────────────────────── */
   var recipe = null;
   var recipeNote = '';
+  var DEFAULT_MATERIAL = (typeof MATERIAL_TI64_BONE !== 'undefined') ? MATERIAL_TI64_BONE
+    : { Es_MPa: 110000, nu: 0.34, ks_WmK: 6.7, muFluid_PaS: 0.001 };
+
+  /* Translate external geometry → lab geometry */
+  function buildLabGeometry(extG, defaultMode){
+    extG = extG || {};
+    var labG = {
+      mode:       labMode || defaultMode,
+      cellSizeMm: cellSizeMm,
+      cellMult:   1.0
+    };
+    /* offset (TPMS, noise iso threshold).  null means lab uses 0. */
+    if (extG.offset != null) labG.offset = extG.offset;
+    /* Wall thickness — snake_case → camelCase */
+    var wt = extG.wall_thickness != null ? extG.wall_thickness : extG.wallThickness;
+    if (wt != null) labG.wallThickness = wt;
+    /* Pipe radius — snake_case → camelCase */
+    var pr = extG.pipe_radius != null ? extG.pipe_radius : extG.pipeR;
+    if (pr != null) labG.pipeR = pr;
+    /* Phase shift — snake_case → camelCase */
+    var ps = extG.phase_shift != null ? extG.phase_shift : extG.phaseShift;
+    if (ps != null) labG.phaseShift = ps;
+    /* half_invert — already matches */
+    if (extG.half_invert != null) labG.half_invert = extG.half_invert;
+    /* center / half_width — used by NoiseKernel.parseRecipe via surface block,
+       but Grain reads from geometry.  Pass through verbatim. */
+    if (extG.center != null) labG.center = extG.center;
+    if (extG.half_width != null) labG.half_width = extG.half_width;
+    if (extG.smoothing != null) labG.smoothing = extG.smoothing;
+    return labG;
+  }
+
   if (typeof KERNELS !== 'undefined' && KERNELS[family]){
-    /* Already-shaped lab recipe? — accept verbatim */
-    if (json.geometry && (json.surface || json.field)){
-      recipe = json;
-      recipeNote = 'recognized as full lab recipe';
-    } else if (family === 'tpms' && json.surface){
-      /* TPMS recipe missing geometry block — synthesize defaults */
-      recipe = {
-        family: 'tpms',
-        name: title,
-        surface: json.surface,
-        geometry: {
-          mode: topology || 'solid',
-          offset: (json.geometry && json.geometry.offset) || 0,
-          cellSizeMm: cell,
-          cellMult: 1.0
-        },
-        material: json.material || (typeof MATERIAL_TI64_BONE !== 'undefined' ? MATERIAL_TI64_BONE : { Es_MPa: 110000, nu: 0.34, ks_WmK: 6.7, muFluid_PaS: 0.001 })
-      };
-      recipeNote = 'TPMS recipe synthesized with default geometry';
-    } else if ((family === 'grain' || family === 'noise') && json.field){
-      recipe = {
-        family: family,
-        name: title,
-        field: json.field,
-        geometry: json.geometry || {
-          mode: family === 'grain' ? 'grain-sheet' : 'noise-sheet',
-          cellSizeMm: cell,
-          cellMult: 1.0
-        },
-        material: json.material || (typeof MATERIAL_TI64_BONE !== 'undefined' ? MATERIAL_TI64_BONE : { Es_MPa: 110000, nu: 0.34, ks_WmK: 6.7, muFluid_PaS: 0.001 })
-      };
-      recipeNote = (family === 'grain' ? 'Grain' : 'Noise') + ' recipe synthesized with default geometry';
-    } else {
-      recipeNote = 'family "' + family + '" recognized but kernel block (surface/field) missing — falling back to SVG mock';
+    if (family === 'tpms'){
+      if (json.surface && json.surface.type === 'terms' && Array.isArray(json.surface.terms)){
+        recipe = {
+          family: 'tpms',
+          name: title,
+          surface: json.surface,
+          geometry: buildLabGeometry(json.geometry, 'solid'),
+          material: json.material || DEFAULT_MATERIAL
+        };
+        recipeNote = 'TPMS recipe (terms surface) accepted';
+      } else if (json.surface && json.surface.type === 'raw_preset'){
+        recipeNote = 'TPMS preset "' + (json.surface.label || json.surface.preset) +
+                     '" — lab does not yet expand named presets to surface terms; falling back to SVG mock';
+      } else {
+        recipeNote = 'TPMS recipe missing surface.terms — falling back to SVG mock';
+      }
+    } else if (family === 'noise'){
+      /* Lab NoiseKernel.parseRecipe expects the surface block (with type='noise')
+         and reads geometry.half_invert.  External recipes match this shape, just
+         need our remapped geometry. */
+      if (json.surface && json.surface.type === 'noise'){
+        recipe = {
+          family: 'noise',
+          name: title,
+          surface: json.surface,
+          geometry: buildLabGeometry(json.geometry, 'noise-sheet'),
+          material: json.material || DEFAULT_MATERIAL
+        };
+        recipeNote = 'Noise recipe accepted';
+      } else {
+        recipeNote = 'Noise recipe missing surface block (type="noise") — falling back to SVG mock';
+      }
+    } else if (family === 'grain'){
+      /* Lab GrainKernel.parseRecipe reads from field block; external matches. */
+      if (json.field && typeof json.field === 'object'){
+        recipe = {
+          family: 'grain',
+          name: title,
+          field: json.field,
+          geometry: buildLabGeometry(json.geometry, 'grain-sheet'),
+          material: json.material || DEFAULT_MATERIAL
+        };
+        recipeNote = 'Grain recipe accepted';
+      } else {
+        recipeNote = 'Grain recipe missing field block — falling back to SVG mock';
+      }
     }
+  } else if (family === 'unknown'){
+    recipeNote = 'family could not be inferred from JSON — falling back to SVG mock';
   } else {
     recipeNote = 'family "' + family + '" not in KERNELS — falling back to SVG mock';
   }
-  if (recipeNote){
-    console.log('[add-design] ' + filename + ': ' + recipeNote);
-  }
+  console.log('[add-design] ' + filename + ': ' + recipeNote);
 
+  /* ── 7. Pack the design entry ────────────────────────────── */
   var id = json.id || ('user-' + Date.now().toString(36));
   return {
     id: id,
     label: 'DESIGN · ' + letter,
     title: title,
     source: 'imported · ' + filename,
-    family: family === 'unknown' ? 'tpms' : family,   // fallback for SVG
+    family: (family === 'unknown' ? 'tpms' : family),   /* fallback for SVG */
     variant: variant,
     topology: topology,
     rho_rel: rho,
-    cell_mm: cell,
-    mat_es_gpa: json.mat_es_gpa || json.E_s || 110,
-    mat_nu: json.mat_nu || json.nu || 0.30,
+    cell_mm: cellSizeMm,
+    mat_es_gpa: json.mat_es_gpa || json.E_s ||
+                (json.homogenization && json.homogenization.E_solid_GPa) || 110,
+    mat_nu: json.mat_nu || json.nu ||
+            (json.homogenization && json.homogenization.poisson) || 0.30,
     color: palette[LAB_STATE.designs.length] || '#aaa',
-    results: null,    // populated by run; stays null until then
-    raw_json: json,   // preserved for handoff to F13LD.mesh
-    recipe: recipe    // populated when JSON is a valid lab recipe; null otherwise
+    results: null,
+    raw_json: json,
+    recipe: recipe
   };
 }
 
