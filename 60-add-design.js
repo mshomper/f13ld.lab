@@ -6,9 +6,11 @@
    ============================================================ */
 
 /* ----------------------------------------------------------
-   Add Design click handler. Opens the picker. The full vault
-   browser is Phase 10 — for now this is a file picker with
-   a small note about vault availability.
+   Add Design click handler. Two paths:
+     1. Click the button alone → file picker (.json)
+     2. Hold Shift while clicking → paste-JSON prompt
+   Both end up in the same ingest path.  Phase 10 will replace
+   this with a proper modal that combines both options.
    ---------------------------------------------------------- */
 function onAddDesignClick(){
   if (LAB_STATE.designs.length >= 3){
@@ -16,7 +18,31 @@ function onAddDesignClick(){
     return;
   }
 
-  // Create a transient file input
+  /* Shift-click → paste path.  Bypasses the file picker for
+     workflows where the recipe lives in a clipboard buffer
+     (copy from F13LD.mesh, paste here). */
+  var ev = window.event;
+  if (ev && ev.shiftKey){
+    var raw = prompt('Paste F13LD recipe JSON:');
+    if (!raw) return;
+    try {
+      var json = JSON.parse(raw);
+      var design = normalizeDesignJson(json, json.name || 'pasted.json');
+      LAB_STATE.designs.push(design);
+      LAB_STATE.runHasCompleted = false;
+      LAB_STATE.winningId = null;
+      updateLoadedPill();
+      updateActionButtons();
+      recomputeEstimate();
+      renderDesignGrid();
+    } catch (err){
+      console.error('[add-design] paste parse failed:', err);
+      alert('Could not parse pasted text as JSON.\n\n' + err.message);
+    }
+    return;
+  }
+
+  // Default: file picker
   var input = document.createElement('input');
   input.type = 'file';
   input.accept = '.json,application/json';
@@ -62,6 +88,15 @@ function ingestDesignFile(file){
    Normalize incoming JSON to the LAB_STATE design shape.
    Permissive — accepts mesh handoff format, Grain export,
    raw param dumps. Real solver values come from a future run.
+
+   Two outputs share the design:
+     - The grid metadata (label/title/source/family/topology/etc.)
+       used by the design-card header and SVG-mock fallback.
+     - A `recipe` field — the full lab recipe shape that the
+       raymarcher and CPU solvers consume directly.  This is set
+       when the JSON is recognized as a valid lab recipe (has a
+       `family` field that maps into KERNELS); otherwise it's null
+       and the card falls back to SVG mock.
    ---------------------------------------------------------- */
 function normalizeDesignJson(json, filename){
   var letter = String.fromCharCode(65 + LAB_STATE.designs.length);
@@ -69,9 +104,9 @@ function normalizeDesignJson(json, filename){
 
   var family = json.family || json.tool || 'unknown';
   var variant = json.variant || json.field || json.fieldType || 'custom';
-  var topology = json.topology || 'sheet';
+  var topology = json.topology || (json.geometry && json.geometry.mode) || 'sheet';
   var rho = json.rho_rel || json.density || json.relative_density || 0.40;
-  var cell = json.cell_mm || json.cellSize || 4.0;
+  var cell = json.cell_mm || json.cellSize || (json.geometry && json.geometry.cellSizeMm) || 4.0;
 
   // Try to derive a reasonable title
   var title = json.title || json.name;
@@ -81,6 +116,57 @@ function normalizeDesignJson(json, filename){
     else if (variant === 'reaction_diffusion' || variant === 'reactiondiffusion') title = 'Trabecular · GS';
     else if (variant) title = variant.charAt(0).toUpperCase() + variant.slice(1);
     else title = 'Custom design';
+  }
+
+  /* Derive a renderable recipe from the JSON.  A "valid lab recipe"
+     has a recognized `family` and the kernel-specific block needed
+     for that family (surface for tpms, field for grain/noise).
+     If anything is missing, recipe stays null and the design falls
+     back to the SVG mock; we surface a console note so the user can
+     fix the JSON. */
+  var recipe = null;
+  var recipeNote = '';
+  if (typeof KERNELS !== 'undefined' && KERNELS[family]){
+    /* Already-shaped lab recipe? — accept verbatim */
+    if (json.geometry && (json.surface || json.field)){
+      recipe = json;
+      recipeNote = 'recognized as full lab recipe';
+    } else if (family === 'tpms' && json.surface){
+      /* TPMS recipe missing geometry block — synthesize defaults */
+      recipe = {
+        family: 'tpms',
+        name: title,
+        surface: json.surface,
+        geometry: {
+          mode: topology || 'solid',
+          offset: (json.geometry && json.geometry.offset) || 0,
+          cellSizeMm: cell,
+          cellMult: 1.0
+        },
+        material: json.material || (typeof MATERIAL_TI64_BONE !== 'undefined' ? MATERIAL_TI64_BONE : { Es_MPa: 110000, nu: 0.34, ks_WmK: 6.7, muFluid_PaS: 0.001 })
+      };
+      recipeNote = 'TPMS recipe synthesized with default geometry';
+    } else if ((family === 'grain' || family === 'noise') && json.field){
+      recipe = {
+        family: family,
+        name: title,
+        field: json.field,
+        geometry: json.geometry || {
+          mode: family === 'grain' ? 'grain-sheet' : 'noise-sheet',
+          cellSizeMm: cell,
+          cellMult: 1.0
+        },
+        material: json.material || (typeof MATERIAL_TI64_BONE !== 'undefined' ? MATERIAL_TI64_BONE : { Es_MPa: 110000, nu: 0.34, ks_WmK: 6.7, muFluid_PaS: 0.001 })
+      };
+      recipeNote = (family === 'grain' ? 'Grain' : 'Noise') + ' recipe synthesized with default geometry';
+    } else {
+      recipeNote = 'family "' + family + '" recognized but kernel block (surface/field) missing — falling back to SVG mock';
+    }
+  } else {
+    recipeNote = 'family "' + family + '" not in KERNELS — falling back to SVG mock';
+  }
+  if (recipeNote){
+    console.log('[add-design] ' + filename + ': ' + recipeNote);
   }
 
   var id = json.id || ('user-' + Date.now().toString(36));
@@ -98,7 +184,8 @@ function normalizeDesignJson(json, filename){
     mat_nu: json.mat_nu || json.nu || 0.30,
     color: palette[LAB_STATE.designs.length] || '#aaa',
     results: null,    // populated by run; stays null until then
-    raw_json: json    // preserved for handoff to F13LD.mesh
+    raw_json: json,   // preserved for handoff to F13LD.mesh
+    recipe: recipe    // populated when JSON is a valid lab recipe; null otherwise
   };
 }
 

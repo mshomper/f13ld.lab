@@ -507,19 +507,20 @@ LabRaymarcher.prototype.destroy = function() {
 
 
 /* ════════════════════════════════════════════════════════════
-   Recipe lookup for mock designs (placeholder for Phase 10
-   import path).  Maps a mock-design entry to a full lab recipe
-   when possible; returns null when the design references a
-   structure family the lab doesn't yet know how to bake (e.g.
-   reaction-diffusion / Gray-Scott — F13LD.mesh has it but lab
-   doesn't, so those cards keep the SVG mock for now).
+   Recipe lookup for designs.  Three sources, in priority order:
+     1. design.recipe — populated by 60-add-design.js when the
+        imported JSON is a recognized lab recipe shape (preferred).
+     2. Demo lookup — maps mock-design entries (without imported
+        recipes) to DEMO_RECIPES by family/variant.
+     3. null — design has no usable recipe (RD, unknown family,
+        or invalid imported JSON).  Card falls back to SVG mock.
    ════════════════════════════════════════════════════════════ */
 function recipeForDesign(design) {
   if (!design) return null;
-  /* Direct embed: if a future design carries its own recipe field */
+  /* Imported recipe takes priority — the user explicitly loaded this */
   if (design.recipe) return design.recipe;
 
-  /* Mock-design variant lookup */
+  /* Mock-design variant lookup (the three pre-loaded demos) */
   if (design.family === 'tpms') {
     /* All TPMS variants → schwarzP demo for now */
     return DEMO_RECIPES.schwarzP;

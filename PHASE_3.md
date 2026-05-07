@@ -782,3 +782,93 @@ PHASE_3.md              — Updated Step 2 follow-up section: documents
 
 
 
+
+---
+
+# Recipe Import MVP
+
+## Goal
+
+Make imported design JSONs actually drive the geometry tile (raymarcher), so a user can drag a recipe from F13LD.mesh / F13LD.tpms / F13LD.grain / F13LD.noise into the lab and immediately see it rendered alongside the demos. Out of scope: wiring real CPU solvers into `runFullSweep` (that's a substantial Phase 5+ rewrite of the mock-progress pipeline).
+
+## What was already there
+
+- `60-add-design.js` had the file-picker + `?r=` URL-param ingest paths, and a `normalizeDesignJson` function that constructed the lab grid metadata.
+- `21-raymarcher.js`'s `recipeForDesign(design)` already checked `design.recipe` first (set up during the geometry push as a forward hook).
+- Lab kernels (`KERNELS[family]`) are general — they consume any recipe matching the lab schema, demo or otherwise.
+
+## What was missing
+
+The import flow was metadata-only: imported JSON's `recipe`-shaped content (surface block, geometry block) was preserved as `raw_json` but never wired through to where `recipeForDesign` would find it. So an imported design always returned `null` from `recipeForDesign`, and the geometry tile fell back to the SVG mock — same as a mock design with an unknown variant.
+
+## Changes
+
+**`normalizeDesignJson` extended** to derive a renderable `recipe` field from incoming JSON:
+
+1. **Full lab recipe** (has both `surface`/`field` AND `geometry` blocks) → accepted verbatim.
+2. **TPMS surface only** (no geometry block) → recipe synthesized with default geometry (`mode: 'solid'`, `cellSizeMm: 4` or whatever the JSON specifies, `cellMult: 1.0`).
+3. **Grain/Noise field only** (no geometry block) → recipe synthesized with default geometry (`mode: 'grain-sheet'` or `'noise-sheet'`).
+4. **Unknown family** or **missing kernel block** → `recipe: null`, console logs why, design falls back to SVG mock as before.
+
+**`onAddDesignClick` extended** with a Shift-click paste path:
+- Plain click → file picker (existing behavior)
+- Shift-click → `prompt()` for paste-JSON
+
+**`recipeForDesign` docstring updated** to reflect the new priority order (imported recipe > demo lookup > null/SVG).
+
+## What it doesn't do (deferred)
+
+- **No real solver run on imported recipes.** `runFullSweep` is still a mock setInterval ticker — clicking "Run" on an imported recipe shows the same fake progress + zero results as before. Wiring `solveDesignCPUStokes` and `solveDesignElastic` into the real runFullSweep is a bigger rewrite (Phase 5).
+- **No vault integration.** `?r=vaultId` still hits the Phase 10 stub.
+- **No recipe editor.** No way to tweak imported recipes in-page; user has to re-import after editing externally.
+- **No drag-and-drop file zone.** Just file picker + Shift-click paste. Drag-drop is a 30-LOC follow-on for Phase 10.
+
+## File inventory after Recipe Import
+
+Modified:
+```
+60-add-design.js        — normalizeDesignJson now extracts/synthesizes
+                          a `recipe` field; onAddDesignClick accepts
+                          Shift-click paste. ~50 LOC added.
+21-raymarcher.js        — recipeForDesign docstring updated to reflect
+                          new priority order (imported > demo > SVG).
+                          No code changes — already supported the path.
+```
+
+New:
+```
+example-recipe-schwarz-p-7mm.json
+                        — A working test recipe for the import flow.
+                          7mm cell, offset shifted to ~60% solid VF.
+                          Drop or paste this into the lab to verify
+                          the import pipeline works end-to-end.
+```
+
+## How to test
+
+1. Upload the changed `60-add-design.js` and `21-raymarcher.js` files to GitHub.
+2. Hard-refresh the lab.
+3. Remove one of the demo designs (× button on a card) to make room.
+4. Click the "+" Add Design button → file picker → select `example-recipe-schwarz-p-7mm.json`.
+5. The new card should appear with title "Schwarz P · 7mm cell (test import)" and the **geometry tile should render the actual Schwarz P** (slightly chunkier than the 5mm demo because of the 7mm cell), auto-rotating as expected.
+6. Console should log: `[add-design] example-recipe-schwarz-p-7mm.json: recognized as full lab recipe`.
+7. Optionally: copy the file's contents to clipboard, then Shift-click "+" → paste → verify same result.
+
+If the recipe imports but the geometry tile shows SVG mock, check the console — `recipeForDesign` returned null for some reason (most likely the imported JSON has a family the lab doesn't know).
+
+## Decisions log (Recipe Import)
+
+| # | Decision | Status |
+| --- | --- | --- |
+| RI-1 | Wire raymarcher to imported recipes; defer real-solver wiring | Held |
+| RI-2 | Synthesize default geometry for partial JSONs (surface/field only) | Held — accepts mesh exports that omit geometry |
+| RI-3 | Shift-click prompt() for paste path; full modal deferred | Held — minimal MVP UX |
+| RI-4 | `prompt()` for paste vs proper textarea modal | Held; prompt is ugly but functional |
+| RI-5 | Console-log recipe recognition status; no toast/alert spam | Held |
+
+## Handoff state (Recipe Import complete)
+
+- Imported recipe JSONs (full or partial) drive the geometry tile correctly
+- Old import flow (file picker, ?r=URL) still works; no regression
+- Real-solver wiring through `runFullSweep` deferred to Phase 5+
+- Next workstream: **geometry polish** (wheel-zoom, click-to-focus, full-screen detail view)
