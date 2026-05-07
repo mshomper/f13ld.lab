@@ -2,35 +2,45 @@
    F13LD.lab · 19-stokes-solver.js
    GPU-resident Stokes-Brinkman PCG permeability homogenization.
 
-   Mirrors 16-elastic-solver.js's architecture but solves the
-   DIRECT formulation derived in 18-stokes-cpu-ref.js — i.e.
+   ⚠ EXPERIMENTAL ⚠
+   This solver is functionally complete but suffers from FP32
+   precision limits at high iter counts.  The PCG residual
+   stagnates around 1e-4 to 1e-5 (cannot reach the TOL=1e-6
+   needed to fully converge K), and the M-matrix accumulates
+   axis-correlated drift past ~500 iters that produces wildly
+   anisotropic K values on cubically-symmetric geometries.
 
-     A · u' = b,
-       A · u' = -μ∇²u' + P · (α(x) · u'),
-       b      = -P · (α(x) · ē_j),
-       P      = (I - n⊗n)  in Fourier space,
-       M⁻¹    = (-μ∇² + α_0)⁻¹  preconditioner.
+   At iter 50 the GPU result matches the FP64 CPU reference
+   exactly (verified Schwarz P at N=16: K = 2.10e-8 isotropic
+   on both CPU and GPU).  Beyond ~200 iters drift accumulates;
+   beyond ~1500 iters the M-matrix can go non-physical (negative
+   diagonals, indefinite K).
 
-   The Lippmann-Schwinger polarization scheme used by the
-   elastic solver was tried first for Stokes; it has a non-
-   symmetric operator (Γ_S and δα don't commute) and CG
-   converges slowly and oscillates.  The direct operator L is
-   genuinely SPD on the divergence-free zero-mean subspace, so
-   PCG converges fast and monotonically — but only if the
-   Nyquist plane (i, j or k = N/2) is zeroed in n_dir, k2_phys,
-   and M_inv.  All three lookup buffers are baked CPU-side
-   (in solveDesignStokes, mirroring the CPU reference) with
-   Nyquist already inert; the WGSL kernels just multiply by
-   them, so Nyquist treatment lives entirely in the host code.
+   FOR ACCURATE PERMEABILITY VALUES: use solveDesignCPUStokes
+   (in 18-stokes-cpu-ref.js).  CPU is the canonical solver;
+   GPU is a placeholder for future precision improvements.
 
-   PCG iter cost:
-     applyA    ≈ 9 FFTs + 10 dispatches + 1 readback (p·Ap dot)
-     applyMinv ≈ 6 FFTs + 5 dispatches
-     PCG iter  ≈ 15 FFTs + 15 dispatches + 3 readbacks
-     CPU ref converged at ~1100-1300 iters per LC at TOL=1e-6;
-     GPU should reach the same K with the same iter count
-     (deterministic algorithm, FP32 vs FP64 — small drift
-     possible, validated by Step 3's GPU vs CPU comparison).
+   Improvement directions (deferred — see PHASE_3.md "Step 2
+   follow-up" for full discussion):
+     Tier 1 (1-2 sessions):  Kahan summation + periodic Helmholtz
+                             re-projection.  Should bring GPU to
+                             within 0.5% of CPU.
+     Tier 2 (substantial):   Mixed-precision FFT (FP32 mul + FP64
+                             accumulate), iterative refinement.
+     Tier 3 (rewrite):       Multigrid preconditioner — fewer iters
+                             means less drift accumulates.
+
+   Mathematical formulation (correct; matches 18-stokes-cpu-ref.js):
+     A · u' = b
+       A · u' = -μ∇²u' + P · (α(x) · u')
+       b      = -P · (α(x) · ē_j)
+       P      = (I - n⊗n)  in Fourier space
+       M⁻¹    = (-μ∇² + α_0)⁻¹  preconditioner
+
+   Nyquist treatment: all three lookup buffers (n_dir, k2_phys,
+   M_inv) are baked CPU-side in `buildStokesLookups` with Nyquist
+   plane (i, j or k = N/2) zeroed.  WGSL kernels just multiply by
+   them — Nyquist treatment lives entirely in host code.
 
    PCG iteration:
      init:  u' = 0;  b = -P · (α · ē_j);  r = b;  z = M⁻¹ · r;  p = z
@@ -47,6 +57,8 @@
        p    = z' + β · p
        z    = z'
    ============================================================ */
+
+
 
 
 /* ── Solver constants ─────────────────────────────────────── */
@@ -474,11 +486,8 @@ StokesSolver.prototype._writeFill = function(value) {
 };
 
 
-/* ── uploadDesign — push solid mask + lookups + alpha_pen ────
-   `mu` is also passed in to support the P3 Mii-stability early-exit:
-   it's used inside the PCG loop to convert ⟨α·u⟩ to M_ii on the fly.
-   ──────────────────────────────────────────────────────────── */
-StokesSolver.prototype.uploadDesign = function(solid_f32, n_dir, k2_phys, M_inv, alpha_pen, mu) {
+/* ── uploadDesign — push solid mask + lookups + alpha_pen ──── */
+StokesSolver.prototype.uploadDesign = function(solid_f32, n_dir, k2_phys, M_inv, alpha_pen) {
   var d = this.device;
   /* solid mask */
   d.queue.writeBuffer(this.solidBuf, 0, solid_f32.buffer, solid_f32.byteOffset, solid_f32.byteLength);
@@ -491,10 +500,6 @@ StokesSolver.prototype.uploadDesign = function(solid_f32, n_dir, k2_phys, M_inv,
   d.queue.writeBuffer(this.Minv,   0, M_inv.buffer,   M_inv.byteOffset,   M_inv.byteLength);
   /* alpha_pen */
   this._writeStokesParams(alpha_pen);
-  /* P3 — cache scalars for Mii early-exit calc */
-  this._cachedAlphaPen = alpha_pen;
-  this._cachedMu = mu != null ? mu : 0.001;
-  this._cachedRhoAlphaPen = null;     /* lazily computed on first Mii check */
 };
 
 
@@ -758,63 +763,6 @@ StokesSolver.prototype._readbackReal = async function(buf) {
 
 
 /* ════════════════════════════════════════════════════════════
-   _computeMiiActive — compute current M_ii for one axis (P3 early-exit).
-   Reuses the stokesPenalize kernel but ignores 2 of the 3 outputs.
-   Adds u_bar[activeAxis] to u_pri[activeAxis] (in pen domain) to
-   represent u_total = ē_j + u' before averaging.
-
-   Returns the scalar M_ii = ⟨α(x) · u_total[activeAxis]⟩ / μ.
-   Note: this function does NOT mutate u_pri (unlike the post-loop
-   avgAlphaU calculation which does).  It computes pen[activeAxis] =
-   α(x) · u_pri[activeAxis] + α(x) · u_bar[activeAxis], then averages.
-   We use mu via division on CPU after the readback (mu is not stored
-   in the solver — caller passes it in).
-   ════════════════════════════════════════════════════════════ */
-StokesSolver.prototype._computeMiiActive = async function(activeAxis, activeUbar) {
-  var d = this.device;
-  /* Run stokesPenalize on full u_pri (we only consume the activeAxis output) */
-  var enc = d.createCommandEncoder();
-  var penBg = d.createBindGroup({
-    layout: this.penLayout,
-    entries: [
-      { binding: 0, resource: { buffer: this.solidBuf } },
-      { binding: 1, resource: { buffer: this.u_pri[0] } },
-      { binding: 2, resource: { buffer: this.u_pri[1] } },
-      { binding: 3, resource: { buffer: this.u_pri[2] } },
-      { binding: 4, resource: { buffer: this.pen[0] } },
-      { binding: 5, resource: { buffer: this.pen[1] } },
-      { binding: 6, resource: { buffer: this.pen[2] } },
-      { binding: 7, resource: { buffer: this.stokesParamsBuf } }
-    ]
-  });
-  this._dispatchEncoded(enc, this.penPipeline, penBg, this.N3, 64);
-  d.queue.submit([enc.finish()]);
-
-  /* Readback only the activeAxis component of pen */
-  var arr = await this._readbackReal(this.pen[activeAxis]);
-  var sumAlphaUprime = 0;
-  for (var i = 0; i < this.N3; i++) sumAlphaUprime += arr[i];
-
-  /* Add the constant ē_j contribution: ⟨α(x)·u_bar⟩ = u_bar · ⟨α(x)⟩
-     where ⟨α(x)⟩ = ρ · α_pen.  We can reconstruct ρ·α_pen by reading
-     stokesParamsBuf, but the simpler way is to track it on the solver
-     once.  For now, recompute on the fly using a fresh readback of solid. */
-  if (this._cachedRhoAlphaPen == null) {
-    var solidArr = await this._readbackReal(this.solidBuf);
-    var inside = 0;
-    for (var k = 0; k < this.N3; k++) if (solidArr[k] > 0.5) inside++;
-    /* Read alpha_pen from stokesParamsBuf — already written, just remember it.
-       We have no direct getter, but we wrote it via _writeStokesParams.
-       Stash it on the instance during uploadDesign so we can reuse here. */
-    this._cachedRhoAlphaPen = (inside / this.N3) * this._cachedAlphaPen;
-  }
-  var avgAlphaUtotal = (sumAlphaUprime / this.N3) + activeUbar * this._cachedRhoAlphaPen;
-  return avgAlphaUtotal / this._cachedMu;
-};
-
-
-
-/* ════════════════════════════════════════════════════════════
    solveLoadCase — one PCG run for a single macroscopic velocity.
    Returns { avgAlphaU: [3], iters, converged, breakReason }
    where avgAlphaU is the volume-averaged α(x)·u (= μ·M[:,j]).
@@ -828,25 +776,6 @@ StokesSolver.prototype.solveLoadCase = async function(u_bar, opts) {
   opts = opts || {};
   var tol     = opts.tol     != null ? opts.tol     : STOKES_CG_TOL;
   var maxiter = opts.maxiter != null ? opts.maxiter : STOKES_CG_MAXITER;
-
-  /* P3 — Mii-stability early exit (compensates for FP32 residual stagnation).
-     After each `checkInterval` iters, compute current M_ii (= ⟨α·u_i⟩/μ for
-     the driven axis i = active LC).  When M_ii stops changing across a
-     window of `windowSize` consecutive checks, declare convergence even if
-     the residual still has slack.  See P3 documentation in PHASE_3.md for
-     why this is the correct convergence criterion under FP32 stagnation. */
-  var checkInterval = opts.miiCheckInterval != null ? opts.miiCheckInterval : 10;
-  var stabilityTol  = opts.miiStabilityTol  != null ? opts.miiStabilityTol  : 0.01;
-  var miiMinIters   = opts.miiMinIters      != null ? opts.miiMinIters      : 100;
-  var miiWindowSize = opts.miiWindowSize    != null ? opts.miiWindowSize    : 3;
-
-  /* Determine active axis from u_bar (the only non-zero component) */
-  var activeAxis = 0;
-  if (Math.abs(u_bar[1]) > Math.abs(u_bar[0]) && Math.abs(u_bar[1]) > Math.abs(u_bar[2])) activeAxis = 1;
-  if (Math.abs(u_bar[2]) > Math.abs(u_bar[0]) && Math.abs(u_bar[2]) > Math.abs(u_bar[1])) activeAxis = 2;
-  var activeUbar = u_bar[activeAxis];
-  var miiWindow = [];                          /* last few M_ii samples */
-  var miiExitIter = -1;                        /* iter at which Mii stability fired (for diagnostics) */
 
   /* 1. Initialize u' = 0 (fillTriple needs distinct submits because the
         same fillParamsBuf is reused — but here all three components want
@@ -1041,28 +970,6 @@ StokesSolver.prototype.solveLoadCase = async function(u_bar, opts) {
       converged = true;
       breakReason = 'converged';
       break;
-    }
-
-    /* P3 — periodic M_ii stability check.
-       Computes M_ii for the active axis only (one penalize + one readback).
-       Exits when the last `miiWindowSize` samples agree to within
-       `stabilityTol` and we are past `miiMinIters` (avoid early-iter
-       transients where M_ii is unstable for legitimate reasons). */
-    if (it >= miiMinIters && (it + 1) % checkInterval === 0) {
-      var mii = await this._computeMiiActive(activeAxis, activeUbar);
-      miiWindow.push(mii);
-      if (miiWindow.length > miiWindowSize) miiWindow.shift();
-      if (miiWindow.length === miiWindowSize) {
-        var mn = Math.min.apply(null, miiWindow);
-        var mx = Math.max.apply(null, miiWindow);
-        var change = mn > 0 ? (mx / mn - 1) : Infinity;
-        if (change < stabilityTol) {
-          converged = true;
-          breakReason = 'mii_stable';
-          miiExitIter = iters;
-          break;
-        }
-      }
     }
 
     /* z = M⁻¹·r */
@@ -1345,7 +1252,7 @@ async function solveDesignStokes(recipe, N, opts) {
     window.__sharedFFT = fft;
   }
   var solver = new StokesSolver(N, fft);
-  solver.uploadDesign(solid_f32, lk.n_dir, lk.k2_phys, lk.M_inv, alpha_pen, mu);
+  solver.uploadDesign(solid_f32, lk.n_dir, lk.k2_phys, lk.M_inv, alpha_pen);
 
   var t2 = performance.now();
   var hom = await solver.homogenize(mu, opts);
@@ -1379,30 +1286,31 @@ async function solveDesignStokes(recipe, N, opts) {
 
 
 /* ════════════════════════════════════════════════════════════
-   Smoke test — Schwarz P at N=16 on GPU.
-   Pass criteria:
-     1. PCG converges (residual or M_ii-stability) on all 3 LCs at
-        TOL=1e-7, maxiter=1500
-     2. K positive definite (cubic eigenvalues a+2b > 0, a-b > 0)
-     3. K_avg in [1e-12, 1e-6] m²
-     4. Cubic isotropy < 5%
+   Smoke test (EXPERIMENTAL) — Schwarz P at N=16 on GPU.
 
-   Convergence semantics (P3):
-     The PCG residual stalls in FP32 around 1e-4 to 1e-5 due to
-     dot-reduction roundoff and FFT precision loss across thousands
-     of multiply-adds.  Rather than fight FP32 to reach TOL=1e-6,
-     we add a "M_ii stability" early-exit: every 10 iters we read
-     back the current ⟨α(x)·u_i⟩ for the active load case and
-     declare convergence when 3 consecutive samples agree to 1%.
-     This converges to within ~1-2% of the FP64 CPU reference K
-     (typical: K ≈ 9.5-9.7e-8 m² for Schwarz P at N=16, vs CPU's
-     converged 9.6e-8) at ~600-1000 iters per LC, ~5-15 sec total.
-     See PHASE_3.md "P3" section for detailed analysis.
+   STATUS: GPU Stokes solver is experimental and known to drift
+   from the CPU reference at high iter counts due to FP32 precision
+   limits.  CPU reference (solveDesignCPUStokes) is the canonical
+   solver — use it for any K value you care about.
+
+   Symptom observed in late iters: PCG residual stagnates around
+   1e-4 to 1e-5 (FP32 floor), and the M-matrix slowly accumulates
+   axis-correlated drift that produces wildly anisotropic K values
+   on cubically-symmetric geometries (Schwarz P showed Kxx/Kzz
+   ratios up to 4× when forced past the residual stagnation point).
+
+   This smoke test runs at low iter count (50) where GPU still
+   matches CPU exactly, just to verify the GPU pipeline compiles
+   and runs end-to-end.  For meaningful K values, click
+   "▸ CPU Stokes ref · Schwarz P (N=16)" instead.
+
+   See PHASE_3.md "Step 2 follow-up" section for full diagnosis
+   and tiered improvement directions when this is revisited.
    ════════════════════════════════════════════════════════════ */
 var GPU_STOKES_SMOKE = { state: 'idle', lastResult: null };
 
 async function runGPUStokesSmokeTest() {
-  paintGPUStokesLink('running', '⟳ GPU Stokes · Schwarz P · N=16…');
+  paintGPUStokesLink('running', '⟳ GPU Stokes (experimental) · Schwarz P · N=16…');
   await new Promise(function(resolve){ setTimeout(resolve, 10); });
 
   try {
@@ -1414,83 +1322,52 @@ async function runGPUStokesSmokeTest() {
       }
     }
     var t0 = performance.now();
-    var res = await solveDesignStokes(DEMO_RECIPES.schwarzP, 16, { tol: 1e-7, maxiter: 1500 });
+    /* Cap at 50 iters — that's where GPU is verified to match CPU exactly.
+       Beyond ~200 iters FP32 drift accumulates and K values are unreliable. */
+    var res = await solveDesignStokes(DEMO_RECIPES.schwarzP, 16, { tol: 1e-30, maxiter: 50 });
     var totalMs = performance.now() - t0;
 
-    var passed = true;
+    /* Pass criteria are loose since this is an experimental run:
+       just verify the pipeline ran and produced numbers in a sane range. */
+    var passed = res.valid && res.K_full != null && Math.abs(res.Kx_m2) < 1e-5;
     var notes = [];
-
-    if (!res.valid) { passed = false; notes.push('M-matrix singular'); }
-    if (res.Kx_m2 <= 0 || res.Ky_m2 <= 0 || res.Kz_m2 <= 0) {
-      passed = false; notes.push('non-positive K diagonal');
-    }
-    var a_K = (res.K_full[0][0] + res.K_full[1][1] + res.K_full[2][2]) / 3;
-    var b_K = (res.K_full[0][1] + res.K_full[0][2] + res.K_full[1][2]) / 3;
-    var eig_iso = a_K + 2*b_K;
-    var eig_dev = a_K - b_K;
-    if (eig_iso <= 0 || eig_dev <= 0) {
-      passed = false;
-      notes.push('K not positive definite (iso=' + eig_iso.toExponential(2) + ', dev=' + eig_dev.toExponential(2) + ')');
-    }
-    var Kavg = (res.Kx_m2 + res.Ky_m2 + res.Kz_m2) / 3;
-    if (Kavg < 1e-12 || Kavg > 1e-6) {
-      passed = false;
-      notes.push('K out of band [1e-12, 1e-6] m²');
-    }
-    var Kmax = Math.max(res.Kx_m2, res.Ky_m2, res.Kz_m2);
-    var Kmin = Math.min(res.Kx_m2, res.Ky_m2, res.Kz_m2);
-    var aniso = Kmax > 0 ? (Kmax - Kmin) / Kmax : 0;
-    var k_star = Kavg / (res.L_cell_m * res.L_cell_m);
+    if (!passed) notes.push('GPU pipeline failed to produce K');
 
     GPU_STOKES_SMOKE.lastResult = { res: res, passed: passed, notes: notes, totalMs: totalMs };
 
-    var bg = passed ? '#34d399' : '#fb7185';
-    var fg = passed ? '#06080f' : '#fff';
+    var bg = passed ? '#fbbf24' : '#fb7185';   /* amber, not green — experimental status */
+    var fg = '#06080f';
     var lcLine = res.perLC.map(function(p){
       return p.axis + ':' + p.iters + '·' + p.breakReason;
     }).join('  ');
 
+    var Kavg = (res.Kx_m2 + res.Ky_m2 + res.Kz_m2) / 3;
+
     console.log(
-      '%c ' + (passed ? '✓' : '✗') + ' ' + res.name + ' · GPU Stokes · N=16 ',
+      '%c ⚠ ' + res.name + ' · GPU Stokes (EXPERIMENTAL) · N=16 ',
       'background:' + bg + '; color:' + fg + '; font-weight:bold; padding:2px 8px; border-radius:3px;',
+      '\n  STATUS:        Experimental.  Use CPU Stokes ref for accurate K.' +
       '\n  family:        ' + res.family + ' · mode: ' + res.mode +
       '\n  ρ (VF):        ' + (res.rho * 100).toFixed(2) + '%' +
       '\n  Kx / Ky / Kz:  ' + res.Kx_m2.toExponential(3) + ' / ' +
                               res.Ky_m2.toExponential(3) + ' / ' +
                               res.Kz_m2.toExponential(3) + ' m²' +
-      '\n  K off-diag:    Kxy=' + res.K_full[0][1].toExponential(3) +
-                            ', Kxz=' + res.K_full[0][2].toExponential(3) +
-                            ', Kyz=' + res.K_full[1][2].toExponential(3) +
-      '\n  M_full diag:   Mxx=' + res.M_full[0][0].toExponential(3) +
-                            ', Myy=' + res.M_full[1][1].toExponential(3) +
-                            ', Mzz=' + res.M_full[2][2].toExponential(3) +
-      '\n  M off-diag:    Mxy=' + res.M_full[0][1].toExponential(3) +
-                            ', Mxz=' + res.M_full[0][2].toExponential(3) +
-                            ', Myz=' + res.M_full[1][2].toExponential(3) +
-      '\n  K eigenvalues (cubic-symmetric assumed): iso=' + eig_iso.toExponential(3) + ', dev=' + eig_dev.toExponential(3) +
-      '\n  isotropy:      ' + (aniso * 100).toFixed(2) + '%' +
-      '\n  mean K:        ' + Kavg.toExponential(3) + ' m²' +
-      '\n  k* (K/L²):     ' + k_star.toExponential(3) + '  (dimensionless)' +
-      '\n  μ:             ' + res.mu_PaS + ' Pa·s' +
-      '\n  L_cell:        ' + (res.L_cell_m*1000).toFixed(2) + ' mm' +
-      '\n  α_pen:         ' + res.alpha_pen.toExponential(3) + ' Pa·s/m²' +
-      '\n  α_0 (precond): ' + res.alpha_0.toExponential(3) + ' Pa·s/m²' +
-      '\n  PCG iters:     ' + res.iters + ' total · all converged: ' + res.converged +
+      '\n  mean K:        ' + Kavg.toExponential(3) + ' m²  (NOT the converged value)' +
+      '\n  PCG iters:     ' + res.iters + ' total · capped at 50/LC for FP32 reliability' +
       '\n  per-LC:        ' + lcLine +
       '\n  rasterize:     ' + res.tRast_ms.toFixed(0) + ' ms' +
-      '\n  lookups:       ' + res.tLookups_ms.toFixed(0) + ' ms' +
       '\n  GPU PCG solve: ' + res.tCG_ms.toFixed(0) + ' ms' +
       '\n  total:         ' + totalMs.toFixed(0) + ' ms' +
-      '\n  CPU ref @ TOL=1e-5: K ≈ 8.29e-8 (avg), 410/410/532 iters, ~9000 ms' +
+      '\n  CPU ref @ TOL=1e-6: K ≈ 9.6e-8 m² (converged) — use that solver for real numbers' +
       (notes.length ? '\n  notes:         ' + notes.join(' · ') : '')
     );
 
     if (passed) {
-      paintGPUStokesLink('pass',
-        '✓ GPU Stokes · K̅ = ' + Kavg.toExponential(2) + ' m² (' + totalMs.toFixed(0) + ' ms)');
+      paintGPUStokesLink('experimental',
+        '⚠ GPU Stokes (experimental) · pipeline OK · use CPU ref for K');
     } else {
       paintGPUStokesLink('fail',
-        '⚠ GPU Stokes · checks failed (see console)');
+        '✗ GPU Stokes pipeline failed (see console)');
     }
   } catch (err) {
     console.error('[gpu-stokes-smoke] failed:', err);
@@ -1502,7 +1379,7 @@ function paintGPUStokesLink(state, text) {
   var link = document.getElementById('gpuStokesTestLink');
   if (!link) return;
   GPU_STOKES_SMOKE.state = state;
-  link.classList.remove('running', 'pass', 'fail');
+  link.classList.remove('running', 'pass', 'fail', 'experimental');
   if (state !== 'idle') link.classList.add(state);
   link.textContent = text;
 }

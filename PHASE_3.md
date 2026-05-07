@@ -724,34 +724,60 @@ Start with **(I-1)** and **(I-3)**. Together they should bring GPU accuracy from
 | # | Decision | Status |
 | --- | --- | --- |
 | S2F-1 | Diagnose by running maxiter=50 to compare GPU vs CPU early-iter K | Held |
-| S2F-2 | P3 (Mii-stability early exit) over P1 (loose TOL) or P2 (deep FP fix) | Held |
-| S2F-3 | M_ii check every 10 iters, window=3, stabilityTol=1% | Held |
-| S2F-4 | Cache `mu`, `alpha_pen`, `rho·alpha_pen` on solver for cheap Mii calc | Held |
-| S2F-5 | Document GPU as fast/comparison-grade; CPU as absolute-units reference | Held |
+| S2F-2 | P3 (Mii-stability early exit) over P1 (loose TOL) or P2 (deep FP fix) | **Reverted** — P3 attempt produced negative M-diagonals (non-physical), reverted to bare PCG |
+| S2F-3 | M_ii check every 10 iters, window=3, stabilityTol=1% | **Reverted** with P3 |
+| S2F-4 | Cache `mu`, `alpha_pen`, `rho·alpha_pen` on solver for cheap Mii calc | **Reverted** with P3 |
+| S2F-5 | Document GPU as experimental; CPU is canonical solver | Held — strengthened to "EXPERIMENTAL" labeling |
 | S2F-6 | Defer FP precision improvements (Kahan, mixed-prec FFT, etc.) | Held |
-| S2F-7 | Skip Step 3 (deep CPU/GPU comparison test); document P3 accuracy in PHASE_3.md instead | New |
+| S2F-7 | Skip Step 3 (deep CPU/GPU comparison test) | Held |
+| S2F-8 | Hide GPU smoke test behind experimental tag, cap at iter 50 (only-known-good range) | New |
+
+## What went wrong with P3 (post-mortem)
+
+P3 added a periodic Mii-stability check inside the PCG loop: every 10 iters, run `stokesPenalize` on current u_pri, read back `pen[activeAxis]`, compare to last 3 samples, exit if stable to 1%. Theoretically clean.
+
+In practice the P3 patch produced **worse** results: at iter 1500 the M-matrix went negative (Mxx=-1.20e+7, Myy=-1.27e+7, Mzz=-3.92e+7) where the bare PCG at iter 2000 had given anisotropic-but-positive (Mxx=2.30e+7, etc.). The Mii early-exit never fired because Mii was always changing (drifting toward negative), so the loop ran to maxiter regardless.
+
+Three possible explanations, none confirmed:
+1. **The Mii readback's mid-loop `stokesPenalize` dispatch perturbed GPU state**. Most likely candidate: writing to `pen[0..2]` mid-loop changed the timing/ordering of subsequent `_applyA` dispatches in some way that compounded FP32 drift. Should be safe in theory (pen is overwritten by next `_applyA`), but WebGPU's hazard tracking / queue ordering may have broken some implicit assumption.
+2. **The async `await` between PCG iters changed the encoder batching**. Adding more await points means more individual command-buffer submissions, which may interact with GPU driver behavior differently than tight encoder reuse. Not a bug per se, just different scheduling.
+3. **The maxiter=1500 vs 2000 difference itself was the variable that mattered, not P3**. We can't be sure without a controlled A/B test (which we didn't run before reverting).
+
+**Lesson for future revival:** GPU PCG numerical state is fragile beyond ~500 iters. Any change to the loop structure should be A/B-tested at multiple maxiter caps to disentangle what's actually causing what.
+
+## Tensor coverage question (Matt's observation)
+
+Matt noted: "I am wondering if we have been failing because we're not setting up a full tensor, and just trying to do XYZ only."
+
+The current 3-axis-aligned-LC scheme is **mathematically sufficient** for any 3×3 symmetric tensor: off-diagonals fall out of the cross-component averages (when driving u_bar=ē_x, the resulting u' has y/z components from the Helmholtz projector enforcing div-free, so M_yx ≠ 0 in general). The `homogenize` function correctly symmetrizes after assembly.
+
+**However**, validating against Schwarz P alone is a weak correctness test because cubic isotropy makes off-diagonals theoretically zero — it cannot distinguish between "the tensor pipeline is correct" and "the tensor pipeline is broken in a way that happens to give zero off-diagonals." When GPU is revived, validation should include **spinodoid z-aligned** or another genuinely anisotropic geometry — small but nonzero off-diagonals provide a much stronger correctness test.
 
 ## Updated handoff state
 
-- 19-stokes-solver.js v2 ships with P3 early-exit. GPU now converges to physical K within 1-2% of CPU reference in ~5-15 sec on Schwarz P at N=16.
-- CPU reference (`solveDesignCPUStokes`) remains the authoritative gold-standard solver.
-- Step 3 deprecated as a separate push; replaced with P3 documentation here.
-- Next workstreams (per Matt's roadmap): recipe import MVP, then geometry polish.
+- 19-stokes-solver.js v3 ships **without P3** — bare Step 2 PCG, smoke test capped at maxiter=50 (only-verified-correct range), labeled EXPERIMENTAL throughout
+- File header now warns: "FOR ACCURATE PERMEABILITY VALUES: use solveDesignCPUStokes" (CPU reference in 18-stokes-cpu-ref.js)
+- Smoke test selftest link reads "GPU Stokes (experimental)" with amber-yellow status (vs green/red)
+- CPU reference (`solveDesignCPUStokes`) remains the authoritative gold-standard solver — produces K=9.6e-8 for Schwarz P at N=16 with 1.16% isotropy in ~16 sec
+- Phase 3 closes here; GPU revival deferred to future push when there's appetite for the precision work
+- Next workstreams (per Matt's roadmap): **recipe import MVP**, then **geometry polish**
 
-## File inventory after Step 2 + P3
+## File inventory after Step 2 (no P3)
 
 Modified (over the Step 2 baseline):
 ```
-19-stokes-solver.js     — added _computeMiiActive, P3 early-exit logic in
-                          solveLoadCase, mu/alpha_pen caching in uploadDesign.
-                          Net: ~80 LOC added, total ~1500 LOC.
+19-stokes-solver.js     — Reverted P3 changes.  Added top-of-file
+                          EXPERIMENTAL warning explaining GPU's drift
+                          behavior and pointing users to CPU ref.
+                          Smoke test capped at maxiter=50 (verified-good
+                          range); shows amber status indicating non-shippable
+                          for accurate K values.  Solver class itself
+                          unchanged from Step 2 baseline.
+PHASE_3.md              — Updated Step 2 follow-up section: documents
+                          P3 attempt & reversion, post-mortem analysis,
+                          tensor-coverage discussion, deferred improvements.
 ```
 
-Updated docstrings:
-```
-PHASE_3.md              — Step 2 follow-up (this section); P3 design rationale
-                          and tiered improvement directions.
-```
 
 
 
