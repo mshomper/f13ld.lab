@@ -30,6 +30,77 @@ var CG_MAXITER = 100;
 
 
 /* ════════════════════════════════════════════════════════════
+   Inline CPU FFT helpers — used by extractFieldsForLC to
+   reconstruct u'(x) from the GPU-converged ε(x).  Operates on
+   interleaved Float64 complex arrays [re, im, re, im, ...].
+   Self-contained (duplicates 18-stokes-cpu-ref.js's fft routines)
+   to keep this push free of cross-file load-order dependencies.
+   ════════════════════════════════════════════════════════════ */
+
+function _es_fft1d(x, inverse) {
+  var n = x.length >> 1;
+  for (var i = 1, j = 0; i < n; i++) {
+    var bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      var t = x[2*i]; x[2*i] = x[2*j]; x[2*j] = t;
+      t = x[2*i+1]; x[2*i+1] = x[2*j+1]; x[2*j+1] = t;
+    }
+  }
+  var sign = inverse ? 1 : -1;
+  for (var len = 2; len <= n; len <<= 1) {
+    var ang = sign * 2 * Math.PI / len;
+    var wRe = Math.cos(ang), wIm = Math.sin(ang);
+    for (var i2 = 0; i2 < n; i2 += len) {
+      var curRe = 1, curIm = 0;
+      var halfLen = len >> 1;
+      for (var jj = 0; jj < halfLen; jj++) {
+        var uRe = x[2*(i2+jj)],         uIm = x[2*(i2+jj)+1];
+        var vRe = x[2*(i2+jj+halfLen)], vIm = x[2*(i2+jj+halfLen)+1];
+        var tvRe = curRe*vRe - curIm*vIm;
+        var tvIm = curRe*vIm + curIm*vRe;
+        x[2*(i2+jj)]           = uRe + tvRe;
+        x[2*(i2+jj)+1]         = uIm + tvIm;
+        x[2*(i2+jj+halfLen)]   = uRe - tvRe;
+        x[2*(i2+jj+halfLen)+1] = uIm - tvIm;
+        var newRe = curRe*wRe - curIm*wIm;
+        curIm = curRe*wIm + curIm*wRe;
+        curRe = newRe;
+      }
+    }
+  }
+  if (inverse) for (var k = 0; k < x.length; k++) x[k] /= n;
+}
+
+/* In-place 3D FFT for the (i,j,k) layout used by the elastic solver:
+   idx = i*N² + j*N + k with (i,j,k) = (x,y,z).  Sweeps along each
+   axis using the supplied lineBuf scratch buffer. */
+function _es_fft3d(data, N, inverse, lineBuf) {
+  var buf = lineBuf || new Float64Array(2 * N);
+  var i, j, k;
+  /* axis i (slowest in storage) */
+  for (j = 0; j < N; j++) for (k = 0; k < N; k++) {
+    for (i = 0; i < N; i++) { buf[2*i] = data[2*(i*N*N+j*N+k)]; buf[2*i+1] = data[2*(i*N*N+j*N+k)+1]; }
+    _es_fft1d(buf, inverse);
+    for (i = 0; i < N; i++) { data[2*(i*N*N+j*N+k)] = buf[2*i]; data[2*(i*N*N+j*N+k)+1] = buf[2*i+1]; }
+  }
+  /* axis j */
+  for (i = 0; i < N; i++) for (k = 0; k < N; k++) {
+    for (j = 0; j < N; j++) { buf[2*j] = data[2*(i*N*N+j*N+k)]; buf[2*j+1] = data[2*(i*N*N+j*N+k)+1]; }
+    _es_fft1d(buf, inverse);
+    for (j = 0; j < N; j++) { data[2*(i*N*N+j*N+k)] = buf[2*j]; data[2*(i*N*N+j*N+k)+1] = buf[2*j+1]; }
+  }
+  /* axis k (fastest in storage) */
+  for (i = 0; i < N; i++) for (j = 0; j < N; j++) {
+    for (k = 0; k < N; k++) { buf[2*k] = data[2*(i*N*N+j*N+k)]; buf[2*k+1] = data[2*(i*N*N+j*N+k)+1]; }
+    _es_fft1d(buf, inverse);
+    for (k = 0; k < N; k++) { data[2*(i*N*N+j*N+k)] = buf[2*k]; data[2*(i*N*N+j*N+k)+1] = buf[2*k+1]; }
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════
    WGSL kernels
    ════════════════════════════════════════════════════════════ */
 
@@ -679,10 +750,16 @@ ElasticSolver.prototype._readbackTriple = async function(triple){
 /* ════════════════════════════════════════════════════════════
    solveLoadCase — one CG run for a single macroscopic strain.
    eps_bar: [exx, eyy, ezz] (unit vector typically: [1,0,0] etc.)
-   Returns Promise<{ sigma, iters, converged, breakReason }>
+   opts (optional):
+     { captureFields: true } — after CG converges, also extract
+        per-voxel u'(x) and σ_VM(x) for this LC by calling
+        extractFieldsForLC.  Adds ~30 ms at N=32 (CPU FFT round-trip).
+   Returns Promise<{ sigma, iters, converged, breakReason, fields }>
      breakReason: 'converged' | 'max_iter' | 'pAp_zero' | 'pAp_negative'
+     fields: null unless opts.captureFields, then
+             { u_prime: [Fx,Fy,Fz], sigma_vm: F, N, eps_bar }
    ════════════════════════════════════════════════════════════ */
-ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
+ElasticSolver.prototype.solveLoadCase = async function(eps_bar, opts){
   var d = this.device;
 
   /* 1. Initialize eps = b = uniform macroscopic strain.
@@ -801,27 +878,50 @@ ElasticSolver.prototype.solveLoadCase = async function(eps_bar){
   var sigArr = await this._readbackTriple(this.sig);
   var s0 = 0, s1 = 0, s2 = 0;
   for (var i = 0; i < this.N3; i++) { s0 += sigArr[0][i]; s1 += sigArr[1][i]; s2 += sigArr[2][i]; }
+
+  /* Optional per-voxel field extraction.  Done here, before any subsequent
+     LC overwrites the eps buffer.  sigArr is already on CPU; pass it in
+     so extractFieldsForLC doesn't read the stress buffer twice. */
+  var fields = null;
+  if (opts && opts.captureFields) {
+    fields = await this.extractFieldsForLC(eps_bar, sigArr);
+  }
+
   return {
     sigma: [s0 / this.N3, s1 / this.N3, s2 / this.N3],
     iters: iters,
     converged: converged,
-    breakReason: breakReason
+    breakReason: breakReason,
+    fields: fields
   };
 };
 
 
 /* ════════════════════════════════════════════════════════════
-   homogenize — full 3-load-case run, returns Ex/Ey/Ez + diagnostics
+   homogenize — full 3-load-case run, returns Ex/Ey/Ez + diagnostics.
+
+   opts (optional):
+     { captureFieldsLC: 2 } — capture per-voxel u'(x) and σ_VM(x)
+        for the named LC (0=x, 1=y, 2=z).  Default Z (vertical
+        compression — closest to physiological loading on an
+        orthopedic implant).  Set to -1 to disable field capture.
+        Captured fields appear under `result.fields`.
    ════════════════════════════════════════════════════════════ */
-ElasticSolver.prototype.homogenize = async function(){
+ElasticSolver.prototype.homogenize = async function(opts){
+  opts = opts || {};
+  var captureLC = (opts.captureFieldsLC != null) ? opts.captureFieldsLC : -1;
+
   var C_eff = [[0,0,0],[0,0,0],[0,0,0]];
   var totalIters = 0;
   var allConverged = true;
   var perLC = [];
+  var capturedFields = null;
 
   for (var lc = 0; lc < 3; lc++) {
     var eps_bar = [lc===0?1:0, lc===1?1:0, lc===2?1:0];
-    var res = await this.solveLoadCase(eps_bar);
+    var lcOpts = (lc === captureLC) ? { captureFields: true } : null;
+    var res = await this.solveLoadCase(eps_bar, lcOpts);
+    if (res.fields) capturedFields = res.fields;
     totalIters += res.iters;
     if (!res.converged) allConverged = false;
     for (var p = 0; p < 3; p++) C_eff[p][lc] = res.sigma[p];
@@ -837,7 +937,7 @@ ElasticSolver.prototype.homogenize = async function(){
           - C[0][1]*(C[1][0]*C[2][2]-C[1][2]*C[2][0])
           + C[0][2]*(C[1][0]*C[2][1]-C[1][1]*C[2][0]);
   if (Math.abs(det) < 1e-30) {
-    return { Ex: 0, Ey: 0, Ez: 0, C_eff: C_eff, totalIters: totalIters, allConverged: allConverged, valid: false, perLC: perLC };
+    return { Ex: 0, Ey: 0, Ez: 0, C_eff: C_eff, totalIters: totalIters, allConverged: allConverged, valid: false, perLC: perLC, fields: capturedFields };
   }
   var invDet = 1 / det;
   var S00 = (C[1][1]*C[2][2] - C[1][2]*C[2][1]) * invDet;
@@ -850,9 +950,115 @@ ElasticSolver.prototype.homogenize = async function(){
     totalIters: totalIters,
     allConverged: allConverged,
     valid: true,
-    perLC: perLC
+    perLC: perLC,
+    fields: capturedFields
   };
 };
+
+/* ════════════════════════════════════════════════════════════
+   extractFieldsForLC — per-voxel u'(x) and σ_VM(x) for one LC.
+
+   Called after solveLoadCase converges, before the next LC
+   overwrites the eps/sig buffers.  Reads back ε, computes σ_VM
+   from the supplied sigArr (already on CPU after the LC's volume
+   average), and reconstructs the displacement fluctuation u' via
+   spectral inversion of the strain-displacement relation:
+
+     u'_i(ξ) = ε̂'_ii(ξ) / (i·ξ_i)            (no sum over i)
+
+   ε' = ε - ε̄ subtracts the macroscopic strain.  The ξ_i=0 mode of
+   the divisor axis (rigid-body translation, fixed by ⟨u'⟩=0) and
+   all Nyquist bins (per Stokes Step 1 lessons — keeps the real-
+   valued IFFT well-defined) are zeroed.  Lab cells are 2π in
+   solver coordinates so integer wavenumbers map directly.
+
+   σ_VM(x) = √(½)·√[(σxx-σyy)² + (σyy-σzz)² + (σzz-σxx)²]
+   Normal-only formulation has zero shear stress, so the standard
+   von Mises invariant collapses to this diagonal-only form.
+
+   Cost: 6 N=32³ CPU FFTs ≈ 30 ms.  At N=64 ≈ 240 ms.
+
+   Returns Promise<{ u_prime: [Fx,Fy,Fz], sigma_vm: F, N, eps_bar }>.
+   All arrays are Float32Array(N³) in the lab's i*N²+j*N+k storage
+   order with (i,j,k) = (x,y,z).
+   ════════════════════════════════════════════════════════════ */
+ElasticSolver.prototype.extractFieldsForLC = async function(eps_bar, sigArr){
+  var N  = this.N;
+  var N3 = this.N3;
+
+  /* 1. Read back per-voxel strain ε for this LC. */
+  var epsArr = await this._readbackTriple(this.eps);
+
+  /* 2. σ_VM from sigArr (already CPU-side). */
+  var sigma_vm = new Float32Array(N3);
+  for (var i = 0; i < N3; i++) {
+    var s0 = sigArr[0][i], s1 = sigArr[1][i], s2 = sigArr[2][i];
+    var d01 = s0 - s1, d12 = s1 - s2, d20 = s2 - s0;
+    sigma_vm[i] = Math.sqrt(0.5 * (d01*d01 + d12*d12 + d20*d20));
+  }
+
+  /* 3. u'(x) per component via spectral inversion. */
+  var u_prime = [new Float32Array(N3), new Float32Array(N3), new Float32Array(N3)];
+  var lineBuf = new Float64Array(2 * N);
+  var halfN = N >> 1;
+
+  for (var c = 0; c < 3; c++) {
+    var ebar = eps_bar[c];
+    var src  = epsArr[c];
+
+    /* Pack ε'_cc as complex (real input, imag=0). */
+    var work = new Float64Array(2 * N3);
+    for (var p = 0; p < N3; p++) {
+      work[2*p]     = src[p] - ebar;
+      work[2*p + 1] = 0;
+    }
+
+    _es_fft3d(work, N, false, lineBuf);
+
+    /* Spectral divide by 1/(i·ξ_c).
+       (re + i·im) / (i·ξ) = (im - i·re) / ξ  for real ξ. */
+    for (var iX = 0; iX < N; iX++) {
+      var kx   = (iX < halfN) ? iX : iX - N;
+      var nyqX = (iX === halfN);
+      for (var iY = 0; iY < N; iY++) {
+        var ky   = (iY < halfN) ? iY : iY - N;
+        var nyqY = (iY === halfN);
+        for (var iZ = 0; iZ < N; iZ++) {
+          var kz   = (iZ < halfN) ? iZ : iZ - N;
+          var nyqZ = (iZ === halfN);
+
+          var idx = (iX*N + iY)*N + iZ;
+          var ti  = 2 * idx;
+
+          var k_d = (c === 0) ? kx : (c === 1 ? ky : kz);
+
+          if (k_d === 0 || nyqX || nyqY || nyqZ) {
+            work[ti] = 0; work[ti+1] = 0;
+          } else {
+            var re = work[ti], im = work[ti+1];
+            var inv = 1 / k_d;
+            work[ti]   =  im * inv;
+            work[ti+1] = -re * inv;
+          }
+        }
+      }
+    }
+
+    _es_fft3d(work, N, true, lineBuf);
+
+    /* Pack real part into output. */
+    var dst = u_prime[c];
+    for (var q = 0; q < N3; q++) dst[q] = work[2*q];
+  }
+
+  return {
+    u_prime:  u_prime,
+    sigma_vm: sigma_vm,
+    N:        N,
+    eps_bar:  eps_bar.slice()
+  };
+};
+
 
 ElasticSolver.prototype.destroy = function(){
   this.solidBuf.destroy();
@@ -873,11 +1079,20 @@ ElasticSolver.prototype.destroy = function(){
 
 /* ════════════════════════════════════════════════════════════
    solveDesignElastic — top-level: take a recipe, return Ex/Ey/Ez
+   plus per-voxel u'(x) and σ_VM(x) for one chosen LC.
+
    Convenience wrapper that does CPU rasterize → CPU Γ build →
-   GPU upload → CG solve.
+   GPU upload → CG solve → CPU field extraction.
+
+   opts (optional):
+     { captureFieldsLC: 2 }  — which LC to capture fields for.
+        Default 2 (Z, vertical compression).  Set to -1 to skip
+        field extraction for solver-only workflows.
    ════════════════════════════════════════════════════════════ */
-async function solveDesignElastic(recipe, N) {
+async function solveDesignElastic(recipe, N, opts) {
   if (!WGPU.device) throw new Error('solveDesignElastic: ensureDevice() first');
+  opts = opts || {};
+  var captureLC = (opts.captureFieldsLC != null) ? opts.captureFieldsLC : 2;
 
   var family = recipe.family;
   var params = KERNELS[family].parseRecipe(recipe);
@@ -918,7 +1133,7 @@ async function solveDesignElastic(recipe, N) {
   solver.uploadDesign(solid, Gamma, C_s, C_v, C_0);
 
   var t2 = performance.now();
-  var hom = await solver.homogenize();
+  var hom = await solver.homogenize({ captureFieldsLC: captureLC });
   var tCG = performance.now() - t2;
 
   solver.destroy();   /* keep FFTPlan alive (cached) */
@@ -937,8 +1152,106 @@ async function solveDesignElastic(recipe, N) {
     converged: hom.allConverged,
     valid:    hom.valid,
     perLC:    hom.perLC,
+    fields:   hom.fields,        /* { u_prime, sigma_vm, N, eps_bar } or null */
     tRast_ms: tRast,
     tGamma_ms: tGamma,
     tCG_ms:   tCG
   };
 }
+
+
+/* ════════════════════════════════════════════════════════════
+   testFieldsExtraction — console-callable smoke test for A.1.
+   Runs solveDesignElastic on Schwarz P at N=32 (or whatever N
+   you pass), then prints magnitude statistics of the captured
+   u' and σ_VM fields.
+
+   From the dev console:
+     await testFieldsExtraction()       // default N=32, Schwarz P
+     await testFieldsExtraction(64)     // higher resolution
+
+   Sanity bands at default Ti-6Al-4V (Es=110 GPa, ν=0.34, ε̄_zz=1):
+     Mean |u'|              ~  0.05–0.2  (solver units; cell extent = 2π)
+     Max  |u'|              ~  0.2–0.6
+     Mean σ_VM              ~  20–80 GPa  (volume includes void)
+     Max  σ_VM              ~  100–400 GPa  (stress concentration)
+
+   Extreme values (>1× cell or >10× Es) flag a bug.  Zero values
+   anywhere flag the wiring isn't actually populating the fields.
+   ════════════════════════════════════════════════════════════ */
+async function testFieldsExtraction(N) {
+  N = N || 32;
+  if (typeof DEMO_RECIPES === 'undefined' || !DEMO_RECIPES.schwarzP) {
+    console.error('[fields-test] DEMO_RECIPES.schwarzP not loaded');
+    return null;
+  }
+  if (typeof ensureDevice === 'function') {
+    var ok = await ensureDevice();
+    if (!ok) { console.error('[fields-test] WebGPU unavailable'); return null; }
+  }
+
+  console.log('[fields-test] solving Schwarz P at N=' + N + ' with Z-axis field capture…');
+  var t0 = performance.now();
+  var R = await solveDesignElastic(DEMO_RECIPES.schwarzP, N, { captureFieldsLC: 2 });
+  var tTotal = performance.now() - t0;
+
+  if (!R.valid) { console.error('[fields-test] solver returned invalid result'); return R; }
+  if (!R.fields) { console.error('[fields-test] no fields captured (captureFieldsLC ignored?)'); return R; }
+
+  var f = R.fields, N3 = N*N*N;
+  var ux = f.u_prime[0], uy = f.u_prime[1], uz = f.u_prime[2], sv = f.sigma_vm;
+
+  /* |u'| stats */
+  var sumMag = 0, maxMag = 0, nNonZero = 0;
+  for (var i = 0; i < N3; i++) {
+    var m = Math.sqrt(ux[i]*ux[i] + uy[i]*uy[i] + uz[i]*uz[i]);
+    sumMag += m;
+    if (m > maxMag) maxMag = m;
+    if (m > 1e-12) nNonZero++;
+  }
+  var meanMag = sumMag / N3;
+
+  /* σ_VM stats */
+  var svSum = 0, svMax = 0;
+  for (var j = 0; j < N3; j++) {
+    var s = sv[j];
+    svSum += s;
+    if (s > svMax) svMax = s;
+  }
+  var svMean = svSum / N3;
+
+  /* Mean of u' across the cell — should be ≈ 0 by the periodic
+     ⟨u'⟩=0 condition we enforce via the ξ=0 spectral zero. */
+  var muX = 0, muY = 0, muZ = 0;
+  for (var k = 0; k < N3; k++) { muX += ux[k]; muY += uy[k]; muZ += uz[k]; }
+  muX /= N3; muY /= N3; muZ /= N3;
+
+  console.group('[fields-test] Schwarz P · N=' + N + ' · Z-axis (ε̄=[0,0,1]) · ' + tTotal.toFixed(0) + ' ms');
+  console.log('Solver:    Ex=' + (R.Ex_MPa/1000).toFixed(2) + ' GPa  Ey=' + (R.Ey_MPa/1000).toFixed(2) +
+              ' GPa  Ez=' + (R.Ez_MPa/1000).toFixed(2) + ' GPa  ρ=' + R.rho.toFixed(3) +
+              '  iters=' + R.iters);
+  console.log('|u\'|:      mean=' + meanMag.toExponential(3) +
+              '  max=' + maxMag.toExponential(3) +
+              '  cell extent=2π≈6.283  (max/cell=' + (maxMag/(2*Math.PI)*100).toFixed(2) + '%)');
+  console.log('⟨u\'⟩:      [' + muX.toExponential(2) + ', ' + muY.toExponential(2) + ', ' + muZ.toExponential(2) +
+              ']  (should be ~1e-15 if ξ=0 zeroed correctly)');
+  console.log('σ_VM:      mean=' + (svMean/1000).toFixed(1) + ' GPa  max=' + (svMax/1000).toFixed(1) +
+              ' GPa  Es=' + (R.Es_MPa/1000) + ' GPa  (max/Es=' + (svMax/R.Es_MPa).toFixed(2) + '×)');
+  console.log('Non-zero |u\'|: ' + nNonZero + ' / ' + N3 + ' voxels (' + (100*nNonZero/N3).toFixed(1) + '%)');
+
+  /* Quick pass/fail flags */
+  var pass = true, notes = [];
+  if (maxMag < 1e-6)            { pass = false; notes.push('|u\'|_max ≈ 0 — fields not populated'); }
+  if (maxMag > 2*Math.PI)       { pass = false; notes.push('|u\'|_max exceeds cell extent — implausible'); }
+  if (Math.abs(muX) > 1e-6 || Math.abs(muY) > 1e-6 || Math.abs(muZ) > 1e-6)
+                                { pass = false; notes.push('⟨u\'⟩ ≠ 0 — periodic mean not zeroed'); }
+  if (svMax < 1)                { pass = false; notes.push('σ_VM,max ≈ 0 — stress field empty'); }
+  if (svMax > 100 * R.Es_MPa)   { pass = false; notes.push('σ_VM,max > 100·Es — implausible'); }
+
+  if (pass) console.log('%cPASS', 'color:#4ade80;font-weight:bold');
+  else      console.warn('FAIL: ' + notes.join('; '));
+  console.groupEnd();
+
+  return R;
+}
+window.testFieldsExtraction = testFieldsExtraction;

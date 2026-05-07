@@ -268,7 +268,12 @@ async function runRealSweep(N){
 /* mapElasticToResults — build the d.results object the comparison UI expects
    from a solveDesignElastic return value.  Fields the elastic 3-LC normal-block
    pipeline doesn't compute (shears, buckling, yield, thermal) get either a
-   computed surrogate or a sentinel that the UI displays gracefully. */
+   computed surrogate or a sentinel that the UI displays gracefully.
+
+   Per-voxel u'(x) and σ_VM(x) (when present in R.fields) are stashed under
+   d.results._fields for downstream consumption by the raymarcher (Push A.2 /
+   A.3 — Deformed and Stress tab visualization).  Underscore prefix flags this
+   as internal data, not a UI-rendered metric. */
 function mapElasticToResults(R){
   var Ex = R.Ex_MPa / 1000;     /* MPa → GPa for UI */
   var Ey = R.Ey_MPa / 1000;
@@ -311,7 +316,11 @@ function mapElasticToResults(R){
     /* Solver provenance for the UI's run-source pill */
     rho:          R.rho,
     iters:        R.iters,
-    converged:    R.converged
+    converged:    R.converged,
+    /* Per-voxel fields for Deformed / Stress tab raymarchers (Push A.2/A.3).
+       null until the elastic solver is invoked with field capture (default
+       since A.1).  Underscore prefix = internal-only, not a UI metric. */
+    _fields:      R.fields || null
   };
 }
 
