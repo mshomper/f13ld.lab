@@ -9,6 +9,27 @@
    Returns an array of {lbl, val, valcls?, dlcls, delta} for
    the 4 stat tiles below each viewport.
    ---------------------------------------------------------- */
+/* Honest formatting for sentinel "not-computed" values.
+   Lab currently solves only elastic (E11/E22/E33 + anisotropy from the 3-LC
+   normal block).  Buckling, yield, thermal aren't wired up yet — the run
+   pipeline writes 0 for them.  When we know a run completed and the value
+   is exactly 0, render "—" instead of "0.00 MPa" so users aren't misled.
+   For pre-run mock data the same fields have nonzero defaults from
+   00-mock-data.js, so this only kicks in for real-run output. */
+function fmtComputed(value, suffix, digits){
+  if (LAB_STATE.runHasCompleted && value === 0) return '—';
+  return value.toFixed(digits != null ? digits : 2) + (suffix || '');
+}
+function failureModeText(r){
+  if (LAB_STATE.runHasCompleted && r.failure_mode === 'not-computed') return '(not computed)';
+  if (LAB_STATE.runHasCompleted && r.failure_mode === 'no-data')      return '(no kernel)';
+  return r.failure_mode;
+}
+function pcrPyDeltaClass(r){
+  if (LAB_STATE.runHasCompleted && r.pcr_py === 0) return 'neut';
+  return r.pcr_py < 1 ? 'down' : 'neut';
+}
+
 function statsForDesign(d, mode){
   var r = d.results;
   if (!r) return [];
@@ -18,26 +39,26 @@ function statsForDesign(d, mode){
     return [
       { lbl:'E11',       val:r.E11.toFixed(2)+' GPa',  delta:deltaVsBaseline(r.E11, 'E11', d.id) },
       { lbl:'Zener A',   val:r.zener.toFixed(2),       delta:[zenerDescriptor(r.zener), 'neut'] },
-      { lbl:'σ_y (z)',   val:r.sigma_y_z.toFixed(1)+' MPa', delta:deltaVsBaseline(r.sigma_y_z, 'sigma_y_z', d.id) },
-      { lbl:'P_cr / P_y',val:r.pcr_py.toFixed(2),      delta:[r.failure_mode, r.pcr_py < 1 ? 'down' : 'neut'] }
+      { lbl:'σ_y (z)',   val:fmtComputed(r.sigma_y_z, ' MPa', 1),     delta:[failureModeText(r), 'neut'] },
+      { lbl:'P_cr / P_y',val:fmtComputed(r.pcr_py, '', 2),            delta:[failureModeText(r), pcrPyDeltaClass(r)] }
     ];
   }
   // Thermal mode prioritizes κ
   if (mode === 'thermal'){
     return [
-      { lbl:'κ_z',    val:r.kappa_z.toFixed(2)+' W/mK', delta:deltaVsBaseline(r.kappa_z, 'kappa_z', d.id) },
-      { lbl:'ρ_rel',  val:d.rho_rel.toFixed(2),         delta:['baseline','neut'] },
-      { lbl:'E11',    val:r.E11.toFixed(2)+' GPa',      delta:deltaVsBaseline(r.E11, 'E11', d.id) },
-      { lbl:'Zener',  val:r.zener.toFixed(2),           delta:[zenerDescriptor(r.zener), 'neut'] }
+      { lbl:'κ_z',    val:fmtComputed(r.kappa_z, ' W/mK', 2),     delta:[failureModeText(r), 'neut'] },
+      { lbl:'ρ_rel',  val:d.rho_rel.toFixed(2),                    delta:['baseline','neut'] },
+      { lbl:'E11',    val:r.E11.toFixed(2)+' GPa',                 delta:deltaVsBaseline(r.E11, 'E11', d.id) },
+      { lbl:'Zener',  val:r.zener.toFixed(2),                      delta:[zenerDescriptor(r.zener), 'neut'] }
     ];
   }
   // Buckling mode prioritizes λ_cr
   if (mode === 'buckle'){
     return [
-      { lbl:'λ_cr (mode 1)', val:r.lambda_cr.toFixed(2),   delta:[r.failure_mode, r.pcr_py < 1 ? 'down' : 'neut'] },
-      { lbl:'σ_y (z)',       val:r.sigma_y_z.toFixed(1)+' MPa', delta:deltaVsBaseline(r.sigma_y_z, 'sigma_y_z', d.id) },
-      { lbl:'P_cr / P_y',    val:r.pcr_py.toFixed(2),      delta:[r.pcr_py < 1 ? 'BUCKLING-LIMITED' : 'safe', r.pcr_py < 1 ? 'down' : 'up'] },
-      { lbl:'E11',           val:r.E11.toFixed(2)+' GPa',  delta:deltaVsBaseline(r.E11, 'E11', d.id) }
+      { lbl:'λ_cr (mode 1)', val:fmtComputed(r.lambda_cr, '', 2),  delta:[failureModeText(r), pcrPyDeltaClass(r)] },
+      { lbl:'σ_y (z)',       val:fmtComputed(r.sigma_y_z, ' MPa', 1), delta:[failureModeText(r), 'neut'] },
+      { lbl:'P_cr / P_y',    val:fmtComputed(r.pcr_py, '', 2),      delta:[failureModeText(r), pcrPyDeltaClass(r)] },
+      { lbl:'E11',           val:r.E11.toFixed(2)+' GPa',           delta:deltaVsBaseline(r.E11, 'E11', d.id) }
     ];
   }
   return [];
@@ -156,12 +177,21 @@ function renderDesignGrid(){
       ? '<div class="rm-mount" data-design-id="'+d.id+'" style="width:100%;height:100%;"></div>'
       : '<svg viewBox="0 0 400 320" preserveAspectRatio="xMidYMid meet">'+svgInner+'</svg>';
 
+    /* Honest provenance line.  When a real run has produced results, append a
+       small decoration that shows where the numbers came from.  d.results._runSource
+       is set by runRealSweep in 50-controls.js. */
+    var sourceText = d.source;
+    if (LAB_STATE.runHasCompleted && d.results && d.results._runSource){
+      var rsClass = d.results._error ? 'rs-err' : (d.results._runSource.indexOf('stub') === 0 ? 'rs-stub' : 'rs-real');
+      sourceText += ' · <span class="' + rsClass + '">' + d.results._runSource + '</span>';
+    }
+
     html += '<div class="design-col">' +
       '<div class="dc-head">' +
         '<div class="dc-name">' +
           '<span class="label">'+d.label+'</span>' +
           '<span class="title">'+d.title+'</span>' +
-          '<span class="source">'+d.source+'</span>' +
+          '<span class="source">'+sourceText+'</span>' +
         '</div>' +
         '<div class="dc-controls">' +
           '<span class="dc-status-dot '+statusClass+'" title="'+statusClass+'"></span>' +
@@ -231,10 +261,19 @@ function readoutForDesign(d, mode){
   var amp = getDeformAmp(d.id);
   if (mode === 'geom')   return d.title + ' · ρ=' + d.rho_rel.toFixed(2);
   if (mode === 'deform') return 'δ_max scaled · amp ×' + (amp*200).toFixed(0);
-  if (mode === 'stress' && LAB_STATE.runHasCompleted) return 'σ_VM,max = ' + r.sigma_y_z.toFixed(1) + ' MPa';
+  if (mode === 'stress' && LAB_STATE.runHasCompleted){
+    return r.sigma_y_z === 0 ? 'σ_VM,max = — (not computed)'
+                              : 'σ_VM,max = ' + r.sigma_y_z.toFixed(1) + ' MPa';
+  }
   if (mode === 'stiff'  && LAB_STATE.runHasCompleted) return 'E_max = ' + (r.E11*1.05).toFixed(2) + ' GPa';
-  if (mode === 'thermal'&& LAB_STATE.runHasCompleted) return 'κ_max = ' + (r.kappa_z*1.04).toFixed(2) + ' W/mK';
-  if (mode === 'buckle' && LAB_STATE.runHasCompleted) return 'λ_cr = ' + r.lambda_cr.toFixed(2);
+  if (mode === 'thermal'&& LAB_STATE.runHasCompleted){
+    return r.kappa_z === 0 ? 'κ_max = — (not computed)'
+                            : 'κ_max = ' + (r.kappa_z*1.04).toFixed(2) + ' W/mK';
+  }
+  if (mode === 'buckle' && LAB_STATE.runHasCompleted){
+    return r.lambda_cr === 0 ? 'λ_cr = — (not computed)'
+                              : 'λ_cr = ' + r.lambda_cr.toFixed(2);
+  }
   return '';
 }
 
