@@ -1307,7 +1307,7 @@ async function runGPUStokesSmokeTest() {
       }
     }
     var t0 = performance.now();
-    var res = await solveDesignStokes(DEMO_RECIPES.schwarzP, 16, { tol: 1e-6, maxiter: 2000 });
+    var res = await solveDesignStokes(DEMO_RECIPES.schwarzP, 16, { tol: 1e-30, maxiter: 50 });
     var totalMs = performance.now() - t0;
 
     var passed = true;
