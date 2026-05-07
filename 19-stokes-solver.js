@@ -1276,16 +1276,21 @@ async function solveDesignStokes(recipe, N, opts) {
 /* ════════════════════════════════════════════════════════════
    Smoke test — Schwarz P at N=16 on GPU.
    Pass criteria:
-     1. PCG converges on all 3 LCs at TOL=5e-5, maxiter=800
+     1. PCG converges on all 3 LCs at TOL=1e-6, maxiter=2000
+        (matches CPU ref's converged-isotropic baseline)
      2. K positive definite (cubic eigenvalues a+2b > 0, a-b > 0)
      3. K_avg in [1e-12, 1e-6] m²
-     4. Cubic isotropy < 5% (matches CPU ref expectation)
-   TOL=5e-5 chosen to clear FP32's residual-norm floor.  At N=16
-   with bNorm ~2.7e11 and FP32 ε ~1.2e-7, the relative residual
-   can plateau near 1e-5 to 5e-5 due to accumulated reduction
-   roundoff across 4096 voxels.  CPU ref at FP64 hits TOL=1e-5
-   cleanly in ~410 iters; GPU at FP32 should hit TOL=5e-5 in
-   the same ballpark of iters (~400-500 per LC).
+     4. Cubic isotropy < 5%
+   At TOL=1e-6 the CPU reference produces K ≈ 9.60e-8 m² with
+   iters 1187/1103/1269 in ~16 sec.  GPU should hit the same
+   answer (within FP32 drift, ~1%) with similar iter counts and
+   in roughly 1/3 the wall time (3 readbacks/iter at ~1ms each
+   × ~3500 total iters ≈ 10 sec — readback-bound, not compute).
+
+   At TOL=5e-5 PCG stops early at K ≈ 3e-8 (transient state) —
+   K only reaches its asymptote 9.6e-8 at TOL ≤ 1e-6.  The
+   K-vs-iter trajectory is monotonic in the converged regime
+   but climbs slowly; tight tolerance is mandatory for accuracy.
    ════════════════════════════════════════════════════════════ */
 var GPU_STOKES_SMOKE = { state: 'idle', lastResult: null };
 
@@ -1302,7 +1307,7 @@ async function runGPUStokesSmokeTest() {
       }
     }
     var t0 = performance.now();
-    var res = await solveDesignStokes(DEMO_RECIPES.schwarzP, 16, { tol: 5e-5, maxiter: 800 });
+    var res = await solveDesignStokes(DEMO_RECIPES.schwarzP, 16, { tol: 1e-6, maxiter: 2000 });
     var totalMs = performance.now() - t0;
 
     var passed = true;
