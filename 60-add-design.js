@@ -6,6 +6,127 @@
    ============================================================ */
 
 /* ----------------------------------------------------------
+   F13LD.tpms raw_preset expansion table.
+   F13LD.tpms exports 9 named TPMS surfaces as `surface.type =
+   'raw_preset'` with just a preset key, because the source tool
+   stores them as JS function expressions rather than the
+   multiplicative-trig terms array used by lab's TpmsKernel.
+   This table maps each preset name to an equivalent terms array
+   plus an additive constant (extracted to geometry.offset
+   because lab's "solid where F < offset" convention places
+   constants there rather than in the surface).
+
+   Each expansion has been verified bit-exact (within FP64
+   roundoff) against the source JS function in F13LD.tpms.
+   See preset-test.js for the verification harness.
+
+   Source: index_-_TPMS.html PRESETS table (lines 393-416).
+   ---------------------------------------------------------- */
+function _tpmsTpmsF(trig, fx, fy, fz){
+  return { trig: trig, fx: fx != null ? fx : 1, fy: fy != null ? fy : 1, fz: fz != null ? fz : 1 };
+}
+function _tpmsTerm(coef){
+  var factors = Array.prototype.slice.call(arguments, 1);
+  return { on: true, coef: coef, factors: factors };
+}
+
+var TPMS_RAW_PRESET_TABLE = {
+  fks: {
+    label: 'Fischer-Koch S',
+    constant: 0,
+    terms: [
+      _tpmsTerm(1, _tpmsTpmsF('cos(x)', 2, 1, 1), _tpmsTpmsF('sin(y)'), _tpmsTpmsF('cos(z)')),
+      _tpmsTerm(1, _tpmsTpmsF('cos(y)', 1, 2, 1), _tpmsTpmsF('sin(z)'), _tpmsTpmsF('cos(x)')),
+      _tpmsTerm(1, _tpmsTpmsF('cos(z)', 1, 1, 2), _tpmsTpmsF('sin(x)'), _tpmsTpmsF('cos(y)'))
+    ]
+  },
+  splitP: {
+    label: 'split-P',
+    constant: -0.3,
+    terms: [
+      _tpmsTerm(1, _tpmsTpmsF('sin(x)'), _tpmsTpmsF('sin(y)'), _tpmsTpmsF('cos(z)')),
+      _tpmsTerm(1, _tpmsTpmsF('sin(y)'), _tpmsTpmsF('sin(z)'), _tpmsTpmsF('cos(x)')),
+      _tpmsTerm(1, _tpmsTpmsF('sin(z)'), _tpmsTpmsF('sin(x)'), _tpmsTpmsF('cos(y)'))
+    ]
+  },
+  frd: {
+    label: 'F-RD',
+    constant: 0.3,
+    terms: [
+      _tpmsTerm(1,  _tpmsTpmsF('sin(x)', 2, 1, 1), _tpmsTpmsF('cos(y)'), _tpmsTpmsF('sin(z)')),
+      _tpmsTerm(1,  _tpmsTpmsF('sin(x)'), _tpmsTpmsF('sin(y)', 1, 2, 1), _tpmsTpmsF('cos(z)')),
+      _tpmsTerm(1,  _tpmsTpmsF('cos(x)'), _tpmsTpmsF('sin(y)'), _tpmsTpmsF('sin(z)', 1, 1, 2)),
+      _tpmsTerm(-1, _tpmsTpmsF('cos(x)', 2, 1, 1), _tpmsTpmsF('cos(y)', 1, 2, 1)),
+      _tpmsTerm(-1, _tpmsTpmsF('cos(y)', 1, 2, 1), _tpmsTpmsF('cos(z)', 1, 1, 2)),
+      _tpmsTerm(-1, _tpmsTpmsF('cos(z)', 1, 1, 2), _tpmsTpmsF('cos(x)', 2, 1, 1))
+    ]
+  },
+  gyroidHarmonic: {
+    label: 'gyroid-harmonic',
+    constant: 0,
+    terms: [
+      _tpmsTerm(1,   _tpmsTpmsF('sin(x)'), _tpmsTpmsF('cos(y)')),
+      _tpmsTerm(1,   _tpmsTpmsF('sin(y)'), _tpmsTpmsF('cos(z)')),
+      _tpmsTerm(1,   _tpmsTpmsF('sin(z)'), _tpmsTpmsF('cos(x)')),
+      _tpmsTerm(0.3, _tpmsTpmsF('sin(x)', 2, 1, 1), _tpmsTpmsF('cos(y)', 1, 2, 1)),
+      _tpmsTerm(0.3, _tpmsTpmsF('sin(y)', 1, 2, 1), _tpmsTpmsF('cos(z)', 1, 1, 2)),
+      _tpmsTerm(0.3, _tpmsTpmsF('sin(z)', 1, 1, 2), _tpmsTpmsF('cos(x)', 2, 1, 1))
+    ]
+  },
+  primitiveC: {
+    label: 'primitive-C (G6)',
+    constant: 0,
+    terms: [
+      _tpmsTerm(2,  _tpmsTpmsF('cos(x)')),
+      _tpmsTerm(2,  _tpmsTpmsF('cos(y)')),
+      _tpmsTerm(2,  _tpmsTpmsF('cos(z)')),
+      _tpmsTerm(-1, _tpmsTpmsF('cos(x)', 2, 1, 1)),
+      _tpmsTerm(-1, _tpmsTpmsF('cos(y)', 1, 2, 1)),
+      _tpmsTerm(-1, _tpmsTpmsF('cos(z)', 1, 1, 2))
+    ]
+  },
+  octo: {
+    label: 'octo (G8)',
+    constant: 0,
+    terms: [
+      _tpmsTerm(1,    _tpmsTpmsF('cos(x)')),
+      _tpmsTerm(1,    _tpmsTpmsF('cos(y)')),
+      _tpmsTerm(1,    _tpmsTpmsF('cos(z)')),
+      _tpmsTerm(-0.5, _tpmsTpmsF('cos(x)', 2, 1, 1), _tpmsTpmsF('cos(y)', 1, 2, 1)),
+      _tpmsTerm(-0.5, _tpmsTpmsF('cos(y)', 1, 2, 1), _tpmsTpmsF('cos(z)', 1, 1, 2)),
+      _tpmsTerm(-0.5, _tpmsTpmsF('cos(z)', 1, 1, 2), _tpmsTpmsF('cos(x)', 2, 1, 1))
+    ]
+  },
+  pHarmonic: {
+    label: 'P-harmonic',
+    constant: 0,
+    terms: [
+      _tpmsTerm(1,    _tpmsTpmsF('cos(x)')),
+      _tpmsTerm(1,    _tpmsTpmsF('cos(y)')),
+      _tpmsTerm(1,    _tpmsTpmsF('cos(z)')),
+      _tpmsTerm(0.25, _tpmsTpmsF('cos(x)', 2, 1, 1)),
+      _tpmsTerm(0.25, _tpmsTpmsF('cos(y)', 1, 2, 1)),
+      _tpmsTerm(0.25, _tpmsTpmsF('cos(z)', 1, 1, 2))
+    ]
+  },
+  lidinoid: {
+    label: 'lidinoid',
+    constant: 0,
+    terms: [
+      _tpmsTerm(1.1,  _tpmsTpmsF('sin(x)', 2, 1, 1), _tpmsTpmsF('cos(y)'), _tpmsTpmsF('sin(z)')),
+      _tpmsTerm(1.1,  _tpmsTpmsF('sin(x)'), _tpmsTpmsF('sin(y)', 1, 2, 1), _tpmsTpmsF('cos(z)')),
+      _tpmsTerm(1.1,  _tpmsTpmsF('cos(x)'), _tpmsTpmsF('sin(y)'), _tpmsTpmsF('sin(z)', 1, 1, 2)),
+      _tpmsTerm(-0.2, _tpmsTpmsF('cos(x)', 2, 1, 1), _tpmsTpmsF('cos(y)', 1, 2, 1)),
+      _tpmsTerm(-0.2, _tpmsTpmsF('cos(y)', 1, 2, 1), _tpmsTpmsF('cos(z)', 1, 1, 2)),
+      _tpmsTerm(-0.2, _tpmsTpmsF('cos(z)', 1, 1, 2), _tpmsTpmsF('cos(x)', 2, 1, 1)),
+      _tpmsTerm(-0.4, _tpmsTpmsF('cos(x)', 2, 1, 1)),
+      _tpmsTerm(-0.4, _tpmsTpmsF('cos(y)', 1, 2, 1)),
+      _tpmsTerm(-0.4, _tpmsTpmsF('cos(z)', 1, 1, 2))
+    ]
+  }
+};
+
+/* ----------------------------------------------------------
    Add Design click handler. Two paths:
      1. Click the button alone → file picker (.json)
      2. Hold Shift while clicking → paste-JSON prompt
@@ -135,7 +256,12 @@ function normalizeDesignJson(json, filename){
   else if (json.meta && typeof json.meta.preset === 'string') variant = json.meta.preset;
 
   /* ── 3. Topology / mode (external uses bare strings) ─────── */
-  var rawMode = (json.geometry && json.geometry.mode) || json.topology || null;
+  /* TPMS and Noise put the mode under `geometry.mode`.
+     Grain puts it under `geometry.topology` instead.
+     Some old recipes also have a top-level `topology` key.
+     Probe all three so all three families work. */
+  var rawMode = (json.geometry && (json.geometry.mode || json.geometry.topology)) ||
+                json.topology || null;
   /* Add family prefix where lab requires it.  TPMS modes (solid/shell/pi-tpms)
      don't take a prefix; Noise/Grain bare 'half'/'sheet'/'solid' need one. */
   var topology = rawMode || 'sheet';
@@ -226,8 +352,35 @@ function normalizeDesignJson(json, filename){
         };
         recipeNote = 'TPMS recipe (terms surface) accepted';
       } else if (json.surface && json.surface.type === 'raw_preset'){
-        recipeNote = 'TPMS preset "' + (json.surface.label || json.surface.preset) +
-                     '" — lab does not yet expand named presets to surface terms; falling back to SVG mock';
+        /* Expand named preset to lab terms via the embedded preset table.
+           Most presets have a built-in additive constant (e.g. split-P's −0.3)
+           which shifts the iso level — we extract that into geometry.offset
+           because lab's "solid where F < offset" convention places constants
+           there rather than in the surface. */
+        var presetKey = json.surface.preset;
+        var preset = TPMS_RAW_PRESET_TABLE[presetKey];
+        if (preset){
+          var baseGeom = buildLabGeometry(json.geometry, 'solid');
+          /* Shift offset by -constant so that (F_terms < offset_lab) matches
+             (F_terms + constant < offset_external).  Lab's resolved offset
+             default is 0, external recipes typically have offset=0 too. */
+          baseGeom.offset = (baseGeom.offset != null ? baseGeom.offset : 0) - preset.constant;
+          recipe = {
+            family: 'tpms',
+            name: title,
+            surface: {
+              type: 'terms',
+              preset: presetKey,
+              terms: preset.terms
+            },
+            geometry: baseGeom,
+            material: json.material || DEFAULT_MATERIAL
+          };
+          recipeNote = 'TPMS preset "' + (preset.label || presetKey) + '" expanded to terms';
+        } else {
+          recipeNote = 'TPMS preset "' + (json.surface.label || presetKey) +
+                       '" not in expansion table — falling back to SVG mock';
+        }
       } else {
         recipeNote = 'TPMS recipe missing surface.terms — falling back to SVG mock';
       }

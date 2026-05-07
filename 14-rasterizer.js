@@ -174,17 +174,22 @@ function buildRawField(family, params, N) {
   var kernel = KERNELS[family || 'tpms'];
   if (!kernel) throw new Error('buildRawField: unknown family "' + family + '"');
 
+  /* Storage order: WebGL's texImage3D expects width-fastest, depth-slowest
+     (bytes[(z*H + y)*W + x]).  We loop x in the innermost position so the
+     write stride into `data` matches that.  This keeps the texture-space
+     mapping consistent with shader sampling, and makes the gradient stencil
+     in 21-raymarcher.js (which assumes idx+1 ↔ x, idx+N*N ↔ z) correct. */
   var data = new Float32Array(N3);
   var minV = Infinity, maxV = -Infinity;
 
-  for (var i = 0; i < N; i++) {
-    var x = -L + (i + 0.5) * step;
-    for (var j = 0; j < N; j++) {
-      var y = -L + (j + 0.5) * step;
-      for (var k = 0; k < N; k++) {
-        var z = -L + (k + 0.5) * step;
+  for (var iz = 0; iz < N; iz++) {
+    var z = -L + (iz + 0.5) * step;
+    for (var iy = 0; iy < N; iy++) {
+      var y = -L + (iy + 0.5) * step;
+      for (var ix = 0; ix < N; ix++) {
+        var x = -L + (ix + 0.5) * step;
         var v = kernel.evaluate(params, x, y, z);
-        data[i*N*N + j*N + k] = v;
+        data[(iz * N + iy) * N + ix] = v;
         if (v < minV) minV = v;
         if (v > maxV) maxV = v;
       }
