@@ -628,11 +628,11 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     self._lastPointerX = e.clientX;
     self._lastPointerY = e.clientY;
     /* Sensitivity: ~6 rad full canvas-width sweep at 400px → 0.015 rad/px.
-       A.2.1 — Yaw flipped: drag-right now spins scene right-to-left as expected
-       by orbit-camera convention (Blender / Fusion / SolidWorks).  Pitch sign
-       kept: drag-down reveals top of scene (CAD convention). */
+       A.2.1 — Both axes flipped per Matt's testing: drag-right spins scene
+       right-to-left, drag-down tilts scene up-to-down (touchscreen-style
+       "grab the scene" convention, not CAD orbit-camera). */
     self._rotY -= dx * 0.012;
-    self._rotX += dy * 0.012;
+    self._rotX -= dy * 0.012;
     /* Clamp pitch to avoid flipping through the poles */
     var lim = Math.PI * 0.49;
     if (self._rotX >  lim) self._rotX =  lim;
