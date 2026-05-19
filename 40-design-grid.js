@@ -190,11 +190,15 @@ function renderDesignGrid(){
        slider (stress mode uses the same warp; colormap reads on the
        deformed shape — standard FEA viz). */
     var showControls = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
-    /* A.3 — colorbar overlay only when stress raymarcher is mounted and
-       fields are available.  Shared σ_VM max across all three axes so
-       toggling X/Y/Z preserves the colormap scale. */
+    /* A.3.1 — colorbar overlay only when stress raymarcher is mounted and
+       fields are available.  Shows the p95-clipped colormap cap (what
+       yellow saturation represents), with the true max still surfaced
+       in the per-tile readout for full transparency. */
     var showColorbar = (VIEW_STATE.mode === 'stress' && useRM &&
                         d.results && d.results._fieldsByAxis);
+    var stressP95MPa = showColorbar
+                       ? computeStressP95AcrossAxes(d.results._fieldsByAxis)
+                       : 0;
     var stressMaxMPa = showColorbar
                        ? computeStressMaxAcrossAxes(d.results._fieldsByAxis)
                        : 0;
@@ -233,7 +237,7 @@ function renderDesignGrid(){
         viewportInner +
         '<div class="vp-axis">+Z<br>↑ +Y<br>→ +X</div>' +
         (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
-        (showColorbar ? buildStressColorbar(stressMaxMPa) : '') +
+        (showColorbar ? buildStressColorbar(stressP95MPa) : '') +
         (showControls ? buildDeformControl(d.id, amp, (typeof getLoadAxis === 'function') ? getLoadAxis(d.id) : 'z') : '') +
       '</div>' +
       buildSummary(stats) +
@@ -263,8 +267,10 @@ function renderDesignGrid(){
       var rkAxis = (typeof getLoadAxis === 'function') ? getLoadAxis(rkid) : 'z';
       var fs = rdesign.results._fieldsByAxis[rkAxis];
       if (fs) {
-        var sharedMax = computeStressMaxAcrossAxes(rdesign.results._fieldsByAxis);
-        rkrm.uploadFields(fs, sharedMax);
+        /* A.3.1 — colormap normalized to p95 across all three axes for
+           bulk-visibility on long-tail σ_VM distributions. */
+        var sharedP95 = computeStressP95AcrossAxes(rdesign.results._fieldsByAxis);
+        rkrm.uploadFields(fs, sharedP95);
       }
     }
     if (rkrm.setViewMode) rkrm.setViewMode(VIEW_STATE.mode);
@@ -324,11 +330,11 @@ function renderDesignGrid(){
       var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
       if (rm && !rm.failed && rm.uploadFields && design && design.results &&
           design.results._fieldsByAxis && design.results._fieldsByAxis[axis]) {
-        /* A.3 — use shared σ_VM max across all three axes so the colormap
-           range stays constant when toggling.  Axis-with-highest-stress
-           reads as yellow; axes-with-lower-stress show as closer to blue. */
-        var sharedMax = computeStressMaxAcrossAxes(design.results._fieldsByAxis);
-        rm.uploadFields(design.results._fieldsByAxis[axis], sharedMax);
+        /* A.3.1 — use shared σ_VM p95 across all three axes so the colormap
+           range stays calibrated when toggling (and bulk-visible thanks to
+           percentile clipping on the long-tail σ_VM distribution). */
+        var sharedP95 = computeStressP95AcrossAxes(design.results._fieldsByAxis);
+        rm.uploadFields(design.results._fieldsByAxis[axis], sharedP95);
       } else if (rm && !rm.failed && rm.uploadFields) {
         /* No fields for selected axis → re-render so the empty-viewport
            fallback shows.  Same path as the no-fields-yet pre-run case. */
@@ -401,14 +407,21 @@ function readoutForDesign(d, mode){
   if (mode === 'geom')   return d.title + ' · ρ=' + d.rho_rel.toFixed(2);
   if (mode === 'deform') return 'δ_max scaled · amp ×' + (amp*200).toFixed(0);
   if (mode === 'stress' && LAB_STATE.runHasCompleted){
-    /* A.3 — σ_VM,max from captured fields across all three axes
-       (shared per-design max — matches the colorbar legend). */
+    /* A.3.1 — show p95 (colormap cap — what yellow saturation represents)
+       and the true max separately.  Honest reporting: the colorbar tells
+       you yellow = p95, the readout tells you what the actual peak σ_VM
+       was.  Units auto-format at the GPa boundary. */
     if (r._fieldsByAxis) {
-      var svMax = computeStressMaxAcrossAxes(r._fieldsByAxis);
-      if (svMax > 0) {
-        var unit = svMax >= 1000 ? ' GPa' : ' MPa';
-        var val  = svMax >= 1000 ? (svMax/1000).toFixed(2) : svMax.toFixed(1);
-        return 'σ_VM,max = ' + val + unit + ' · amp ×' + (amp*200).toFixed(0);
+      var p95 = computeStressP95AcrossAxes(r._fieldsByAxis);
+      var trueMax = computeStressMaxAcrossAxes(r._fieldsByAxis);
+      if (p95 > 0 || trueMax > 0) {
+        function fmt(v){
+          if (v >= 1000) return (v/1000).toFixed(2) + ' GPa';
+          if (v >= 1) return v.toFixed(1) + ' MPa';
+          if (v > 0) return v.toExponential(1) + ' MPa';
+          return '—';
+        }
+        return 'σ_VM p95=' + fmt(p95) + ' · max ' + fmt(trueMax) + ' · amp ×' + (amp*200).toFixed(0);
       }
     }
     return 'σ_VM,max = — (not computed)';
@@ -480,18 +493,96 @@ function computeStressMaxAcrossAxes(fieldsByAxis){
 
 
 /* ----------------------------------------------------------
+   A.3.1 — Compute σ_VM 95th-percentile cap for colormap
+   normalization.  σ_VM has a long-tailed distribution (sharp
+   stress concentrations at solid/void interfaces push the
+   absolute max well above the bulk), so normalizing the
+   colormap to max leaves most of the structure rendered in
+   the bottom of the viridis range.
+
+   Standard FEA fix: clip the colormap top at the 95th
+   percentile of "significant" σ_VM voxels.  ~5% of solid
+   surface saturates to yellow (the actual concentrations);
+   the bulk gets the full color range.
+
+   Two-pass algorithm:
+     1. Find global max across all three axes.
+     2. Filter to voxels with σ_VM > 1% of max.  Excludes void
+        (Cv = Cs · 1e-4 means void σ_VM is ~0.01-0.1% of solid
+        peak — orders of magnitude below the 1% cutoff).
+     3. Sort filtered values, return the 95th-percentile entry.
+
+   Cost: ~30K-100K voxels per axis × 3 axes, dominant cost is
+   the sort (~20-50 ms at N=32).  Computed once per render or
+   axis-toggle, negligible vs. the ~5 s solve.
+
+   Returns 0 if no axes have data, or the global max if no
+   voxels clear the threshold (degenerate uniform-zero case).
+   ---------------------------------------------------------- */
+function computeStressP95AcrossAxes(fieldsByAxis){
+  if (!fieldsByAxis) return 0;
+  var axes = ['x', 'y', 'z'];
+
+  /* Pass 1: global max */
+  var globalMax = 0;
+  for (var i = 0; i < axes.length; i++){
+    var f = fieldsByAxis[axes[i]];
+    if (!f || !f.sigma_vm) continue;
+    var sv = f.sigma_vm;
+    for (var j = 0; j < sv.length; j++){
+      if (sv[j] > globalMax) globalMax = sv[j];
+    }
+  }
+  if (globalMax === 0) return 0;
+
+  /* Pass 2: count significant voxels (above 1% of max) */
+  var threshold = globalMax * 0.01;
+  var nSig = 0;
+  for (var i2 = 0; i2 < axes.length; i2++){
+    var f2 = fieldsByAxis[axes[i2]];
+    if (!f2 || !f2.sigma_vm) continue;
+    var sv2 = f2.sigma_vm;
+    for (var j2 = 0; j2 < sv2.length; j2++){
+      if (sv2[j2] > threshold) nSig++;
+    }
+  }
+  if (nSig === 0) return globalMax;
+
+  /* Pass 3: collect significant values into a flat Float32Array,
+     sort numerically, return p95.  Float32Array.sort() is numeric
+     by default — no comparator needed. */
+  var significant = new Float32Array(nSig);
+  var idx = 0;
+  for (var i3 = 0; i3 < axes.length; i3++){
+    var f3 = fieldsByAxis[axes[i3]];
+    if (!f3 || !f3.sigma_vm) continue;
+    var sv3 = f3.sigma_vm;
+    for (var j3 = 0; j3 < sv3.length; j3++){
+      if (sv3[j3] > threshold) significant[idx++] = sv3[j3];
+    }
+  }
+  significant.sort();
+
+  return significant[Math.floor(nSig * 0.95)];
+}
+
+
+/* ----------------------------------------------------------
    A.3 — Build the stress-mode colorbar overlay HTML.
 
    Renders a small vertical bar on the right side of the
    viewport with a CSS-gradient approximation of viridis.
-   The numeric label is the shared σ_VM_max across all three
-   load axes (MPa).  Bottom of bar = 0, top = σ_VM_max.
+   A.3.1 — the numeric top label is the σ_VM p95 (the value
+   at which the colormap saturates yellow), not the true max.
+   The "p95" suffix tells the user the colormap is clipped at
+   the 95th percentile.  True max is shown in the per-tile
+   readout below the viewport.
 
    Inline-styled to keep the A.3 push out of lab.css; can be
    promoted to .stress-colorbar selectors in a later polish
    pass alongside the deform-control axis toggle.
    ---------------------------------------------------------- */
-function buildStressColorbar(stressMaxMPa){
+function buildStressColorbar(stressP95MPa){
   /* Viridis stops sampled at 8 anchor points for the CSS gradient. */
   var grad = 'linear-gradient(to top, ' +
              'rgb(68,1,84) 0%, rgb(72,40,120) 15%, rgb(62,73,137) 30%, ' +
@@ -503,7 +594,7 @@ function buildStressColorbar(stressMaxMPa){
   var labelTopStyle = 'position:absolute; right:28px; top:42px; ' +
                       'font:9px JetBrains Mono,ui-monospace,monospace; ' +
                       'color:rgba(255,255,255,0.85); letter-spacing:0.05em; ' +
-                      'white-space:nowrap;';
+                      'white-space:nowrap; text-align:right;';
   var labelBotStyle = 'position:absolute; right:28px; bottom:64px; ' +
                       'font:9px JetBrains Mono,ui-monospace,monospace; ' +
                       'color:rgba(255,255,255,0.5); letter-spacing:0.05em;';
@@ -511,14 +602,19 @@ function buildStressColorbar(stressMaxMPa){
                      'font:9px JetBrains Mono,ui-monospace,monospace; ' +
                      'color:rgba(255,255,255,0.55); letter-spacing:0.08em; ' +
                      'text-transform:uppercase;';
-  /* Format the max in sensible units */
-  var maxStr;
-  if (stressMaxMPa >= 1000) maxStr = (stressMaxMPa/1000).toFixed(2) + ' GPa';
-  else if (stressMaxMPa >= 1) maxStr = stressMaxMPa.toFixed(1) + ' MPa';
-  else if (stressMaxMPa > 0) maxStr = stressMaxMPa.toExponential(1) + ' MPa';
-  else maxStr = '—';
+  /* Format the p95 in sensible units */
+  var p95Str;
+  if (stressP95MPa >= 1000) p95Str = (stressP95MPa/1000).toFixed(2) + ' GPa';
+  else if (stressP95MPa >= 1) p95Str = stressP95MPa.toFixed(1) + ' MPa';
+  else if (stressP95MPa > 0) p95Str = stressP95MPa.toExponential(1) + ' MPa';
+  else p95Str = '—';
+  /* "p95" annotation below the value (smaller, dimmer) tells the user
+     the colormap is percentile-clipped, not max-normalized. */
+  var p95SuffixStyle = 'display:block; font-size:8px; color:rgba(255,255,255,0.45); ' +
+                       'letter-spacing:0.08em; margin-top:1px;';
   return '<div class="stress-colorbar-header" style="'+headerStyle+'">σ_VM</div>' +
          '<div class="stress-colorbar" style="'+barStyle+'"></div>' +
-         '<div class="stress-colorbar-label-top" style="'+labelTopStyle+'">'+maxStr+'</div>' +
+         '<div class="stress-colorbar-label-top" style="'+labelTopStyle+'">'+p95Str +
+           '<span style="'+p95SuffixStyle+'">p95</span></div>' +
          '<div class="stress-colorbar-label-bot" style="'+labelBotStyle+'">0</div>';
 }
