@@ -206,14 +206,31 @@ function buildRawField(family, params, N) {
    Returns Gamma[p][q] for p,q in {0=xx, 1=yy, 2=zz}, each as a
    real Float64Array(N³) indexed by (i,j,k) with i=outermost.
 
-   The expression is the standard Mura/Suquet form for an
-   isotropic reference C0:
-     G_pq(ξ) = a·δ_pq + b·n_p·n_q       (compliance kernel)
-     Γ_pq    = -¼·(G_pp·n_q² + G_qq·n_p² + G_pq·n_p·n_q + G_qp·n_q·n_p)
-   with a = 1/μ₀, b = -(λ₀+μ₀)/(μ₀(λ₀+2μ₀)).
+   Textbook Moulinec-Suquet 1998 normal-normal block reduction
+   for an isotropic reference (μ₀, λ₀):
+
+     Γ_iikk(n) = G_ik(n) · n_i · n_k
+
+   where G_ik is the standard isotropic displacement Green tensor:
+
+     G_pq(n) = (1/μ₀)·δ_pq + b·n_p·n_q,
+        b = -(λ₀ + μ₀) / (μ₀ · (λ₀ + 2μ₀))
 
    At ξ=0 (DC bin) Γ is left at zero — no macroscopic strain
    correction in the constant mode.
+
+   ── A.1.7 (2026-05) — Γ-formula correctness fix ────────────────
+   Pre-A.1.7 used  -0.25·[G_pp n_q² + G_qq n_p² + 2 G_pq n_p n_q],
+   which gave the wrong sign and a spurious off-diagonal coupling.
+   The bug self-cancelled into a consistent-but-wrong fixed point
+   for cubic-isotropic structures (Schwarz P came back near the
+   right cubic-symmetric pattern at a biased absolute magnitude),
+   biasing the solver toward the Voigt upper bound — Schwarz P
+   E/Es scaled ∝ ρ^1.02 instead of the literature-expected
+   ρ^1.3 (sheet) / ρ^1.6–2.0 (skeletal).  Identified during
+   F13LD.sweep v0.16.0 literature validation; CG / WGSL solver
+   code is byte-identical to the pre-fix path — only this Γ
+   tensor changes.
    ============================================================ */
 function buildGamma(N, mu0, lam0) {
   var N3 = N * N * N;
@@ -239,11 +256,7 @@ function buildGamma(N, mu0, lam0) {
         for (var p = 0; p < 3; p++) {
           for (var q = 0; q < 3; q++) {
             var Gpq = a*(p===q?1:0) + b*nv[p]*nv[q];
-            var Gpp = a + b*nv[p]*nv[p];
-            var Gqq = a + b*nv[q]*nv[q];
-            Gamma[p][q][idx] = -0.25*(
-              Gpp*nv[q]*nv[q] + Gqq*nv[p]*nv[p] + Gpq*nv[p]*nv[q] + Gpq*nv[q]*nv[p]
-            );
+            Gamma[p][q][idx] = Gpq * nv[p] * nv[q];
           }
         }
       }
