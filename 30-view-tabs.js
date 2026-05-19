@@ -34,10 +34,15 @@ function onViewModeClick(mode){
 /* ----------------------------------------------------------
    Slider handler for per-design deformation amplitude.
    Wired in 40-design-grid.js when sliders are rendered.
+
+   A.2 — Pure state-update only.  The slider's input event in
+   40-design-grid.js handles visual dispatch: direct uniform
+   update for raymarcher-backed designs, full re-render for
+   SVG-mock fallback designs.  Triggering renderDesignGrid here
+   would rebuild the entire 3-design HTML on every slider tick.
    ---------------------------------------------------------- */
 function onDeformAmpInput(designId, amp){
   VIEW_STATE.deformAmps[designId] = amp;
-  if (typeof renderDesignGrid === 'function') renderDesignGrid();
 }
 
 /* ----------------------------------------------------------

@@ -61,6 +61,14 @@ function buildLabRaymarcherFS(stepCount) {
     'uniform highp sampler3D uField;',
     'uniform float uFieldMin; uniform float uFieldMax; uniform float uTile;',
     'uniform float uNrmStep;',
+    /* A.2 — Deformed-view warp: uViewMode {0=geom,1=deform,2=stress} gates
+       the displacement sample.  When uViewMode > 0.5 and uDispUploaded > 0.5,
+       implicit() evaluates the SDF at the backward-warped position
+       p_eval = p - uDeformAmp * u'(p).  u' is decoded from a per-design
+       RGBA8 3D texture (uDisp) via per-component scale/offset uniforms. */
+    'uniform float uViewMode; uniform float uDispUploaded; uniform float uDeformAmp;',
+    'uniform highp sampler3D uDisp;',
+    'uniform vec3 uDispOffset; uniform vec3 uDispScale;',
 
     'const float H = 3.141593;',
 
@@ -72,17 +80,37 @@ function buildLabRaymarcherFS(stepCount) {
     '  return t * (uFieldMax - uFieldMin) + uFieldMin;',
     '}',
 
+    /* sampleDisp: returns u\'(p) decoded from the RGBA8 3D texture, or
+       vec3(0) if no displacement data is uploaded.  Used by implicit()
+       for backward-warp in deformed view. */
+    'vec3 sampleDisp(vec3 p) {',
+    '  if (uDispUploaded < 0.5) return vec3(0.0);',
+    '  vec3 uvw = fract(p/(2.0*H) + 0.5);',
+    '  vec3 raw = texture(uDisp, uvw).rgb;',
+    '  return raw * uDispScale + uDispOffset;',
+    '}',
+
     /* implicit: SDF combining raw field and topology uniforms.
        Tested branches: 0=sheet, 1=half, 2=anti-sheet (solid via
-       inverted sheet), 3=pi-tpms (dual-sample) */
+       inverted sheet), 3=pi-tpms (dual-sample).
+       A.2 — when uViewMode == 1 (deform), evaluates SDF at
+       p_eval = p - uDeformAmp * u\'(p).  Backward warp keeps the
+       shader-only architecture; geometry is never re-baked.
+       Stress mode (uViewMode == 2) skips the warp — same shading
+       as geom, just with user-controlled rotation; A.3 wires σ_VM
+       into the shading branch. */
     'float implicit(vec3 p) {',
+    '  vec3 p_eval = p;',
+    '  if (uViewMode > 0.5 && uViewMode < 1.5) {',
+    '    p_eval = p - uDeformAmp * sampleDisp(p);',
+    '  }',
     '  if (uTopoMode > 2.5) {',
     /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
-    '    float a = sampleF(p) - isoLevel;',
-    '    float b = sampleF(p + uPipeOffset) - isoLevel;',
+    '    float a = sampleF(p_eval) - isoLevel;',
+    '    float b = sampleF(p_eval + uPipeOffset) - isoLevel;',
     '    return max(abs(a), abs(b)) - uPipeR;',
     '  }',
-    '  float raw = sampleF(p);',
+    '  float raw = sampleF(p_eval);',
     '  float adj = raw - isoLevel;',
     '  if (uTopoMode < 0.5) return abs(adj) - thickness;',                      /* sheet */
     '  if (uTopoMode < 1.5) return uHalfInvert < 0.5 ? -adj : adj;',            /* half */
@@ -207,6 +235,8 @@ function LabRaymarcher() {
   this._rotX = -0.4;
   this._lastFrame = 0;
   this._fieldUploaded = false;
+  this._dispUploaded = false;     /* A.2 — set by uploadFields() */
+  this._viewMode = 'geom';         /* A.2 — 'geom' | 'deform' | 'stress'; set by setViewMode() */
   this._recipe = null;
 
   /* Default uniform values; overwritten by setRecipe → _refreshTopologyUniforms */
@@ -214,8 +244,20 @@ function LabRaymarcher() {
     thickness: 0.3, isoLevel: 0.0, topoMode: 0, halfInvert: 0,
     pipeR: 0.1, pipeOffset: [0, 0, 0],
     fieldMin: -1, fieldMax: 1, lipschitz: 1.0, tile: 1.0,
-    nrmStep: 0.004, zoom: 20.0   /* ~15% margin from viewport edges; F13LD.grain default is 16 (closer) */
+    nrmStep: 0.004, zoom: 20.0,   /* ~15% margin from viewport edges; F13LD.grain default is 16 (closer) */
+    /* A.2 — deformed/stress view */
+    viewMode: 0,                  /* 0=geom, 1=deform, 2=stress (effective; gated by _dispUploaded) */
+    dispUploaded: 0,              /* float mirror of _dispUploaded for shader */
+    deformAmp: 0.5,                /* direct multiplier on natural u\'(x) */
+    dispOffset: [0, 0, 0],         /* per-component (min) for RGBA8 → signed decode */
+    dispScale:  [1, 1, 1]          /* per-component (max-min) */
   };
+
+  /* A.2 — pointer/wheel state for user-controlled rotation in deform/stress modes */
+  this._pointerDown = false;
+  this._lastPointerX = 0;
+  this._lastPointerY = 0;
+  this._attachInteractionHandlers();
 }
 
 LabRaymarcher.prototype._setupGL = function() {
@@ -263,7 +305,9 @@ LabRaymarcher.prototype._compileShader = function() {
   /* Cache uniform locations */
   var L = {};
   ['res','rot','zoom','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset',
-   'uLipschitz','uField','uFieldMin','uFieldMax','uTile','uNrmStep'].forEach(function(name){
+   'uLipschitz','uField','uFieldMin','uFieldMax','uTile','uNrmStep',
+   /* A.2 — Deformed/Stress view uniforms */
+   'uViewMode','uDispUploaded','uDeformAmp','uDisp','uDispOffset','uDispScale'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -409,6 +453,171 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
 };
 
 
+/* ════════════════════════════════════════════════════════════
+   A.2 — Per-design displacement / stress field upload.
+   ════════════════════════════════════════════════════════════ */
+
+/* uploadFields(fieldsObj) — encode u\'(x) into the per-design RGBA8
+   3D texture used by sampleDisp() in the shader.
+
+   fieldsObj layout (from solveDesignElastic):
+     { u_prime: [Float32Array, Float32Array, Float32Array],  // per-component (xyz)
+       sigma_vm: Float32Array,                                // not yet used in A.2
+       N: int,                                                // cube side length
+       eps_bar: [0,0,1] }                                     // load direction (physical)
+
+   Encoding: per-component min/max → linear remap to [0, 255].
+   Decoded in shader as `raw * uDispScale + uDispOffset`.
+   Quantization step at typical |u\'|_max=0.8 is 0.0031 — invisible
+   under the warp visualization at any practical amp setting.
+
+   Storage: voxel idx = (iz*N + iy)*N + ix matches buildVoxels and
+   the geometry field texture, so the same UV samples align.
+
+   σ_VM is captured here but not consumed yet — A.3 wires it into
+   the stress-view colormap. */
+LabRaymarcher.prototype.uploadFields = function(fieldsObj) {
+  if (this.failed || !fieldsObj) return;
+  var gl = this.gl;
+  var N  = fieldsObj.N;
+  var N3 = N*N*N;
+  var uP = fieldsObj.u_prime;
+  if (!uP || uP.length !== 3 || uP[0].length !== N3) {
+    console.warn('[LabRaymarcher] uploadFields: malformed fieldsObj');
+    return;
+  }
+
+  /* Per-component min/max for scale/offset */
+  var minV = [ Infinity,  Infinity,  Infinity];
+  var maxV = [-Infinity, -Infinity, -Infinity];
+  for (var c = 0; c < 3; c++) {
+    var arr = uP[c];
+    var mn =  Infinity, mx = -Infinity;
+    for (var i = 0; i < N3; i++) {
+      var v = arr[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    minV[c] = mn;
+    maxV[c] = mx;
+  }
+  /* Guard against degenerate range (constant field). */
+  var eps = 1e-12;
+  var scl = [
+    Math.max(maxV[0] - minV[0], eps),
+    Math.max(maxV[1] - minV[1], eps),
+    Math.max(maxV[2] - minV[2], eps)
+  ];
+
+  /* Encode to RGBA8 — R=u\'_x, G=u\'_y, B=u\'_z, A=255 (unused). */
+  var bytes = new Uint8Array(N3 * 4);
+  for (var i2 = 0; i2 < N3; i2++) {
+    bytes[i2*4 + 0] = Math.round(Math.max(0, Math.min(1, (uP[0][i2] - minV[0]) / scl[0])) * 255);
+    bytes[i2*4 + 1] = Math.round(Math.max(0, Math.min(1, (uP[1][i2] - minV[1]) / scl[1])) * 255);
+    bytes[i2*4 + 2] = Math.round(Math.max(0, Math.min(1, (uP[2][i2] - minV[2]) / scl[2])) * 255);
+    bytes[i2*4 + 3] = 255;
+  }
+
+  if (!this._dispTex) this._dispTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, this._dispTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, N, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+  gl.bindTexture(gl.TEXTURE_3D, null);
+
+  this._dispUploaded = true;
+  this._u.dispUploaded = 1.0;
+  this._u.dispOffset = [minV[0], minV[1], minV[2]];
+  this._u.dispScale  = [scl[0],  scl[1],  scl[2]];
+  this._dirty = true;
+};
+
+/* setViewMode('geom'|'deform'|'stress') — selects shader behavior.
+   Effective uViewMode is gated by _dispUploaded: if no fields exist,
+   the raymarcher renders in geom mode regardless of requested mode. */
+LabRaymarcher.prototype.setViewMode = function(mode) {
+  if (this.failed) return;
+  this._viewMode = mode;
+  var effective = 0;
+  if (this._dispUploaded) {
+    if      (mode === 'deform') effective = 1;
+    else if (mode === 'stress') effective = 2;
+  }
+  this._u.viewMode = effective;
+  this._dirty = true;
+};
+
+/* setDeformAmp(v) — pushes the amp slider value (0..1) directly to
+   the shader uniform without triggering a grid re-render.  Called
+   by the design-grid slider input handler on every input event. */
+LabRaymarcher.prototype.setDeformAmp = function(v) {
+  if (this.failed) return;
+  this._u.deformAmp = v;
+  this._dirty = true;
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   A.2 — Pointer/wheel handlers for user-controlled rotation
+   in deform/stress modes.  Geom mode keeps auto-rotation.
+   ════════════════════════════════════════════════════════════ */
+LabRaymarcher.prototype._attachInteractionHandlers = function() {
+  if (!this.canvas) return;
+  var self = this;
+
+  /* Pointer drag — rotate _rotY (horizontal drag) and _rotX (vertical
+     drag).  Active only in deform/stress modes; geom mode auto-rotates. */
+  this.canvas.addEventListener('pointerdown', function(e) {
+    if (self._viewMode === 'geom') return;
+    self._pointerDown = true;
+    self._lastPointerX = e.clientX;
+    self._lastPointerY = e.clientY;
+    self.canvas.setPointerCapture(e.pointerId);
+    self.canvas.style.cursor = 'grabbing';
+  });
+  this.canvas.addEventListener('pointermove', function(e) {
+    if (!self._pointerDown || self._viewMode === 'geom') return;
+    var dx = e.clientX - self._lastPointerX;
+    var dy = e.clientY - self._lastPointerY;
+    self._lastPointerX = e.clientX;
+    self._lastPointerY = e.clientY;
+    /* Sensitivity: ~6 rad full canvas-width sweep at 400px → 0.015 rad/px */
+    self._rotY += dx * 0.012;
+    self._rotX += dy * 0.012;
+    /* Clamp pitch to avoid flipping through the poles */
+    var lim = Math.PI * 0.49;
+    if (self._rotX >  lim) self._rotX =  lim;
+    if (self._rotX < -lim) self._rotX = -lim;
+    self._dirty = true;
+  });
+  var onPointerUp = function(e) {
+    if (!self._pointerDown) return;
+    self._pointerDown = false;
+    try { self.canvas.releasePointerCapture(e.pointerId); } catch (_e) { /* fine */ }
+    self.canvas.style.cursor = '';
+  };
+  this.canvas.addEventListener('pointerup', onPointerUp);
+  this.canvas.addEventListener('pointercancel', onPointerUp);
+
+  /* Wheel zoom — active only in deform/stress.  Clamp [8, 40]. */
+  this.canvas.addEventListener('wheel', function(e) {
+    if (self._viewMode === 'geom') return;
+    e.preventDefault();
+    var z = self._u.zoom;
+    /* Scroll up (negative deltaY) → zoom in (smaller z) */
+    z *= (e.deltaY > 0) ? 1.08 : 0.92;
+    if (z < 8)  z = 8;
+    if (z > 40) z = 40;
+    self._u.zoom = z;
+    self._dirty = true;
+  }, { passive: false });
+};
+
+
 /* ─── Render loop ─────────────────────────────────────────── */
 
 LabRaymarcher.prototype._render = function(t) {
@@ -418,11 +627,13 @@ LabRaymarcher.prototype._render = function(t) {
   var gl = this.gl;
   if (!this._fieldUploaded || !this._prog) return;
 
-  /* Auto-rotate */
+  /* Auto-rotate only in geom mode; deform/stress are user-controlled. */
   if (this._lastFrame === 0) this._lastFrame = t;
   var dt = (t - this._lastFrame) * 0.001;
   this._lastFrame = t;
-  this._rotY += dt * 0.30;
+  if (this._viewMode === 'geom') {
+    this._rotY += dt * 0.30;
+  }
 
   /* Build rotation matrix (Y then X) */
   var cy = Math.cos(this._rotY), sy = Math.sin(this._rotY);
@@ -463,10 +674,24 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uFieldMax,   S.fieldMax);
   gl.uniform1f(u.uTile,       S.tile);
   gl.uniform1f(u.uNrmStep,    S.nrmStep);
+  /* A.2 — view-mode and displacement uniforms */
+  gl.uniform1f(u.uViewMode,    S.viewMode);
+  gl.uniform1f(u.uDispUploaded, S.dispUploaded);
+  gl.uniform1f(u.uDeformAmp,   S.deformAmp);
+  gl.uniform3f(u.uDispOffset,  S.dispOffset[0], S.dispOffset[1], S.dispOffset[2]);
+  gl.uniform3f(u.uDispScale,   S.dispScale[0],  S.dispScale[1],  S.dispScale[2]);
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
   gl.uniform1i(u.uField, 0);
+  /* A.2 — displacement texture on TEXTURE1.  When not uploaded, the
+     shader gates on uDispUploaded so sampling is skipped — no need to
+     bind a placeholder. */
+  if (this._dispTex) {
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_3D, this._dispTex);
+    gl.uniform1i(u.uDisp, 1);
+  }
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 };
@@ -492,6 +717,7 @@ LabRaymarcher.prototype.destroy = function() {
   this.setActive(false);
   var gl = this.gl;
   if (this._fieldTex) gl.deleteTexture(this._fieldTex);
+  if (this._dispTex)  gl.deleteTexture(this._dispTex);   /* A.2 — displacement texture */
   if (this._prog)     gl.deleteProgram(this._prog);
   if (this._quadBuf)  gl.deleteBuffer(this._quadBuf);
   /* Force-lose context to free GPU memory immediately */
@@ -500,6 +726,7 @@ LabRaymarcher.prototype.destroy = function() {
   this.gl = null;
   this._prog = null;
   this._fieldTex = null;
+  this._dispTex = null;     /* A.2 */
   this._quadBuf = null;
   this.canvas = null;
   this.failed = true;
@@ -660,9 +887,9 @@ function mountRaymarcherTiles() {
   }
 }
 
-/* Pause all when grid loses geom view (e.g. user clicks Stress tab) */
+/* Pause all when grid loses geom/deform/stress view (e.g. user clicks Buckle tab) */
 function pauseRaymarcherTilesForViewMode(mode) {
-  if (mode !== 'geom' && mode !== 'deform') {
+  if (mode !== 'geom' && mode !== 'deform' && mode !== 'stress') {
     pauseAllRaymarchers();
   }
 }

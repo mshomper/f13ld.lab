@@ -115,22 +115,30 @@ function renderDesignGrid(){
 
   // Render each design column
   var html = '';
-  /* Designs whose geometry tile should be raymarcher-backed in this render.
+  /* Designs whose viewport tile should be raymarcher-backed in this render.
      We figure out the recipe NOW so we can pre-create the LabRaymarcher and
      bake the field BEFORE the grid HTML is committed; that way the canvas is
      already populated when mountRaymarcherTiles attaches it.  Designs with
-     no recipe (e.g. mock RD designs lacking a lab kernel) fall back to SVG. */
-  var rmDesigns = [];   /* [{i, id, recipe}, …] */
-  if (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform') {
+     no recipe (e.g. mock RD designs lacking a lab kernel) fall back to SVG.
+
+     A.2 — Eligibility:
+       · geom   → recipe required (always)
+       · deform → recipe AND d.results._fields required (field warp)
+       · stress → recipe AND d.results._fields required (visible same as
+                  geom in A.2; A.3 wires colormap onto σ_VM channel) */
+  var rmDesigns = [];   /* [{i, id}, …] */
+  var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
+  var needsFields = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
+  if (rmModes) {
     for (var ri = 0; ri < LAB_STATE.designs.length && ri < 3; ri++) {
       var rd = LAB_STATE.designs[ri];
       var rcp = (typeof recipeForDesign === 'function') ? recipeForDesign(rd) : null;
-      if (rcp) {
-        if (typeof getOrCreateRaymarcher === 'function') {
-          getOrCreateRaymarcher(rd.id, rcp);
-        }
-        rmDesigns.push({ i: ri, id: rd.id });
+      if (!rcp) continue;
+      if (needsFields && (!rd.results || !rd.results._fields)) continue;
+      if (typeof getOrCreateRaymarcher === 'function') {
+        getOrCreateRaymarcher(rd.id, rcp);
       }
+      rmDesigns.push({ i: ri, id: rd.id });
     }
   }
   function isRMDesign(idx){ for (var k = 0; k < rmDesigns.length; k++) if (rmDesigns[k].i === idx) return true; return false; }
@@ -140,17 +148,24 @@ function renderDesignGrid(){
     var fam = familyKey(d);
     var amp = getDeformAmp(d.id);
     var svgInner = '';
-    var useRM = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform') && isRMDesign(i);
+    var useRM = rmModes && isRMDesign(i);
 
     if (VIEW_STATE.mode === 'geom') {
       if (!useRM) svgInner = svgGeom(fam, false, 0);
     }
     else if (VIEW_STATE.mode === 'deform') {
-      if (!useRM) svgInner = svgGeom(fam, true, amp);
+      if (!useRM) {
+        /* A.2 — honest fallback: no fields means no warp.  Show empty
+           viewport with prompt rather than the static-geometry mock.
+           Pre-run designs land here. */
+        svgInner = svgEmptyViewport('Run to see deformed field');
+      }
     }
     else if (VIEW_STATE.mode === 'stress'){
-      if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stress field');
-      else svgInner = svgStress(fam, i);
+      if (!useRM) {
+        if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stress field');
+        else svgInner = svgStress(fam, i);
+      }
     }
     else if (VIEW_STATE.mode === 'stiff'){
       if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stiffness surface');
@@ -212,6 +227,25 @@ function renderDesignGrid(){
 
   /* Mount any raymarcher canvases into their .rm-mount placeholders */
   if (typeof mountRaymarcherTiles === 'function') mountRaymarcherTiles();
+
+  /* A.2 — Push per-design state to mounted raymarchers AFTER mount.
+     The raymarcher needs the current view mode (gates auto-rotate +
+     warp shader branch), the current amp (deform slider), and the
+     captured displacement fields (uploaded once per run completion).
+     Only walk rmDesigns — designs without a raymarcher get nothing. */
+  for (var rk = 0; rk < rmDesigns.length; rk++) {
+    var rkid = rmDesigns[rk].id;
+    var rkrm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[rkid] : null;
+    if (!rkrm || rkrm.failed) continue;
+    /* Upload first, so setViewMode's effective-mode gating sees fresh data. */
+    var rdesign = LAB_STATE.designs[rmDesigns[rk].i];
+    if (rdesign.results && rdesign.results._fields && rkrm.uploadFields) {
+      rkrm.uploadFields(rdesign.results._fields);
+    }
+    if (rkrm.setViewMode) rkrm.setViewMode(VIEW_STATE.mode);
+    if (rkrm.setDeformAmp) rkrm.setDeformAmp(getDeformAmp(rkid));
+  }
+
   /* Pause raymarchers if we're in a non-geometry view (defensive — they
      wouldn't have been mounted, but registry instances might still be
      registered as "running" from a previous geom render). */
@@ -219,13 +253,29 @@ function renderDesignGrid(){
     pauseRaymarcherTilesForViewMode(VIEW_STATE.mode);
   }
 
-  // Wire up amp sliders after DOM injection
+  // Wire up amp sliders after DOM injection.
+  // A.2 — direct uniform update for raymarcher-backed designs avoids
+  // a full grid re-render on every input event (which was rebuilding
+  // HTML at 60Hz under continuous slider movement).  SVG-mock fallback
+  // designs still trigger renderDesignGrid to update their static-warp
+  // visualization.
   var sliders = document.querySelectorAll('.amp-slider');
   for (var s = 0; s < sliders.length; s++){
     sliders[s].addEventListener('input', function(e){
       var id = e.target.dataset.designId;
       var v = parseFloat(e.target.value);
       onDeformAmpInput(id, v);
+      /* Update the displayed ×N label inline (no DOM rebuild). */
+      var labelEl = e.target.parentNode.querySelector('.v');
+      if (labelEl) labelEl.textContent = '×' + (v*200).toFixed(0);
+      /* Push to raymarcher uniform if mounted; otherwise let the SVG
+         fallback re-render handle visual update. */
+      var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
+      if (rm && !rm.failed && rm.setDeformAmp) {
+        rm.setDeformAmp(v);
+      } else {
+        if (typeof renderDesignGrid === 'function') renderDesignGrid();
+      }
     });
   }
 }
