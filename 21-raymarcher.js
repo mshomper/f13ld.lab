@@ -65,10 +65,14 @@ function buildLabRaymarcherFS(stepCount) {
        the displacement sample.  When uViewMode > 0.5 and uDispUploaded > 0.5,
        implicit() evaluates the SDF at the backward-warped position
        p_eval = p - uDeformAmp * u'(p).  u' is decoded from a per-design
-       RGBA8 3D texture (uDisp) via per-component scale/offset uniforms. */
+       RGBA8 3D texture (uDisp) via per-component scale/offset uniforms.
+       A.2.1 — uEpsBar carries the macroscopic load direction (ε̄) from
+       the solver's captured fields.  Used to expand the AABB and apply
+       the full displacement u(x) = ε̄·x + u'(x) rather than just u'(x). */
     'uniform float uViewMode; uniform float uDispUploaded; uniform float uDeformAmp;',
     'uniform highp sampler3D uDisp;',
     'uniform vec3 uDispOffset; uniform vec3 uDispScale;',
+    'uniform vec3 uEpsBar;',
 
     'const float H = 3.141593;',
 
@@ -90,19 +94,36 @@ function buildLabRaymarcherFS(stepCount) {
     '  return raw * uDispScale + uDispOffset;',
     '}',
 
+    /* getExtent: world-space half-extent of the bounding box per axis.
+       In geom and stress modes, the cube is the un-stretched lab cell
+       [-π, π]³.  In deform mode, the cube stretches under the macroscopic
+       strain ε̄ — extent grows by (1 + amp · |ε̄|) along each axis.  For
+       ε̄=[0,0,1] (physical Z-loading) at amp=0.5, Z extent goes from π to
+       1.5π; X and Y unchanged.  Used by AABB intersect and boxNormal. */
+    'vec3 getExtent() {',
+    '  if (uViewMode > 0.5 && uViewMode < 1.5) {',
+    '    return vec3(H,H,H) * (vec3(1.0) + uDeformAmp * abs(uEpsBar));',
+    '  }',
+    '  return vec3(H,H,H);',
+    '}',
+
     /* implicit: SDF combining raw field and topology uniforms.
        Tested branches: 0=sheet, 1=half, 2=anti-sheet (solid via
        inverted sheet), 3=pi-tpms (dual-sample).
-       A.2 — when uViewMode == 1 (deform), evaluates SDF at
-       p_eval = p - uDeformAmp * u\'(p).  Backward warp keeps the
-       shader-only architecture; geometry is never re-baked.
-       Stress mode (uViewMode == 2) skips the warp — same shading
-       as geom, just with user-controlled rotation; A.3 wires σ_VM
-       into the shading branch. */
+       A.2.1 — deformed-view warp uses a coordinate transform:
+         p_unstretched = p / (1 + amp · ε̄)           (inverse macro stretch)
+         p_eval        = p_unstretched - amp · u\'(p_unstretched)
+       Mathematically equivalent to backward-warping the full
+       displacement u(x) = ε̄·x + u\'(x), but factoring out the
+       linear macro term as a coord transform avoids the
+       approximation breakdown when amp·ε̄ approaches O(1).
+       Stress mode (uViewMode == 2) skips both — same shading as
+       geom; A.3 wires σ_VM into the shading branch. */
     'float implicit(vec3 p) {',
     '  vec3 p_eval = p;',
     '  if (uViewMode > 0.5 && uViewMode < 1.5) {',
-    '    p_eval = p - uDeformAmp * sampleDisp(p);',
+    '    vec3 p_unstretched = p / (vec3(1.0) + uDeformAmp * uEpsBar);',
+    '    p_eval = p_unstretched - uDeformAmp * sampleDisp(p_unstretched);',
     '  }',
     '  if (uTopoMode > 2.5) {',
     /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
@@ -116,11 +137,25 @@ function buildLabRaymarcherFS(stepCount) {
     '  if (uTopoMode < 1.5) return uHalfInvert < 0.5 ? -adj : adj;',            /* half */
     '  return -(abs(adj) - thickness);',                                        /* anti-sheet */
     '}',
+    /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
+    '    float a = sampleF(p_eval) - isoLevel;',
+    '    float b = sampleF(p_eval + uPipeOffset) - isoLevel;',
+    '    return max(abs(a), abs(b)) - uPipeR;',
+    '  }',
+    '  float raw = sampleF(p_eval);',
+    '  float adj = raw - isoLevel;',
+    '  if (uTopoMode < 0.5) return abs(adj) - thickness;',                      /* sheet */
+    '  if (uTopoMode < 1.5) return uHalfInvert < 0.5 ? -adj : adj;',            /* half */
+    '  return -(abs(adj) - thickness);',                                        /* anti-sheet */
+    '}',
 
     /* boxNormal — used for near-cap shading when the ray enters
-       the unit-cell box already inside the solid */
+       the unit-cell box already inside the solid.  A.2.1: extent
+       is per-axis (cube stretches in deform mode), so abs(pos) is
+       normalized by getExtent() per axis. */
     'vec3 boxNormal(vec3 pos) {',
-    '  vec3 ap = abs(pos) / H;',
+    '  vec3 extent = getExtent();',
+    '  vec3 ap = abs(pos) / extent;',
     '  if (ap.x > ap.y && ap.x > ap.z) return vec3(sign(pos.x), 0.0, 0.0);',
     '  if (ap.y > ap.z)                return vec3(0.0, sign(pos.y), 0.0);',
     '  return                                vec3(0.0, 0.0, sign(pos.z));',
@@ -148,10 +183,13 @@ function buildLabRaymarcherFS(stepCount) {
     '  float r = clamp(length(uv) * 1.1, 0.0, 1.0);',
     '  vec3 bgCol = mix(vec3(0.07,0.07,0.07), vec3(0.03,0.03,0.03), r*r);',
 
-    /* AABB intersect [-π,π]³ */
+    /* AABB intersect [-extent, +extent]³.  Extent is constant (π) in
+       geom/stress modes; stretches per-axis with the macro strain in
+       deform mode (see getExtent above). */
+    '  vec3 extent = getExtent();',
     '  vec3 iv = vec3(1.0) / rd;',
-    '  vec3 tb = (-vec3(H,H,H) - ro) * iv;',
-    '  vec3 tt = ( vec3(H,H,H) - ro) * iv;',
+    '  vec3 tb = (-extent - ro) * iv;',
+    '  vec3 tt = ( extent - ro) * iv;',
     '  vec3 tmi = min(tb, tt), tma = max(tb, tt);',
     '  float tEn = max(max(tmi.x, tmi.y), tmi.z);',
     '  float tEx = min(min(tma.x, tma.y), tma.z);',
@@ -250,7 +288,11 @@ function LabRaymarcher() {
     dispUploaded: 0,              /* float mirror of _dispUploaded for shader */
     deformAmp: 0.5,                /* direct multiplier on natural u\'(x) */
     dispOffset: [0, 0, 0],         /* per-component (min) for RGBA8 → signed decode */
-    dispScale:  [1, 1, 1]          /* per-component (max-min) */
+    dispScale:  [1, 1, 1],         /* per-component (max-min) */
+    /* A.2.1 — macroscopic strain direction (physical-axis labels post-A.1.5).
+       Populated by uploadFields from fieldsObj.eps_bar.  Defaults to zero
+       so the macro-stretch term has no effect until fields are uploaded. */
+    epsBar: [0, 0, 0]
   };
 
   /* A.2 — pointer/wheel state for user-controlled rotation in deform/stress modes */
@@ -307,7 +349,9 @@ LabRaymarcher.prototype._compileShader = function() {
   ['res','rot','zoom','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset',
    'uLipschitz','uField','uFieldMin','uFieldMax','uTile','uNrmStep',
    /* A.2 — Deformed/Stress view uniforms */
-   'uViewMode','uDispUploaded','uDeformAmp','uDisp','uDispOffset','uDispScale'].forEach(function(name){
+   'uViewMode','uDispUploaded','uDeformAmp','uDisp','uDispOffset','uDispScale',
+   /* A.2.1 — macroscopic strain direction */
+   'uEpsBar'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -533,6 +577,15 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj) {
   this._u.dispUploaded = 1.0;
   this._u.dispOffset = [minV[0], minV[1], minV[2]];
   this._u.dispScale  = [scl[0],  scl[1],  scl[2]];
+  /* A.2.1 — macroscopic strain direction (physical-axis labels after A.1.5
+     swap).  Stored alongside the texture data so the shader's macro-stretch
+     term knows which axes to expand and by how much.  Defaults to [0,0,0]
+     if eps_bar isn't provided. */
+  if (fieldsObj.eps_bar && fieldsObj.eps_bar.length === 3) {
+    this._u.epsBar = [fieldsObj.eps_bar[0], fieldsObj.eps_bar[1], fieldsObj.eps_bar[2]];
+  } else {
+    this._u.epsBar = [0, 0, 0];
+  }
   this._dirty = true;
 };
 
@@ -585,8 +638,11 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     var dy = e.clientY - self._lastPointerY;
     self._lastPointerX = e.clientX;
     self._lastPointerY = e.clientY;
-    /* Sensitivity: ~6 rad full canvas-width sweep at 400px → 0.015 rad/px */
-    self._rotY += dx * 0.012;
+    /* Sensitivity: ~6 rad full canvas-width sweep at 400px → 0.015 rad/px.
+       A.2.1 — Yaw flipped: drag-right now spins scene right-to-left as expected
+       by orbit-camera convention (Blender / Fusion / SolidWorks).  Pitch sign
+       kept: drag-down reveals top of scene (CAD convention). */
+    self._rotY -= dx * 0.012;
     self._rotX += dy * 0.012;
     /* Clamp pitch to avoid flipping through the poles */
     var lim = Math.PI * 0.49;
@@ -680,6 +736,8 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uDeformAmp,   S.deformAmp);
   gl.uniform3f(u.uDispOffset,  S.dispOffset[0], S.dispOffset[1], S.dispOffset[2]);
   gl.uniform3f(u.uDispScale,   S.dispScale[0],  S.dispScale[1],  S.dispScale[2]);
+  /* A.2.1 — macroscopic strain direction (for cube stretch in deform mode) */
+  gl.uniform3f(u.uEpsBar,      S.epsBar[0],     S.epsBar[1],     S.epsBar[2]);
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
