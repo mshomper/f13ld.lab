@@ -68,11 +68,18 @@ function buildLabRaymarcherFS(stepCount) {
        RGBA8 3D texture (uDisp) via per-component scale/offset uniforms.
        A.2.1 — uEpsBar carries the macroscopic load direction (ε̄) from
        the solver's captured fields.  Used to expand the AABB and apply
-       the full displacement u(x) = ε̄·x + u'(x) rather than just u'(x). */
+       the full displacement u(x) = ε̄·x + u'(x) rather than just u'(x).
+       A.3 — uStress is an R8 3D texture of σ_VM(x) normalized to [0,1]
+       via uStressMin/uStressMax.  In stress mode (uViewMode == 2), the
+       surface shading replaces the iridescent palette with viridis(σ_VM)
+       evaluated at the hit point. */
     'uniform float uViewMode; uniform float uDispUploaded; uniform float uDeformAmp;',
     'uniform highp sampler3D uDisp;',
     'uniform vec3 uDispOffset; uniform vec3 uDispScale;',
     'uniform vec3 uEpsBar;',
+    'uniform float uStressUploaded;',
+    'uniform highp sampler3D uStress;',
+    'uniform float uStressMin; uniform float uStressMax;',
 
     'const float H = 3.141593;',
 
@@ -94,14 +101,38 @@ function buildLabRaymarcherFS(stepCount) {
     '  return raw * uDispScale + uDispOffset;',
     '}',
 
+    /* sampleStress: returns σ_VM(p) normalized to [0,1] from the R8 3D
+       texture, or 0.0 if no stress data is uploaded.  Used by main() in
+       stress view mode to drive the viridis colormap. */
+    'float sampleStress(vec3 p) {',
+    '  if (uStressUploaded < 0.5) return 0.0;',
+    '  vec3 uvw = fract(p/(2.0*H) + 0.5);',
+    '  return texture(uStress, uvw).r;',
+    '}',
+
+    /* Viridis colormap — Iñigo Quílez quintic polynomial approximation
+       of matplotlib viridis.  Perceptually uniform, colorblind-friendly,
+       the de facto standard for scientific stress/data visualization.
+       Input clamped to [0,1]; no LUT texture needed. */
+    'vec3 viridis(float x) {',
+    '  x = clamp(x, 0.0, 1.0);',
+    '  vec4 x1 = vec4(1.0, x, x*x, x*x*x);',
+    '  vec4 x2 = x1 * x1.w * x;',
+    '  return vec3(',
+    '    dot(x1, vec4( 0.280268003, -0.143510503,  2.225793877, -14.815088879)) + dot(x2.xy, vec2( 25.212752309, -11.772589584)),',
+    '    dot(x1, vec4(-0.002117546,  1.617109353, -1.909305070,   2.701152864)) + dot(x2.xy, vec2( -1.685288385,   0.178738871)),',
+    '    dot(x1, vec4( 0.300805501,  2.614906601, -12.019139090, 28.933312018)) + dot(x2.xy, vec2(-33.491294770,  13.762053843))',
+    '  );',
+    '}',
+
     /* getExtent: world-space half-extent of the bounding box per axis.
-       In geom and stress modes, the cube is the un-stretched lab cell
-       [-π, π]³.  In deform mode, the cube stretches under the macroscopic
-       strain ε̄ — extent grows by (1 + amp · |ε̄|) along each axis.  For
-       ε̄=[0,0,1] (physical Z-loading) at amp=0.5, Z extent goes from π to
-       1.5π; X and Y unchanged.  Used by AABB intersect and boxNormal. */
+       In geom mode, the cube is the un-stretched lab cell [-π, π]³.
+       In deform AND stress modes, the cube stretches under the
+       macroscopic strain ε̄ — extent grows by (1 + amp · |ε̄|) along
+       each axis.  Stress mode uses the same warp as deform so the
+       colormap reads on the deformed shape (FEA viz convention). */
     'vec3 getExtent() {',
-    '  if (uViewMode > 0.5 && uViewMode < 1.5) {',
+    '  if (uViewMode > 0.5 && uViewMode < 2.5) {',
     '    return vec3(H,H,H) * (vec3(1.0) + uDeformAmp * abs(uEpsBar));',
     '  }',
     '  return vec3(H,H,H);',
@@ -113,15 +144,12 @@ function buildLabRaymarcherFS(stepCount) {
        A.2.1 — deformed-view warp uses a coordinate transform:
          p_unstretched = p / (1 + amp · ε̄)           (inverse macro stretch)
          p_eval        = p_unstretched - amp · u\'(p_unstretched)
-       Mathematically equivalent to backward-warping the full
-       displacement u(x) = ε̄·x + u\'(x), but factoring out the
-       linear macro term as a coord transform avoids the
-       approximation breakdown when amp·ε̄ approaches O(1).
-       Stress mode (uViewMode == 2) skips both — same shading as
-       geom; A.3 wires σ_VM into the shading branch. */
+       A.3 — stress mode (uViewMode == 2) also applies the warp so
+       the colormap reads on the deformed shape.  Surface shading
+       (colormap vs iridescent) is selected in main() based on mode. */
     'float implicit(vec3 p) {',
     '  vec3 p_eval = p;',
-    '  if (uViewMode > 0.5 && uViewMode < 1.5) {',
+    '  if (uViewMode > 0.5 && uViewMode < 2.5) {',
     '    vec3 p_unstretched = p / (vec3(1.0) + uDeformAmp * uEpsBar);',
     '    p_eval = p_unstretched - uDeformAmp * sampleDisp(p_unstretched);',
     '  }',
@@ -210,20 +238,35 @@ function buildLabRaymarcherFS(stepCount) {
     '    } else { fragColor = vec4(bgCol, 1.0); return; }',
     '  }',
 
-    /* Lighting — verbatim from grain */
-    '  float dy = dot(n, vec3(0.0,1.0,0.0));',
-    '  float dz = dot(n, vec3(0.0,0.0,1.0));',
-    '  float hue = dy*dy*0.33 + dz*dz*0.67;',
-    '  vec3 iridBase = palette(hue);',
+    /* Lighting — common diffuse contribution shared by both shading paths */
     '  vec3 l1 = normalize(vec3(1.0,1.8,2.0));',
     '  vec3 l2 = normalize(vec3(-0.8,-0.3,0.6));',
     '  float l3fill = max(dot(n, normalize(vec3(-0.5,-1.0,-1.5))), 0.0) * 0.3;',
     '  float diff = 0.35 + max(dot(n, l1), 0.0)*0.7 + max(dot(n, l2), 0.0)*0.25 + l3fill;',
-    '  float spec1 = pow(max(dot(reflect(-l1, n), -rd), 0.0), 120.0) * 0.7;',
-    '  float spec2 = pow(max(dot(reflect(-l1, n), -rd), 0.0),  20.0) * 0.2;',
-    '  float rim   = pow(1.0 - max(dot(n, -rd), 0.0), 2.5) * 0.8;',
-    '  vec3 green = vec3(0.784, 0.961, 0.259);',
-    '  vec3 col = iridBase*diff + vec3(1.0)*spec1 + green*spec2*0.6 + green*rim*0.45;',
+
+    /* A.3 — Surface shading: stress mode applies viridis(σ_VM) with
+       diffuse-only lighting (no specular/rim) so the colormap reads
+       clearly.  Other modes (geom, deform) keep the iridescent palette
+       and full lighting.  σ_VM is sampled at the un-warped position
+       (pos itself in stress mode IS the warped world coord; the texture
+       was baked from the un-deformed mesh, so we sample using the same
+       un-stretch coordinate transform applied to the warp). */
+    '  vec3 col;',
+    '  if (uViewMode > 1.5 && uViewMode < 2.5 && uStressUploaded > 0.5) {',
+    '    vec3 pos_unstretched = pos / (vec3(1.0) + uDeformAmp * uEpsBar);',
+    '    float sv = sampleStress(pos_unstretched);',
+    '    col = viridis(sv) * diff;',
+    '  } else {',
+    '    float dy = dot(n, vec3(0.0,1.0,0.0));',
+    '    float dz = dot(n, vec3(0.0,0.0,1.0));',
+    '    float hue = dy*dy*0.33 + dz*dz*0.67;',
+    '    vec3 iridBase = palette(hue);',
+    '    float spec1 = pow(max(dot(reflect(-l1, n), -rd), 0.0), 120.0) * 0.7;',
+    '    float spec2 = pow(max(dot(reflect(-l1, n), -rd), 0.0),  20.0) * 0.2;',
+    '    float rim   = pow(1.0 - max(dot(n, -rd), 0.0), 2.5) * 0.8;',
+    '    vec3 green = vec3(0.784, 0.961, 0.259);',
+    '    col = iridBase*diff + vec3(1.0)*spec1 + green*spec2*0.6 + green*rim*0.45;',
+    '  }',
     '  col = mix(bgCol, col, exp(-t * 0.010));',
     '  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);',
     '}'
@@ -263,6 +306,7 @@ function LabRaymarcher() {
   this._lastFrame = 0;
   this._fieldUploaded = false;
   this._dispUploaded = false;     /* A.2 — set by uploadFields() */
+  this._stressUploaded = false;   /* A.3 — set by uploadFields() */
   this._viewMode = 'geom';         /* A.2 — 'geom' | 'deform' | 'stress'; set by setViewMode() */
   this._recipe = null;
 
@@ -281,7 +325,15 @@ function LabRaymarcher() {
     /* A.2.1 — macroscopic strain direction (physical-axis labels post-A.1.5).
        Populated by uploadFields from fieldsObj.eps_bar.  Defaults to zero
        so the macro-stretch term has no effect until fields are uploaded. */
-    epsBar: [0, 0, 0]
+    epsBar: [0, 0, 0],
+    /* A.3 — stress field for viridis colormap in stress view mode.
+       stressUploaded float-mirror gates the shader's colormap branch.
+       stressMin pinned to 0 (colormap convention).  stressMax is in MPa;
+       design-grid passes the per-design (across-axis) max into uploadFields
+       for shared-per-design normalization. */
+    stressUploaded: 0,
+    stressMin: 0,
+    stressMax: 1
   };
 
   /* A.2 — pointer/wheel state for user-controlled rotation in deform/stress modes */
@@ -340,7 +392,9 @@ LabRaymarcher.prototype._compileShader = function() {
    /* A.2 — Deformed/Stress view uniforms */
    'uViewMode','uDispUploaded','uDeformAmp','uDisp','uDispOffset','uDispScale',
    /* A.2.1 — macroscopic strain direction */
-   'uEpsBar'].forEach(function(name){
+   'uEpsBar',
+   /* A.3 — Stress colormap uniforms */
+   'uStress','uStressMin','uStressMax','uStressUploaded'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -509,7 +563,35 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
 
    σ_VM is captured here but not consumed yet — A.3 wires it into
    the stress-view colormap. */
-LabRaymarcher.prototype.uploadFields = function(fieldsObj) {
+/* uploadFields(fieldsObj, stressMaxOverride) — encode u\'(x) and σ_VM(x)
+   into per-design 3D textures used by sampleDisp()/sampleStress() in
+   the shader.
+
+   fieldsObj layout (from solveDesignElastic):
+     { u_prime: [Float32Array, Float32Array, Float32Array],  // per-component (xyz)
+       sigma_vm: Float32Array,
+       N: int,
+       eps_bar: [0,0,1] }
+
+   stressMaxOverride (optional): caller-supplied σ_VM cap for
+   normalization.  Used by the design-grid to share a max across the
+   three axes of one design (so toggling X/Y/Z reveals "Z loads X to
+   2× the stress" rather than each axis renormalizing to its own peak).
+   When omitted, uses the fieldset's own max.
+
+   Encodings:
+     u\'   → RGBA8 with per-component min/max → linear remap to [0,255].
+              Decoded via raw * uDispScale + uDispOffset.
+     σ_VM → R8 with min=0 (pinned), max=stressMaxOverride or own max.
+              Decoded as already-normalized [0,1] sample.
+
+   σ_VM units: MPa (same as solver's stress output and material Es).
+   The design-grid uses the same stressMaxOverride for the colorbar
+   label so the colorbar legend and the shader colors agree.
+
+   Storage: voxel idx = (iz*N + iy)*N + ix matches buildVoxels and
+   the geometry field texture, so the same UV samples align.  */
+LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
   if (this.failed || !fieldsObj) return;
   var gl = this.gl;
   var N  = fieldsObj.N;
@@ -520,6 +602,7 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj) {
     return;
   }
 
+  /* ── u\' (RGBA8) ── */
   /* Per-component min/max for scale/offset */
   var minV = [ Infinity,  Infinity,  Infinity];
   var maxV = [-Infinity, -Infinity, -Infinity];
@@ -535,14 +618,14 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj) {
     maxV[c] = mx;
   }
   /* Guard against degenerate range (constant field). */
-  var eps = 1e-12;
+  var epsR = 1e-12;
   var scl = [
-    Math.max(maxV[0] - minV[0], eps),
-    Math.max(maxV[1] - minV[1], eps),
-    Math.max(maxV[2] - minV[2], eps)
+    Math.max(maxV[0] - minV[0], epsR),
+    Math.max(maxV[1] - minV[1], epsR),
+    Math.max(maxV[2] - minV[2], epsR)
   ];
 
-  /* Encode to RGBA8 — R=u\'_x, G=u\'_y, B=u\'_z, A=255 (unused). */
+  /* Encode u\' to RGBA8 — R=u\'_x, G=u\'_y, B=u\'_z, A=255 (unused). */
   var bytes = new Uint8Array(N3 * 4);
   for (var i2 = 0; i2 < N3; i2++) {
     bytes[i2*4 + 0] = Math.round(Math.max(0, Math.min(1, (uP[0][i2] - minV[0]) / scl[0])) * 255);
@@ -566,29 +649,64 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj) {
   this._u.dispUploaded = 1.0;
   this._u.dispOffset = [minV[0], minV[1], minV[2]];
   this._u.dispScale  = [scl[0],  scl[1],  scl[2]];
-  /* A.2.1 — macroscopic strain direction (physical-axis labels after A.1.5
-     swap).  Stored alongside the texture data so the shader's macro-stretch
-     term knows which axes to expand and by how much.  Defaults to [0,0,0]
-     if eps_bar isn't provided. */
+
   if (fieldsObj.eps_bar && fieldsObj.eps_bar.length === 3) {
     this._u.epsBar = [fieldsObj.eps_bar[0], fieldsObj.eps_bar[1], fieldsObj.eps_bar[2]];
   } else {
     this._u.epsBar = [0, 0, 0];
   }
+
+  /* ── σ_VM (R8) ── */
+  var svArr = fieldsObj.sigma_vm;
+  if (svArr && svArr.length === N3) {
+    var svMin = 0;   /* pinned to zero — colormap convention */
+    var svMax = (stressMaxOverride != null && stressMaxOverride > 0)
+              ? stressMaxOverride
+              : 0;
+    if (svMax === 0) {
+      for (var k = 0; k < N3; k++) {
+        if (svArr[k] > svMax) svMax = svArr[k];
+      }
+    }
+    svMax = Math.max(svMax, epsR);
+
+    var svBytes = new Uint8Array(N3);
+    var svScale255 = 255 / (svMax - svMin);
+    for (var k2 = 0; k2 < N3; k2++) {
+      svBytes[k2] = Math.round(Math.max(0, Math.min(255, (svArr[k2] - svMin) * svScale255)));
+    }
+
+    if (!this._stressTex) this._stressTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_3D, this._stressTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, N, N, 0, gl.RED, gl.UNSIGNED_BYTE, svBytes);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+    gl.bindTexture(gl.TEXTURE_3D, null);
+
+    this._stressUploaded = true;
+    this._u.stressUploaded = 1.0;
+    this._u.stressMin = svMin;
+    this._u.stressMax = svMax;
+  }
+
   this._dirty = true;
 };
 
 /* setViewMode('geom'|'deform'|'stress') — selects shader behavior.
-   Effective uViewMode is gated by _dispUploaded: if no fields exist,
-   the raymarcher renders in geom mode regardless of requested mode. */
+   Effective uViewMode is gated by uploaded data: deform requires
+   _dispUploaded, stress requires _stressUploaded.  If the required
+   data isn't uploaded yet, falls back to geom mode regardless of
+   requested mode. */
 LabRaymarcher.prototype.setViewMode = function(mode) {
   if (this.failed) return;
   this._viewMode = mode;
   var effective = 0;
-  if (this._dispUploaded) {
-    if      (mode === 'deform') effective = 1;
-    else if (mode === 'stress') effective = 2;
-  }
+  if (mode === 'deform' && this._dispUploaded) effective = 1;
+  else if (mode === 'stress' && this._stressUploaded) effective = 2;
   this._u.viewMode = effective;
   this._dirty = true;
 };
@@ -727,6 +845,12 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform3f(u.uDispScale,   S.dispScale[0],  S.dispScale[1],  S.dispScale[2]);
   /* A.2.1 — macroscopic strain direction (for cube stretch in deform mode) */
   gl.uniform3f(u.uEpsBar,      S.epsBar[0],     S.epsBar[1],     S.epsBar[2]);
+  /* A.3 — stress colormap uniforms.  uStress sampler bound on TEXTURE2
+     below; the shader gates on uStressUploaded so an unbound sampler is
+     harmless when no stress data has been provided. */
+  gl.uniform1f(u.uStressUploaded, S.stressUploaded);
+  gl.uniform1f(u.uStressMin,      S.stressMin);
+  gl.uniform1f(u.uStressMax,      S.stressMax);
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
@@ -738,6 +862,12 @@ LabRaymarcher.prototype._render = function(t) {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_3D, this._dispTex);
     gl.uniform1i(u.uDisp, 1);
+  }
+  /* A.3 — stress texture on TEXTURE2.  Same gating pattern as uDisp. */
+  if (this._stressTex) {
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_3D, this._stressTex);
+    gl.uniform1i(u.uStress, 2);
   }
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -763,10 +893,11 @@ LabRaymarcher.prototype.destroy = function() {
   if (this.failed) return;
   this.setActive(false);
   var gl = this.gl;
-  if (this._fieldTex) gl.deleteTexture(this._fieldTex);
-  if (this._dispTex)  gl.deleteTexture(this._dispTex);   /* A.2 — displacement texture */
-  if (this._prog)     gl.deleteProgram(this._prog);
-  if (this._quadBuf)  gl.deleteBuffer(this._quadBuf);
+  if (this._fieldTex)  gl.deleteTexture(this._fieldTex);
+  if (this._dispTex)   gl.deleteTexture(this._dispTex);    /* A.2 — displacement texture */
+  if (this._stressTex) gl.deleteTexture(this._stressTex);  /* A.3 — stress texture */
+  if (this._prog)      gl.deleteProgram(this._prog);
+  if (this._quadBuf)   gl.deleteBuffer(this._quadBuf);
   /* Force-lose context to free GPU memory immediately */
   var ext = gl.getExtension('WEBGL_lose_context');
   if (ext) ext.loseContext();
@@ -774,6 +905,7 @@ LabRaymarcher.prototype.destroy = function() {
   this._prog = null;
   this._fieldTex = null;
   this._dispTex = null;     /* A.2 */
+  this._stressTex = null;   /* A.3 */
   this._quadBuf = null;
   this.canvas = null;
   this.failed = true;
