@@ -24,9 +24,24 @@
    ============================================================ */
 
 
-/* ── Solver constants — matched to F13LD.sweep production values ─── */
-var CG_TOL     = 1e-5;
-var CG_MAXITER = 100;
+/* ══ Solver constants — matched to F13LD.sweep v0.16.0 rigorous mode ══
+   A.1.8 (2026-05) — relaxed from 1e-5/100 to match sweep's rigorous-mode
+   parameters after the A.1.7 buildGamma textbook fix made the Γ operator
+   stiffer-conditioned (correct physics, but harder to invert at the
+   1e-4 contrast we use between solid Es and void Es·1e-4).
+
+   Sweep production tolerances:
+     · "fast"     mode: tol = 1e-3
+     · "rigorous" mode: tol = 1e-4   ← Lab matches this
+   Lab uses rigorous-mode tolerance by default since it solves only 3
+   designs per run (vs sweep's thousands), so the precision/time
+   tradeoff favors rigor.
+
+   Iter cap of 300 buffers comfortably above the typical converged-iter
+   count (~100-200 per LC for stiff-contrast TPMS at the textbook Γ).
+   ════════════════════════════════════════════════════════════════════ */
+var CG_TOL     = 1e-4;
+var CG_MAXITER = 300;
 
 
 /* ════════════════════════════════════════════════════════════
