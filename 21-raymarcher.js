@@ -137,17 +137,6 @@ function buildLabRaymarcherFS(stepCount) {
     '  if (uTopoMode < 1.5) return uHalfInvert < 0.5 ? -adj : adj;',            /* half */
     '  return -(abs(adj) - thickness);',                                        /* anti-sheet */
     '}',
-    /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
-    '    float a = sampleF(p_eval) - isoLevel;',
-    '    float b = sampleF(p_eval + uPipeOffset) - isoLevel;',
-    '    return max(abs(a), abs(b)) - uPipeR;',
-    '  }',
-    '  float raw = sampleF(p_eval);',
-    '  float adj = raw - isoLevel;',
-    '  if (uTopoMode < 0.5) return abs(adj) - thickness;',                      /* sheet */
-    '  if (uTopoMode < 1.5) return uHalfInvert < 0.5 ? -adj : adj;',            /* half */
-    '  return -(abs(adj) - thickness);',                                        /* anti-sheet */
-    '}',
 
     /* boxNormal — used for near-cap shading when the ray enters
        the unit-cell box already inside the solid.  A.2.1: extent
