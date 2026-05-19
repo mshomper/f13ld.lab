@@ -247,14 +247,20 @@ function buildLabRaymarcherFS(stepCount) {
     /* A.3 — Surface shading: stress mode applies viridis(σ_VM) with
        diffuse-only lighting (no specular/rim) so the colormap reads
        clearly.  Other modes (geom, deform) keep the iridescent palette
-       and full lighting.  σ_VM is sampled at the un-warped position
-       (pos itself in stress mode IS the warped world coord; the texture
-       was baked from the un-deformed mesh, so we sample using the same
-       un-stretch coordinate transform applied to the warp). */
+       and full lighting.
+
+       A.3.2 — σ_VM is sampled at p_eval — the material coordinate that
+       implicit() also evaluates at — so the stress value matches what
+       the SDF saw at this surface point.  Previously sampled at
+       pos_unstretched (macro un-stretch only), missing the u'
+       backward-warp correction.  Effect is small on its own but
+       principled, and pairs with the JS-side dilation that handles
+       the larger interface-contamination issue. */
     '  vec3 col;',
     '  if (uViewMode > 1.5 && uViewMode < 2.5 && uStressUploaded > 0.5) {',
     '    vec3 pos_unstretched = pos / (vec3(1.0) + uDeformAmp * uEpsBar);',
-    '    float sv = sampleStress(pos_unstretched);',
+    '    vec3 p_eval_stress = pos_unstretched - uDeformAmp * sampleDisp(pos_unstretched);',
+    '    float sv = sampleStress(p_eval_stress);',
     '    col = viridis(sv) * diff;',
     '  } else {',
     '    float dy = dot(n, vec3(0.0,1.0,0.0));',
@@ -271,6 +277,72 @@ function buildLabRaymarcherFS(stepCount) {
     '  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);',
     '}'
   ].join('\n');
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   A.3.2 — σ_VM interface-contamination fix.
+
+   The lab solver writes σ_VM into every voxel — including void
+   voxels, whose σ_VM is near-zero (Cv = Cs·1e-4 means void
+   stresses are 4 orders of magnitude smaller than solid).  When
+   the raymarcher samples σ_VM at a surface point via trilinear
+   interpolation, it mixes solid σ_VM with void σ_VM, biasing
+   the displayed value LOW.  Pronounced on thin-walled
+   structures (pi-tpms at ρ<0.1, hyperuniform, sheet TPMS) where
+   the wall is only 1–2 voxels thick at N=32 and most of the
+   sample's 8-neighbor trilinear tap lands in void.
+
+   Fix: pre-dilate σ_VM by one voxel into adjacent void.  For
+   each void voxel (σ_VM < 1% of global max), replace it with
+   the max σ_VM among its 6-connected neighbors.  Solid voxels
+   are preserved.  Combined with the unchanged LINEAR texture
+   sampling, surface points now receive solid-dominated values
+   from both sides of the wall.
+
+   Cost: ~6N³ ops, ~5-15 ms at N=32 per axis.  Periodic-boundary
+   neighbor lookup matches the texture's REPEAT wrap mode.
+   ════════════════════════════════════════════════════════════ */
+function dilateSigmaVMByOneVoxel(sv, N) {
+  var N3 = N * N * N;
+
+  /* Find global max to establish the solid/void threshold. */
+  var globalMax = 0;
+  for (var i = 0; i < N3; i++) if (sv[i] > globalMax) globalMax = sv[i];
+  if (globalMax === 0) return sv;
+  var threshold = globalMax * 0.01;
+
+  var out = new Float32Array(N3);
+  out.set(sv);
+
+  for (var iz = 0; iz < N; iz++) {
+    var izN2  = iz * N * N;
+    var izpN2 = ((iz + 1) % N) * N * N;
+    var izmN2 = ((iz - 1 + N) % N) * N * N;
+    for (var iy = 0; iy < N; iy++) {
+      var iyN  = iy * N;
+      var iypN = ((iy + 1) % N) * N;
+      var iymN = ((iy - 1 + N) % N) * N;
+      for (var ix = 0; ix < N; ix++) {
+        var idx = izN2 + iyN + ix;
+        if (sv[idx] >= threshold) continue;   /* solid — preserve */
+
+        var ixp = (ix + 1) % N;
+        var ixm = (ix - 1 + N) % N;
+
+        var best = 0, v;
+        v = sv[izN2  + iyN  + ixp]; if (v > best) best = v;   /* +x */
+        v = sv[izN2  + iyN  + ixm]; if (v > best) best = v;   /* -x */
+        v = sv[izN2  + iypN + ix ]; if (v > best) best = v;   /* +y */
+        v = sv[izN2  + iymN + ix ]; if (v > best) best = v;   /* -y */
+        v = sv[izpN2 + iyN  + ix ]; if (v > best) best = v;   /* +z */
+        v = sv[izmN2 + iyN  + ix ]; if (v > best) best = v;   /* -z */
+
+        if (best >= threshold) out[idx] = best;
+      }
+    }
+  }
+  return out;
 }
 
 
@@ -657,8 +729,19 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
   }
 
   /* ── σ_VM (R8) ── */
-  var svArr = fieldsObj.sigma_vm;
-  if (svArr && svArr.length === N3) {
+  var svArrRaw = fieldsObj.sigma_vm;
+  if (svArrRaw && svArrRaw.length === N3) {
+    /* A.3.2 — Dilate σ_VM by one voxel into adjacent void to eliminate
+       interface contamination at the rendered surface.  Without dilation,
+       trilinear interpolation of σ_VM at the solid/void boundary mixes
+       solid stress with near-zero void stress, biasing the displayed
+       surface stress low — pronounced on thin-walled structures
+       (pi-tpms at low ρ, hyperuniform, sheet TPMS) where the wall may
+       be only 1–2 voxels thick.  Dilation pushes solid σ_VM one voxel
+       outward; combined with the unchanged LINEAR sampling, surface
+       points get solid-dominated values from both sides. */
+    var svArr = dilateSigmaVMByOneVoxel(svArrRaw, N);
+
     var svMin = 0;   /* pinned to zero — colormap convention */
     var svMax = (stressMaxOverride != null && stressMaxOverride > 0)
               ? stressMaxOverride
