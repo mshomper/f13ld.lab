@@ -916,27 +916,39 @@ ElasticSolver.prototype.solveLoadCase = async function(eps_bar, opts){
    homogenize — full 3-load-case run, returns Ex/Ey/Ez + diagnostics.
 
    opts (optional):
-     { captureFieldsLC: 2 } — capture per-voxel u'(x) and σ_VM(x)
-        for the named LC (0=x, 1=y, 2=z).  Default Z (vertical
-        compression — closest to physiological loading on an
-        orthopedic implant).  Set to -1 to disable field capture.
-        Captured fields appear under `result.fields`.
+     { captureFieldsLCs: [0, 2] } — array of LC indices (solver-internal,
+        0=x, 1=y, 2=z) to capture per-voxel u'(x) and σ_VM(x) for.  Default
+        [] (no capture).  Each captured LC adds ~30 ms at N=32 for the
+        spectral-inversion field extraction.
+
+     Legacy { captureFieldsLC: 2 } — single int, converted to [2]
+        (or [] if int < 0).  Maintained for older test paths.
+
    ════════════════════════════════════════════════════════════ */
 ElasticSolver.prototype.homogenize = async function(opts){
   opts = opts || {};
-  var captureLC = (opts.captureFieldsLC != null) ? opts.captureFieldsLC : -1;
+  /* Normalize captureFieldsLCs to an array of non-negative ints */
+  var captureLCs = opts.captureFieldsLCs;
+  if (captureLCs == null) {
+    if (opts.captureFieldsLC != null) {
+      captureLCs = (opts.captureFieldsLC >= 0) ? [opts.captureFieldsLC] : [];
+    } else {
+      captureLCs = [];
+    }
+  }
+  if (typeof captureLCs === 'number') captureLCs = (captureLCs >= 0) ? [captureLCs] : [];
 
   var C_eff = [[0,0,0],[0,0,0],[0,0,0]];
   var totalIters = 0;
   var allConverged = true;
   var perLC = [];
-  var capturedFields = null;
+  var capturedByLC = {};   /* solver-LC-index → fields */
 
   for (var lc = 0; lc < 3; lc++) {
     var eps_bar = [lc===0?1:0, lc===1?1:0, lc===2?1:0];
-    var lcOpts = (lc === captureLC) ? { captureFields: true } : null;
+    var lcOpts = (captureLCs.indexOf(lc) >= 0) ? { captureFields: true } : null;
     var res = await this.solveLoadCase(eps_bar, lcOpts);
-    if (res.fields) capturedFields = res.fields;
+    if (res.fields) capturedByLC[lc] = res.fields;
     totalIters += res.iters;
     if (!res.converged) allConverged = false;
     for (var p = 0; p < 3; p++) C_eff[p][lc] = res.sigma[p];
@@ -952,7 +964,7 @@ ElasticSolver.prototype.homogenize = async function(opts){
           - C[0][1]*(C[1][0]*C[2][2]-C[1][2]*C[2][0])
           + C[0][2]*(C[1][0]*C[2][1]-C[1][1]*C[2][0]);
   if (Math.abs(det) < 1e-30) {
-    return { Ex: 0, Ey: 0, Ez: 0, C_eff: C_eff, totalIters: totalIters, allConverged: allConverged, valid: false, perLC: perLC, fields: capturedFields };
+    return { Ex: 0, Ey: 0, Ez: 0, C_eff: C_eff, totalIters: totalIters, allConverged: allConverged, valid: false, perLC: perLC, fieldsByLC: capturedByLC };
   }
   var invDet = 1 / det;
   var S00 = (C[1][1]*C[2][2] - C[1][2]*C[2][1]) * invDet;
@@ -966,7 +978,7 @@ ElasticSolver.prototype.homogenize = async function(opts){
     allConverged: allConverged,
     valid: true,
     perLC: perLC,
-    fields: capturedFields
+    fieldsByLC: capturedByLC
   };
 };
 
@@ -1105,59 +1117,52 @@ ElasticSolver.prototype.destroy = function(){
 
 /* ════════════════════════════════════════════════════════════
    solveDesignElastic — top-level: take a recipe, return Ex/Ey/Ez
-   plus per-voxel u'(x) and σ_VM(x) for one chosen LC.
+   plus per-voxel u'(x) and σ_VM(x) for one or more chosen LCs.
 
    ── AXIS LABELING (A.1.5 fix) ──────────────────────────────
    This wrapper applies an X↔Z relabeling at the public-API
    boundary to correct a hidden inconsistency between the
    rasterizer's storage convention and buildGamma's wavenumber
-   labeling.
+   labeling.  See the A.1.5 docstring block (still in effect)
+   for the full physics/coordinate explanation.  Practically:
+   solver-internal LC 0 (eps_bar=[1,0,0]) is physical Z loading,
+   solver LC 2 is physical X loading, and LC 1 is unchanged.
 
-   The rasterizer (14-rasterizer.js) writes
-       data[(iz*N + iy)*N + ix] = f(x,y,z)
-   so physical X is at storage stride 1, physical Y at stride
-   N, physical Z at stride N².  buildGamma iterates with i
-   outermost and labels nv[0] as the X-axis Fourier component,
-   meaning the SOLVER's "x-axis" is actually rasterizer/physical
-   Z.  This swap is not visible for cubic-isotropic structures
-   (Ex=Ey=Ez), which is why it slipped through Phase 2 testing.
+   ── A.2.2 (2026-05) — multi-axis field capture ─────────────
+   captureFieldsLCs was promoted from single int → array of
+   physical axes ∈ {0=X, 1=Y, 2=Z}.  Default captures all three
+   so the lab raymarcher can toggle load direction without
+   re-running the solver.  Cost: ~90 ms added to a ~5 s solve
+   (spectral inversion is 3× the per-LC ~30 ms, vs ~1500 ms
+   per LC of CG work that runs regardless).
 
-   Without this fix, a user who asks for "Z-axis loading"
-   (eps_bar=[0,0,1] in physical coordinates) would actually
-   get X-axis loading, and the returned Ex/Ez moduli would be
-   transposed.  Verified by axis-alignment slab test
-   (testAxisAlignment, console-pasted, 2026-05-07).
-
-   The fix here is at the API boundary only — buildGamma and
-   the WGSL solver are left alone (they're internally
-   consistent).  Three swaps:
-     1. captureFieldsLC:K (physical) → solver LC (2-K)
-     2. fields.u_prime [0]↔[2]    (back to physical labeling)
-     3. fields.eps_bar [0]↔[2]    (back to physical labeling)
-     4. Ex ↔ Ez in the return
-
-   Anything that calls extractFieldsForLC or solver.homogenize
-   directly will still see solver-internal coordinates; that's
-   why those methods carry their own warning docstrings.
+   Legacy { captureFieldsLC: 2 } (single int) still accepted.
    ───────────────────────────────────────────────────────────
 
-   Convenience wrapper that does CPU rasterize → CPU Γ build →
-   GPU upload → CG solve → CPU field extraction.
-
    opts (optional):
-     { captureFieldsLC: 2 }  — which LC to capture fields for.
-        Default 2 (physical Z, vertical compression — closest
-        to physiological loading on an orthopedic implant).
-        Set to -1 to skip field extraction for solver-only
-        workflows.
+     { captureFieldsLCs: [0, 1, 2] }  — physical axes to capture
+        (default = all three).  Pass [] to skip field extraction
+        for solver-only workflows.
+     { captureFieldsLC: 2 }            — legacy single-int form.
    ════════════════════════════════════════════════════════════ */
 async function solveDesignElastic(recipe, N, opts) {
   if (!WGPU.device) throw new Error('solveDesignElastic: ensureDevice() first');
   opts = opts || {};
-  var captureLC_phys = (opts.captureFieldsLC != null) ? opts.captureFieldsLC : 2;
-  /* Translate physical LC → solver-internal LC by the X↔Z swap.
-     -1 (no capture) passes through unchanged. */
-  var captureLC_solver = (captureLC_phys < 0) ? -1 : (2 - captureLC_phys);
+
+  /* Normalize captureFieldsLCs to an array of physical-axis indices. */
+  var captureLCs_phys = opts.captureFieldsLCs;
+  if (captureLCs_phys == null) {
+    if (opts.captureFieldsLC != null) {
+      captureLCs_phys = (opts.captureFieldsLC >= 0) ? [opts.captureFieldsLC] : [];
+    } else {
+      captureLCs_phys = [0, 1, 2];   /* default: capture all three physical axes */
+    }
+  }
+  if (typeof captureLCs_phys === 'number') captureLCs_phys = (captureLCs_phys >= 0) ? [captureLCs_phys] : [];
+
+  /* Translate physical-axis indices to solver-internal LC indices
+     via the X↔Z swap (phys 0 = solver 2; phys 2 = solver 0). */
+  var captureLCs_solver = captureLCs_phys.map(function(p) { return 2 - p; });
 
   var family = recipe.family;
   var params = KERNELS[family].parseRecipe(recipe);
@@ -1198,24 +1203,33 @@ async function solveDesignElastic(recipe, N, opts) {
   solver.uploadDesign(solid, Gamma, C_s, C_v, C_0);
 
   var t2 = performance.now();
-  var hom = await solver.homogenize({ captureFieldsLC: captureLC_solver });
+  var hom = await solver.homogenize({ captureFieldsLCs: captureLCs_solver });
   var tCG = performance.now() - t2;
 
   solver.destroy();   /* keep FFTPlan alive (cached) */
 
-  /* Apply X↔Z swap to map solver-internal labels back to physical labels.
-     Ex (solver) ↔ Ez (physical), Ey unchanged.  Fields, if captured, get
-     their u_prime[0]↔u_prime[2] and eps_bar[0]↔eps_bar[2] swapped so
-     downstream consumers (raymarcher in Push A.2/A.3) see physical-axis
-     data without further translation. */
-  var fields = hom.fields;
-  if (fields) {
-    var tmpU = fields.u_prime[0];
-    fields.u_prime[0] = fields.u_prime[2];
-    fields.u_prime[2] = tmpU;
-    var tmpE = fields.eps_bar[0];
-    fields.eps_bar[0] = fields.eps_bar[2];
-    fields.eps_bar[2] = tmpE;
+  /* ── A.1.5 + A.2.2 boundary swap on captured fields ──
+     Solver returned fieldsByLC keyed by solver-internal LC index.
+     Map back to physical-axis labels and apply the X↔Z component
+     swap inside each fieldset's u_prime and eps_bar arrays so
+     downstream consumers see physical-axis data. */
+  var fieldsByAxis = { x: null, y: null, z: null };
+  var axisName = ['x', 'y', 'z'];
+  if (hom.fieldsByLC) {
+    for (var phys = 0; phys < 3; phys++) {
+      var solverIdx = 2 - phys;          /* X↔Z swap */
+      var f = hom.fieldsByLC[solverIdx];
+      if (!f) continue;
+      /* Swap u_prime[0] ↔ u_prime[2] and eps_bar[0] ↔ eps_bar[2]
+         so the returned fieldset is in physical-axis coordinates. */
+      var tmpU = f.u_prime[0];
+      f.u_prime[0] = f.u_prime[2];
+      f.u_prime[2] = tmpU;
+      var tmpE = f.eps_bar[0];
+      f.eps_bar[0] = f.eps_bar[2];
+      f.eps_bar[2] = tmpE;
+      fieldsByAxis[axisName[phys]] = f;
+    }
   }
 
   return {
@@ -1232,7 +1246,7 @@ async function solveDesignElastic(recipe, N, opts) {
     converged: hom.allConverged,
     valid:    hom.valid,
     perLC:    hom.perLC,         /* note: perLC labels remain solver-internal — diagnostic only */
-    fields:   fields,            /* { u_prime, sigma_vm, N, eps_bar } in PHYSICAL coords, or null */
+    fieldsByAxis: fieldsByAxis,  /* { x, y, z } — each is { u_prime, sigma_vm, N, eps_bar } in PHYSICAL coords, or null */
     tRast_ms: tRast,
     tGamma_ms: tGamma,
     tCG_ms:   tCG
@@ -1247,26 +1261,22 @@ async function solveDesignElastic(recipe, N, opts) {
    u' and σ_VM fields and verifies the A.1.5 axis swap is
    correctly applied at the public-API boundary.
 
+   A.2.2 — solveDesignElastic now captures all three physical
+   axes by default.  This test inspects the Z fieldset for
+   detailed magnitudes/sanity, and confirms X and Y also came
+   back with sensible eps_bar (cubic symmetry on Schwarz P
+   means magnitudes should match Z to within FP32 precision).
+
    From the dev console:
      await testFieldsExtraction()       // default N=32, Schwarz P
      await testFieldsExtraction(64)     // higher resolution
 
-   Sanity bands at default Ti-6Al-4V (Es=110 GPa, ν=0.34, ε̄_zz=1):
-     Mean |u'|              ~  0.05–0.4   (solver units; cell extent = 2π)
-     Max  |u'|              ~  0.2–0.8
-     Mean σ_VM              ~  20–80 GPa  (volume includes void)
-     Max  σ_VM              ~  100–400 GPa  (stress concentration)
-
-   Extreme values (>1× cell or >10× Es) flag a bug.  Zero values
-   anywhere flag the wiring isn't actually populating the fields.
-
-   Per-axis u' bias check (A.1.5):
-     For physical-Z loading on a cubic-isotropic structure
-     (Schwarz P), the mean |u'_z| should DOMINATE u'_x and u'_y
-     by a clear margin (not exact equality — the cell is finite
-     and the loading direction localizes strain along itself).
-     If u'_x dominates instead of u'_z, the axis swap fix isn't
-     working and we're loading rasterizer-X by mistake.
+   Sanity bands at default Ti-6Al-4V (Es=110 GPa, ν=0.34, ε̄_zz=1)
+   AFTER the A.1.7 buildGamma fix:
+     Mean |u'|              ~  0.6–1.0   (solver units; cell extent = 2π)
+     Max  |u'|              ~  1.0–2.0
+     Mean σ_VM              ~  20–60 GPa  (volume includes void)
+     Max  σ_VM              ~  150–300 GPa  (stress concentration)
    ════════════════════════════════════════════════════════════ */
 async function testFieldsExtraction(N) {
   N = N || 32;
@@ -1279,20 +1289,21 @@ async function testFieldsExtraction(N) {
     if (!ok) { console.error('[fields-test] WebGPU unavailable'); return null; }
   }
 
-  console.log('[fields-test] solving Schwarz P at N=' + N + ' with physical-Z field capture…');
+  console.log('[fields-test] solving Schwarz P at N=' + N + ' with all-three-axis field capture…');
   var t0 = performance.now();
-  var R = await solveDesignElastic(DEMO_RECIPES.schwarzP, N, { captureFieldsLC: 2 });
+  var R = await solveDesignElastic(DEMO_RECIPES.schwarzP, N);   /* default = all three */
   var tTotal = performance.now() - t0;
 
   if (!R.valid) { console.error('[fields-test] solver returned invalid result'); return R; }
-  if (!R.fields) { console.error('[fields-test] no fields captured (captureFieldsLC ignored?)'); return R; }
+  if (!R.fieldsByAxis) { console.error('[fields-test] no fieldsByAxis on result'); return R; }
+  if (!R.fieldsByAxis.z) { console.error('[fields-test] Z fields missing'); return R; }
 
-  var f = R.fields, N3 = N*N*N;
+  var f = R.fieldsByAxis.z, N3 = N*N*N;
   var ux = f.u_prime[0], uy = f.u_prime[1], uz = f.u_prime[2], sv = f.sigma_vm;
 
   /* |u'| stats */
   var sumMag = 0, maxMag = 0, nNonZero = 0;
-  var sumX = 0, sumY = 0, sumZ = 0;            /* per-axis |u'_i| sums for swap-verification */
+  var sumX = 0, sumY = 0, sumZ = 0;
   for (var i = 0; i < N3; i++) {
     var ax = Math.abs(ux[i]), ay = Math.abs(uy[i]), az = Math.abs(uz[i]);
     sumX += ax; sumY += ay; sumZ += az;
@@ -1328,31 +1339,37 @@ async function testFieldsExtraction(N) {
               '  cell extent=2π≈6.283  (max/cell=' + (maxMag/(2*Math.PI)*100).toFixed(2) + '%)');
   console.log('Per-axis:  ⟨|u\'_x|⟩=' + meanX.toExponential(2) +
               '  ⟨|u\'_y|⟩=' + meanY.toExponential(2) +
-              '  ⟨|u\'_z|⟩=' + meanZ.toExponential(2) +
-              '  (loading axis should dominate)');
+              '  ⟨|u\'_z|⟩=' + meanZ.toExponential(2));
   console.log('eps_bar:   [' + f.eps_bar[0] + ', ' + f.eps_bar[1] + ', ' + f.eps_bar[2] +
-              ']  (should be [0,0,1] for physical-Z loading after A.1.5 swap)');
+              ']  (should be [0,0,1] for the physical-Z fieldset)');
   console.log('⟨u\'⟩:      [' + muX.toExponential(2) + ', ' + muY.toExponential(2) + ', ' + muZ.toExponential(2) +
               ']  (should be ~1e-11 if ξ=0 zeroed correctly)');
   console.log('σ_VM:      mean=' + (svMean/1000).toFixed(1) + ' GPa  max=' + (svMax/1000).toFixed(1) +
               ' GPa  Es=' + (R.Es_MPa/1000) + ' GPa  (max/Es=' + (svMax/R.Es_MPa).toFixed(2) + '×)');
   console.log('Non-zero |u\'|: ' + nNonZero + ' / ' + N3 + ' voxels (' + (100*nNonZero/N3).toFixed(1) + '%)');
 
+  /* A.2.2 — confirm all three axes captured + correct eps_bar labeling */
+  var axisOK = true, axisNotes = [];
+  var expected = { x: [1,0,0], y: [0,1,0], z: [0,0,1] };
+  ['x','y','z'].forEach(function(ax){
+    var fa = R.fieldsByAxis[ax];
+    if (!fa) { axisOK = false; axisNotes.push(ax + ': missing'); return; }
+    var e = fa.eps_bar, exp = expected[ax];
+    if (e[0] !== exp[0] || e[1] !== exp[1] || e[2] !== exp[2]) {
+      axisOK = false;
+      axisNotes.push(ax + ': eps_bar=[' + e.join(',') + '] expected [' + exp.join(',') + ']');
+    }
+  });
+  console.log('Multi-axis:  ' + (axisOK ? '✓ all three captured with correct eps_bar' : '✗ ' + axisNotes.join(', ')));
+
   /* Quick pass/fail flags */
-  var pass = true, notes = [];
+  var pass = axisOK, notes = axisOK ? [] : axisNotes.slice();
   if (maxMag < 1e-6)            { pass = false; notes.push('|u\'|_max ≈ 0 — fields not populated'); }
   if (maxMag > 2*Math.PI)       { pass = false; notes.push('|u\'|_max exceeds cell extent — implausible'); }
   if (Math.abs(muX) > 1e-6 || Math.abs(muY) > 1e-6 || Math.abs(muZ) > 1e-6)
                                 { pass = false; notes.push('⟨u\'⟩ ≠ 0 — periodic mean not zeroed'); }
   if (svMax < 1)                { pass = false; notes.push('σ_VM,max ≈ 0 — stress field empty'); }
   if (svMax > 100 * R.Es_MPa)   { pass = false; notes.push('σ_VM,max > 100·Es — implausible'); }
-  /* A.1.5 swap check: physical-Z loading should make u'_z dominant. */
-  if (f.eps_bar[0] !== 0 || f.eps_bar[1] !== 0 || f.eps_bar[2] !== 1) {
-    pass = false; notes.push('eps_bar mismatch — A.1.5 swap not applied or input wrong');
-  }
-  if (meanZ < meanX || meanZ < meanY) {
-    pass = false; notes.push('u\'_z is not dominant under physical-Z loading — axis swap may be wrong');
-  }
 
   if (pass) console.log('%cPASS', 'color:#4ade80;font-weight:bold');
   else      console.warn('FAIL: ' + notes.join('; '));

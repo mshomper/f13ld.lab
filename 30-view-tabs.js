@@ -7,7 +7,8 @@
 
 var VIEW_STATE = {
   mode: 'geom',                            // current view mode
-  deformAmps: { /* designId: 0..1 */ }     // per-design deformation amplitude
+  deformAmps: { /* designId: 0..1 */ },    // per-design deformation amplitude
+  loadAxis:   { /* designId: 'x'|'y'|'z' */ }  // A.2.2 — per-design active load axis
 };
 
 /* ----------------------------------------------------------
@@ -52,4 +53,22 @@ function onDeformAmpInput(designId, amp){
 function getDeformAmp(designId){
   if (VIEW_STATE.deformAmps[designId] === undefined) return 0.5;
   return VIEW_STATE.deformAmps[designId];
+}
+
+/* ----------------------------------------------------------
+   A.2.2 — Per-design active load axis.  The elastic solver
+   captures fields for all three physical axes; this state
+   tracks which one each design tile is currently visualizing.
+   Default is Z (vertical compression — physiological loading
+   on orthopedic implants).
+   ---------------------------------------------------------- */
+function getLoadAxis(designId){
+  return VIEW_STATE.loadAxis[designId] || 'z';
+}
+
+/* Pure state mutation — dispatch (re-upload fields to raymarcher,
+   update toggle button visual state) lives in 40-design-grid.js's
+   load-axis click handler.  Same pattern as onDeformAmpInput. */
+function onLoadAxisClick(designId, axis){
+  VIEW_STATE.loadAxis[designId] = axis;
 }

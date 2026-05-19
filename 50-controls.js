@@ -270,9 +270,10 @@ async function runRealSweep(N){
    pipeline doesn't compute (shears, buckling, yield, thermal) get either a
    computed surrogate or a sentinel that the UI displays gracefully.
 
-   Per-voxel u'(x) and σ_VM(x) (when present in R.fields) are stashed under
-   d.results._fields for downstream consumption by the raymarcher (Push A.2 /
-   A.3 — Deformed and Stress tab visualization).  Underscore prefix flags this
+   Per-voxel u'(x) and σ_VM(x) for all three physical axes (when present
+   in R.fieldsByAxis) are stashed under d.results._fieldsByAxis for
+   downstream consumption by the raymarcher (Push A.2 / A.2.2 / A.3 —
+   Deformed and Stress tab visualization).  Underscore prefix flags this
    as internal data, not a UI-rendered metric. */
 function mapElasticToResults(R){
   var Ex = R.Ex_MPa / 1000;     /* MPa → GPa for UI */
@@ -318,9 +319,11 @@ function mapElasticToResults(R){
     iters:        R.iters,
     converged:    R.converged,
     /* Per-voxel fields for Deformed / Stress tab raymarchers (Push A.2/A.3).
-       null until the elastic solver is invoked with field capture (default
-       since A.1).  Underscore prefix = internal-only, not a UI metric. */
-    _fields:      R.fields || null
+       A.2.2 — captures all three physical axes by default.  null until the
+       elastic solver is invoked with field capture (default since A.1).
+       Underscore prefix = internal-only, not a UI metric.
+       Shape: { x: {u_prime, sigma_vm, N, eps_bar}, y: {…}, z: {…} } */
+    _fieldsByAxis: R.fieldsByAxis || null
   };
 }
 

@@ -123,9 +123,9 @@ function renderDesignGrid(){
 
      A.2 — Eligibility:
        · geom   → recipe required (always)
-       · deform → recipe AND d.results._fields required (field warp)
-       · stress → recipe AND d.results._fields required (visible same as
-                  geom in A.2; A.3 wires colormap onto σ_VM channel) */
+       · deform → recipe AND d.results._fieldsByAxis[activeAxis] required
+       · stress → recipe AND d.results._fieldsByAxis[activeAxis] required
+     A.2.2 — gating now considers the active load axis from VIEW_STATE. */
   var rmDesigns = [];   /* [{i, id}, …] */
   var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
   var needsFields = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
@@ -134,7 +134,11 @@ function renderDesignGrid(){
       var rd = LAB_STATE.designs[ri];
       var rcp = (typeof recipeForDesign === 'function') ? recipeForDesign(rd) : null;
       if (!rcp) continue;
-      if (needsFields && (!rd.results || !rd.results._fields)) continue;
+      if (needsFields) {
+        if (!rd.results || !rd.results._fieldsByAxis) continue;
+        var rdAxis = (typeof getLoadAxis === 'function') ? getLoadAxis(rd.id) : 'z';
+        if (!rd.results._fieldsByAxis[rdAxis]) continue;
+      }
       if (typeof getOrCreateRaymarcher === 'function') {
         getOrCreateRaymarcher(rd.id, rcp);
       }
@@ -218,7 +222,7 @@ function renderDesignGrid(){
         viewportInner +
         '<div class="vp-axis">+Z<br>↑ +Y<br>→ +X</div>' +
         (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
-        (showDeform ? buildDeformControl(d.id, amp) : '') +
+        (showDeform ? buildDeformControl(d.id, amp, (typeof getLoadAxis === 'function') ? getLoadAxis(d.id) : 'z') : '') +
       '</div>' +
       buildSummary(stats) +
       '</div>';
@@ -232,15 +236,19 @@ function renderDesignGrid(){
      The raymarcher needs the current view mode (gates auto-rotate +
      warp shader branch), the current amp (deform slider), and the
      captured displacement fields (uploaded once per run completion).
-     Only walk rmDesigns — designs without a raymarcher get nothing. */
+     A.2.2 — the active load axis selects which of the three captured
+     fieldsets to upload.  Only walk rmDesigns — designs without a
+     raymarcher get nothing. */
   for (var rk = 0; rk < rmDesigns.length; rk++) {
     var rkid = rmDesigns[rk].id;
     var rkrm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[rkid] : null;
     if (!rkrm || rkrm.failed) continue;
     /* Upload first, so setViewMode's effective-mode gating sees fresh data. */
     var rdesign = LAB_STATE.designs[rmDesigns[rk].i];
-    if (rdesign.results && rdesign.results._fields && rkrm.uploadFields) {
-      rkrm.uploadFields(rdesign.results._fields);
+    if (rdesign.results && rdesign.results._fieldsByAxis && rkrm.uploadFields) {
+      var rkAxis = (typeof getLoadAxis === 'function') ? getLoadAxis(rkid) : 'z';
+      var fs = rdesign.results._fieldsByAxis[rkAxis];
+      if (fs) rkrm.uploadFields(fs);
     }
     if (rkrm.setViewMode) rkrm.setViewMode(VIEW_STATE.mode);
     if (rkrm.setDeformAmp) rkrm.setDeformAmp(getDeformAmp(rkid));
@@ -278,6 +286,46 @@ function renderDesignGrid(){
       }
     });
   }
+
+  /* A.2.2 — Wire load-axis toggle buttons.  On click: update state,
+     re-upload the matching fieldset to the raymarcher, swap active-class
+     on the buttons inline (no full re-render). */
+  var axisBtns = document.querySelectorAll('.load-axis-btn');
+  for (var ab = 0; ab < axisBtns.length; ab++){
+    axisBtns[ab].addEventListener('click', function(e){
+      var btn = e.currentTarget;
+      var id   = btn.dataset.designId;
+      var axis = btn.dataset.axis;
+      if (!id || !axis) return;
+      if (typeof onLoadAxisClick === 'function') onLoadAxisClick(id, axis);
+
+      /* Find the matching design + new fieldset */
+      var design = null;
+      for (var di = 0; di < LAB_STATE.designs.length; di++){
+        if (LAB_STATE.designs[di].id === id){ design = LAB_STATE.designs[di]; break; }
+      }
+      var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
+      if (rm && !rm.failed && rm.uploadFields && design && design.results &&
+          design.results._fieldsByAxis && design.results._fieldsByAxis[axis]) {
+        rm.uploadFields(design.results._fieldsByAxis[axis]);
+      } else if (rm && !rm.failed && rm.uploadFields) {
+        /* No fields for selected axis → re-render so the empty-viewport
+           fallback shows.  Same path as the no-fields-yet pre-run case. */
+        if (typeof renderDesignGrid === 'function') renderDesignGrid();
+        return;
+      }
+
+      /* Swap visual active state across the three siblings, inline. */
+      var siblings = btn.parentNode.querySelectorAll('.load-axis-btn');
+      for (var sb = 0; sb < siblings.length; sb++){
+        var sibAxis = siblings[sb].dataset.axis;
+        var isActive = (sibAxis === axis);
+        siblings[sb].style.background = isActive ? '#c8f542' : 'transparent';
+        siblings[sb].style.borderColor = isActive ? '#c8f542' : 'rgba(255,255,255,0.18)';
+        siblings[sb].style.color = isActive ? '#0a0a0a' : 'rgba(255,255,255,0.55)';
+      }
+    });
+  }
 }
 
 /* ----------------------------------------------------------
@@ -298,8 +346,28 @@ function buildSummary(stats){
   return html;
 }
 
-function buildDeformControl(designId, amp){
+function buildDeformControl(designId, amp, axis){
+  /* A.2.2 — Load-axis toggle.  Three buttons (X/Y/Z) — clicking one
+     re-uploads the matching fieldset from d.results._fieldsByAxis
+     to the raymarcher.  Inline styles avoid touching lab.css for
+     this small addition; can be promoted to .load-axis-btn class
+     selectors during a later polish pass. */
+  function btn(ax) {
+    var active = (axis === ax);
+    var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
+               'color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; ' +
+               'padding:2px 7px; cursor:pointer; letter-spacing:0.05em; line-height:1;';
+    var on   = 'background:#c8f542; border-color:#c8f542; color:#0a0a0a;';
+    return '<button class="load-axis-btn" data-design-id="'+designId+'" data-axis="'+ax+'" ' +
+           'style="'+base + (active ? on : '') +'">'+ax.toUpperCase()+'</button>';
+  }
+  var toggleStyle = 'display:inline-flex; gap:0; margin-right:8px;';
+  /* Make sibling buttons share borders — collapse the middle button's
+     side borders so the trio reads as a segmented control. */
   return '<div class="vp-deform-control show">' +
+    '<div class="load-axis-toggle" style="'+toggleStyle+'">' +
+      btn('x') + btn('y') + btn('z') +
+    '</div>' +
     '<label>amp</label>' +
     '<input type="range" min="0" max="1" step="0.01" value="'+amp+'" data-design-id="'+designId+'" class="amp-slider">' +
     '<span class="v">×'+(amp*200).toFixed(0)+'</span>' +
