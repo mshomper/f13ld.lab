@@ -176,26 +176,30 @@ function startRun(){
         "(stub)" values and continue.  This lets the existing
         comparison UI render without crashing while clearly
         indicating the result is not real.
-     3. Otherwise, await solveDesignElastic(recipe, N) and map
-        return value into d.results schema.
+     3. Otherwise, await solveDesignElasticFull(recipe, N) and
+        map the full 6×6 effective stiffness tensor into the
+        d.results schema (E11/E22/E33, G12/G13/G23, three Poisson
+        ratios, real Zener anisotropy).
 
    Progress: one tick per design completion, plus an inner tick
    while a design is mid-solve.  Cancel honored between designs.
 
    Tabs supported by real numbers:
      ✓ Geometry (already working from raymarcher)
-     ✓ Stiffness — uses E11/zener
+     ✓ Stiffness — uses E11/zener (now real C44-derived Zener A)
      ✓ Stress — heuristic (E11-derived) via existing svg
    Tabs that get sentinel values for now (physics not yet wired):
      × Buckling      — lambda_cr, pcr_py     (stub)
      × Thermal       — kappa_z               (stub)
      × Nonlinear     — sigma_y_z, hardening  (stub)
+     × Deformed/σ_VM — _fieldsByAxis null until field-extraction
+                       lands for the 6-LC full-Voigt path
    ============================================================ */
 async function runRealSweep(N){
   var nDesigns = LAB_STATE.designs.length;
   var t0 = performance.now();
 
-  /* Make sure WebGPU is alive — solveDesignElastic requires it */
+  /* Make sure WebGPU is alive — solveDesignElasticFull requires it */
   if (typeof ensureDevice === 'function'){
     var ok = false;
     try { ok = await ensureDevice(); } catch (e) { ok = false; }
@@ -238,7 +242,7 @@ async function runRealSweep(N){
     var elasticResult = null;
     var solveErr = null;
     try {
-      elasticResult = await solveDesignElastic(recipe, N);
+      elasticResult = await solveDesignElasticFull(recipe, N);
     } catch (err){
       solveErr = err;
       console.error('[run] design ' + d.id + ' elastic solve failed:', err);
@@ -266,44 +270,41 @@ async function runRealSweep(N){
 
 
 /* mapElasticToResults — build the d.results object the comparison UI expects
-   from a solveDesignElastic return value.  Fields the elastic 3-LC normal-block
-   pipeline doesn't compute (shears, buckling, yield, thermal) get either a
-   computed surrogate or a sentinel that the UI displays gracefully.
+   from a solveDesignElasticFull return value.  Full-Voigt now provides every
+   field directly: three Young's moduli, three shear moduli, three Poisson
+   ratios, and the real Zener anisotropy ratio.  No surrogates remain in the
+   elastic block.
 
    Per-voxel u'(x) and σ_VM(x) for all three physical axes (when present
    in R.fieldsByAxis) are stashed under d.results._fieldsByAxis for
    downstream consumption by the raymarcher (Push A.2 / A.2.2 / A.3 —
    Deformed and Stress tab visualization).  Underscore prefix flags this
-   as internal data, not a UI-rendered metric. */
+   as internal data, not a UI-rendered metric.  Full-Voigt field extraction
+   for the 6 LCs lands in a later push; until then R.fieldsByAxis is null
+   and Deformed/Stress tabs degrade to "(stub)" gracefully.
+
+   Other physics blocks (buckling, yield, hardening, thermal) remain stubbed
+   until their respective solvers are wired in. */
 function mapElasticToResults(R){
-  var Ex = R.Ex_MPa / 1000;     /* MPa → GPa for UI */
-  var Ey = R.Ey_MPa / 1000;
-  var Ez = R.Ez_MPa / 1000;
+  var Ex  = R.Ex_MPa  / 1000;     /* MPa → GPa for UI */
+  var Ey  = R.Ey_MPa  / 1000;
+  var Ez  = R.Ez_MPa  / 1000;
+  var Gxy = R.Gxy_MPa / 1000;
+  var Gxz = R.Gxz_MPa / 1000;
+  var Gyz = R.Gyz_MPa / 1000;
 
-  /* Anisotropy ratio — true Zener needs C44; we don't have shear LCs.  Use
-     diagonal-Young anisotropy as a labeled surrogate.  Values near 1.0 → 
-     near-isotropic; values >>1 → anisotropic.  This matches user intuition
-     for the existing UI's "0.91 near-isotropic / 1.34 diagonal dominant" copy. */
-  var Emin = Math.min(Ex, Ey, Ez);
-  var Emax = Math.max(Ex, Ey, Ez);
-  var aniso = (Emin > 1e-6) ? (Emax / Emin) : 1.0;
-
-  /* Poisson surrogate from compliance off-diagonals.  C_eff is the 3×3
-     normal block; full Poisson would need the inverted compliance.  Use
-     the recipe nu as a fallback — keeps the UI populated without lying
-     about precision. */
-  var nu_use = (R.nu != null) ? R.nu : 0.30;
+  /* Real Zener anisotropy from C11/C12/C44.  A=1 isotropic; A<1 stiff along
+     [100]; A>1 stiff along [111].  zenerDescriptor() in 40-design-grid.js
+     already maps the full range to descriptive labels. */
+  var zenerA = (R.zenerA != null && isFinite(R.zenerA)) ? R.zenerA : 1.0;
 
   return {
-    /* Real elastic results */
+    /* Real elastic results — all six moduli and three Poisson ratios from
+       the full 6×6 effective stiffness tensor. */
     E11: Ex, E22: Ey, E33: Ez,
-    zener: aniso,
-    nu12: nu_use, nu13: nu_use, nu23: nu_use,
-    /* Shear surrogate — G ≈ E / (2(1+ν)), rough-only.  Would need a
-       6-LC homogenization to compute properly. */
-    G12: Ex / (2 * (1 + nu_use)),
-    G13: Ex / (2 * (1 + nu_use)),
-    G23: Ey / (2 * (1 + nu_use)),
+    zener: zenerA,
+    nu12: R.nu_xy, nu13: R.nu_xz, nu23: R.nu_yz,
+    G12:  Gxy,     G13:  Gxz,     G23:  Gyz,
     /* Stress / Yield / Buckling / Thermal — physics not yet wired into lab.
        Use sentinel zeros so the UI's `.toFixed()` doesn't crash; the views
        will get a "(stub)" decoration via _runSource. */

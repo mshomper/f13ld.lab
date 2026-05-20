@@ -1,44 +1,41 @@
 /* ============================================================
    F13LD.lab · 17-elastic-test.js
    Verifies the GPU elastic FFT-CG solver end-to-end:
-     parseRecipe → buildVoxels → buildGamma → CG homogenization
-       → Ex / Ey / Ez
+     parseRecipe → buildVoxels → buildGammaFull → CG homogenization
+       → Ex / Ey / Ez / Gxy / Gxz / Gyz
 
-   IMPORTANT — solver method and its limits:
-     This solver mirrors F13LD.sweep's cgSolveNormal: a NORMAL-
-     STRAIN-ONLY approximation that solves three load cases (xx,
-     yy, zz) and pins local shear strains to zero everywhere.
-     Exact for the macro response of isotropic constituents under
-     pure normal loading — but for heterogeneous microstructures
-     it OVERESTIMATES effective stiffness by ~10-20% versus full
-     6-strain FFT-CG (because shear DOFs that would localize stress
-     at material boundaries are constrained out).
+   Solver method (Phase 4 push 4a):
+     This test drives solveDesignElasticFull, the full 6-strain
+     FFT-CG solver (3 normal + 3 shear load cases per design).
+     The result is the complete 6×6 effective stiffness tensor,
+     from which the three Young's moduli, three shear moduli,
+     three Poisson ratios, and the Zener anisotropy ratio are
+     derived.  This is the lab's production qualification path.
 
-     Sweep uses this approximation knowingly for design RANKING
-     across thousands of recipes.  Lab inherits it for Phase 3
-     and lifts to full 6-strain (with shear cases yz, xz, xy)
-     in Phase 4 alongside the directional stiffness surface viz.
+     F13LD.sweep continues to use the normal-strain-only solver
+     (solveDesignElastic) for fast triage across thousands of
+     recipes — that path stays available in 16-elastic-solver.js
+     for future use cases requiring sub-second feedback.  Lab is
+     the deep-compute home; the full tensor lives here.
 
-   Self-test 3 pass criteria for Schwarz P (most-tested demo):
-     1. CG converges in ≤ CG_MAXITER iters on all 3 load cases
+   Self-test pass criteria for Schwarz P (most-tested demo):
+     1. CG converges in ≤ CG_MAXITER_FULL iters on all 6 load cases
      2. Cubic isotropy: max(|Ex-Ey|, |Ey-Ez|, |Ez-Ex|)/Ex < 1.5%
         (Schwarz P has cubic point group; the solver should respect
          this near machine precision.  Verified at 0.00% in CPU
-         reference at N=8/16/32.)
-     3. Magnitude in expected NORMAL-ONLY band:
-        E_eff/Es ∈ [0.40, 0.55]  for Schwarz P solid at ρ=0.5.
-        With Ti-6Al-4V Es=110 GPa → 44–60 GPa.  CPU reference at
-        all of N=8/16/32 lands at 0.49 ± 0.001 · Es ≈ 54 GPa.
-        Same expected range here.
-     4. All Ex/Ey/Ez under the Voigt upper bound (ρ × Es = 55 GPa)
-        — sanity check that we're below the maximum-mixing limit.
-        Note: 0.49·Es leaves only 5 GPa of headroom against Voigt;
-        a tighter check would be brittle, so we use 1.05·Voigt as
-        the hard cap.
+         reference at N=16.)
+     3. Magnitude in expected FULL-VOIGT band:
+        E_eff/Es ∈ [0.25, 0.34]  for Schwarz P solid at ρ=0.5.
+        With Ti-6Al-4V Es=110 GPa → ~27.5–37 GPa.  CPU/GPU
+        cross-validated at N=16: 32.35 GPa = 0.294·Es.  Same
+        regime expected at N=64.
+     4. All Ex/Ey/Ez under 1.05 × Voigt upper bound (ρ × Es) —
+        full-Voigt removes the normal-only overshoot, so Voigt
+        is a hard ceiling with only finite-precision slop allowed.
 
    Spinodoid and Hyperuniform get a softer test (no isotropy check
    since they're directionally biased; just convergence + magnitude
-   between Reuss-like 0 and Voigt-like ρ·Es).
+   under 1.05 × Voigt).
    ============================================================ */
 
 var ELASTIC_TEST = {
@@ -74,7 +71,7 @@ async function runElasticTest() {
 
     try {
       var t0 = performance.now();
-      var res = await solveDesignElastic(recipe, N);
+      var res = await solveDesignElasticFull(recipe, N);
       var totalThis = performance.now() - t0;
       totalMs += totalThis;
 
@@ -139,50 +136,43 @@ async function runElasticTest() {
 /* ============================================================
    checkResult — apply the per-design pass criteria
 
-   Voigt-bound caveat:
-     The normal-strain-only FFT-CG solver pins all 6 strain components
-     uniform across the unit cell.  For cubic-symmetric microstructures
-     (like Schwarz P) the off-diagonal couplings symmetrize and the
-     resulting C_eff still inverts to a sensible E ≤ Voigt.  For
-     directionally anisotropic microstructures (Spinodoid, HU) the
-     constraint inflates off-diagonal C_eff entries by ~10-20%, and
-     the inverted Young's moduli OVERSHOOT the Voigt rule-of-mixtures
-     bound by a similar amount.  This is documented behavior of the
-     normal-only approximation — see PHASE_3.md "Voigt overshoot on
-     anisotropic structures" — and lifts in Phase 4 with full 6-strain.
+   Full-Voigt pass logic (Phase 4 push 4a):
+     With all six load cases solved, Voigt rule-of-mixtures
+     (ρ·Es) is a TRUE upper bound for the effective stiffness
+     of any heterogeneous microstructure — there's no normal-
+     only overshoot to allow for.  The 1.05× ceiling here is
+     just finite-precision slop (float32 GPU + finite-N FFT-CG
+     rounding); any result above that signals a real solver
+     defect (e.g. a kernel no-oping into the identity map).
 
-     We use 1.15 × Voigt as the sanity ceiling (rather than 1.05 ×)
-     so legitimate normal-only results pass while a truly broken
-     solver (e.g., the no-op pipeline failure we caught earlier,
-     which lands at exactly 1.0 × Voigt) still trips a different
-     check (CG iters, pAp signature).
+     Schwarz P at ρ=0.5 is the strictest gate: cubic symmetry
+     means Ex=Ey=Ez to machine precision, and the magnitude
+     band E/Es ∈ [0.25, 0.34] flags both under-shoot (lossy
+     solver, wrong sign convention) and over-shoot (Voigt
+     overshoot from a stray normal-only constraint leak).
    ============================================================ */
 function checkResult(id, res) {
   var ck = { ok: true, notes: [] };
 
   if (!res.valid) { ck.ok = false; ck.notes.push('stiffness matrix singular'); return ck; }
-  if (!res.converged) { ck.ok = false; ck.notes.push('CG did not converge in ' + CG_MAXITER + ' iters/load case'); }
+  if (!res.converged) { ck.ok = false; ck.notes.push('CG did not converge in ' + CG_MAXITER_FULL + ' iters/load case'); }
 
   var Ex = res.Ex_MPa, Ey = res.Ey_MPa, Ez = res.Ez_MPa;
   var Es = res.Es_MPa;
   var voigtUpper = res.rho * Es + (1 - res.rho) * Es * 1e-4;
 
-  /* Soft Voigt ceiling: 1.15× allows for normal-only overshoot on
-     anisotropic structures.  Beyond this is a real defect. */
-  if (Ex > voigtUpper * 1.15 || Ey > voigtUpper * 1.15 || Ez > voigtUpper * 1.15) {
+  /* Voigt rule-of-mixtures is a hard upper bound under full-Voigt.
+     1.05× allowance is for FP32 + finite-N rounding only. */
+  if (Ex > voigtUpper * 1.05 || Ey > voigtUpper * 1.05 || Ez > voigtUpper * 1.05) {
     ck.ok = false;
-    ck.notes.push('exceeds 1.15× Voigt ceiling = ' + (voigtUpper*1.15/1000).toFixed(1) + ' GPa (real defect)');
-  } else if (Ex > voigtUpper || Ey > voigtUpper || Ez > voigtUpper) {
-    /* Note but don't fail — normal-only overshoot on anisotropic structure */
-    var maxE = Math.max(Math.max(Ex, Ey), Ez);
-    ck.notes.push('overshoots Voigt by ' + ((maxE/voigtUpper - 1)*100).toFixed(1) + '% (expected for normal-only on anisotropic structures · Phase 4 lift fixes)');
+    ck.notes.push('exceeds 1.05× Voigt ceiling = ' + (voigtUpper*1.05/1000).toFixed(1) + ' GPa (real defect under full-Voigt)');
   }
   if (Ex < 0 || Ey < 0 || Ez < 0) {
     ck.ok = false; ck.notes.push('negative stiffness — solver inverted');
   }
 
   if (id === 'schwarzP') {
-    /* Cubic isotropy — verified at 0.00% in CPU reference at N=8/16/32.
+    /* Cubic isotropy — verified at 0.00% in CPU reference at N=16.
        Allow 1.5% slop for FP32 + GPU rounding differences. */
     var emax = Math.max(Math.max(Ex, Ey), Ez);
     var emin = Math.min(Math.min(Ex, Ey), Ez);
@@ -190,15 +180,15 @@ function checkResult(id, res) {
     if (anisoFrac > 0.015) {
       ck.ok = false; ck.notes.push('isotropy broken: |max-min|/max = ' + (anisoFrac*100).toFixed(2) + '% (expected < 1.5%)');
     }
-    /* Magnitude band — normal-only FFT-CG expected E/Es ∈ [0.40, 0.55] for ρ=0.5.
-       CPU reference: 0.49 · Es ≈ 54 GPa for Es=110 GPa. */
+    /* Magnitude band — full-Voigt expected E/Es ∈ [0.25, 0.34] for ρ=0.5.
+       CPU/GPU cross-validated at N=16: 0.294 · Es ≈ 32.35 GPa. */
     var avgE = (Ex + Ey + Ez) / 3;
     var ratio = avgE / Es;
-    if (ratio < 0.40 || ratio > 0.55) {
+    if (ratio < 0.25 || ratio > 0.34) {
       ck.ok = false;
-      ck.notes.push('mean E/Es = ' + ratio.toFixed(3) + ' outside expected band [0.40, 0.55] for normal-only FFT-CG');
+      ck.notes.push('mean E/Es = ' + ratio.toFixed(3) + ' outside expected band [0.25, 0.34] for full-Voigt FFT-CG');
     } else {
-      ck.notes.push('mean E/Es = ' + ratio.toFixed(3) + ' · in band [0.40, 0.55] (normal-only ref ≈ 0.49)');
+      ck.notes.push('mean E/Es = ' + ratio.toFixed(3) + ' · in band [0.25, 0.34] (full-Voigt ref ≈ 0.294)');
     }
   }
 
@@ -221,13 +211,23 @@ function logResult(id, res, totalMs, checks) {
 
   /* Per-LC breakdown helps diagnose silent solver failures (e.g., a kernel
      that no-ops will show iters=1 with breakReason='pAp_zero' across all
-     three LCs — a fingerprint we don't want to hide in the totals). */
+     six LCs — a fingerprint we don't want to hide in the totals). */
   var lcLine = '';
-  if (res.perLC && res.perLC.length === 3) {
+  if (res.perLC && res.perLC.length === 6) {
     lcLine = '\n  per-LC:        ' + res.perLC.map(function(p){
       return p.axis + ':' + p.iters + '·' + p.breakReason;
     }).join('  ');
   }
+
+  /* Full-Voigt provides true shear moduli and Zener anisotropy — log them
+     so the smoke test surfaces the full 6×6 information at a glance. */
+  var Gxy_GPa  = (res.Gxy_MPa  != null) ? (res.Gxy_MPa  / 1000).toFixed(3) : '—';
+  var Gxz_GPa  = (res.Gxz_MPa  != null) ? (res.Gxz_MPa  / 1000).toFixed(3) : '—';
+  var Gyz_GPa  = (res.Gyz_MPa  != null) ? (res.Gyz_MPa  / 1000).toFixed(3) : '—';
+  var zenerStr = (res.zenerA   != null && isFinite(res.zenerA)) ? res.zenerA.toFixed(4) : '—';
+  var nuxy     = (res.nu_xy    != null) ? res.nu_xy.toFixed(3) : '—';
+  var nuxz     = (res.nu_xz    != null) ? res.nu_xz.toFixed(3) : '—';
+  var nuyz     = (res.nu_yz    != null) ? res.nu_yz.toFixed(3) : '—';
 
   console.log(
     '%c ' + (checks.ok ? '✓' : '✗') + ' ' + res.name + ' ',
@@ -237,6 +237,9 @@ function logResult(id, res, totalMs, checks) {
     '\n  Ex / Ey / Ez:  ' + (res.Ex_MPa/1000).toFixed(3) + ' / ' +
                             (res.Ey_MPa/1000).toFixed(3) + ' / ' +
                             (res.Ez_MPa/1000).toFixed(3) + ' GPa' +
+    '\n  Gxy/Gxz/Gyz:   ' + Gxy_GPa + ' / ' + Gxz_GPa + ' / ' + Gyz_GPa + ' GPa' +
+    '\n  ν_xy/xz/yz:    ' + nuxy + ' / ' + nuxz + ' / ' + nuyz +
+    '\n  Zener A:       ' + zenerStr + '   (A=1 isotropic, A<1 stiff along [100], A>1 stiff along [111])' +
     '\n  mean E:        ' + (avgE/1000).toFixed(3) + ' GPa  ' +
                             '(E/Es = ' + (avgE/res.Es_MPa).toFixed(4) + ')' +
     '\n  Voigt upper:   ' + (voigtUpper/1000).toFixed(2) + ' GPa  (ρ·Es)' +
