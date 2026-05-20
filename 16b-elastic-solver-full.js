@@ -3,10 +3,13 @@
 
    GPU full Voigt 6×6 elastic FFT-CG solver.
 
-   Parallel to 16-elastic-solver.js (which is the production
-   normal-only solver feeding the Geometry/Deformed/Stress tabs).
-   This file adds the full Voigt path for the "Stiffness ⊕" tab
-   without touching the existing rc3 solver.
+   Parallel to 16-elastic-solver.js (the rc3 normal-only solver,
+   now kept as an unused fast-triage path).  This file is the
+   production qualification path for lab as of push 4a: provides
+   the full 6×6 effective stiffness tensor (Ex/Ey/Ez/Gxy/Gxz/Gyz,
+   three Poisson ratios, real Zener anisotropy) plus per-voxel
+   u'(x) and σ_VM(x) field capture for the Deformed and Stress
+   field tabs (push 4a.1).
 
    ── Validation oracle ───────────────────────────────────
    Push 2's homogenizeFullCPU in 16a-elastic-cpu-ref-full.js
@@ -39,12 +42,25 @@
    Schwarz P has cubic symmetry so the swap is invisible there;
    it matters once we hit orthotropic structures (spinodoid etc).
 
+   ── Field extraction (push 4a.1) ────────────────────────
+   solveDesignElasticFull captures per-voxel u'(x) and σ_VM(x)
+   for the three normal physical axes by default
+   (opts.captureFieldsLCs = [0, 1, 2]).  σ_VM uses the full
+   von Mises formula including shear stress contributions
+   (which are non-zero under full-Voigt, unlike the normal-only
+   path where shears are pinned to zero).  Cost: ~30 ms at
+   N=32, ~240 ms at N=64 per captured LC.  Capture for shear
+   LCs (3/4/5) is not supported — the diagonal spectral
+   inversion for u'(x) is defined only for normal components.
+
    ── External dependencies (resolved at call time) ───────
    - WGPU.device, ensureDevice  (11-webgpu-device.js)
    - FFTPlan                    (12-fft-plan.js)
    - KERNELS                    (13-kernels.js)
    - isoC, buildVoxels,
      resolveBuildArgs           (14-rasterizer.js)
+   - _es_fft3d                  (16-elastic-solver.js — CPU FFT
+                                 reused for u'(x) spectral inversion)
    - buildGammaFull, invert6x6,
      homogenizeFullCPU          (16a-elastic-cpu-ref-full.js,
                                  for cross-validation harness)
@@ -883,10 +899,185 @@ ElasticSolverFull.prototype._readbackSigmaBar = async function() {
 
 
 /* ════════════════════════════════════════════════════════════
-   solveLoadCaseFull — one CG run for a single 6-component eps_bar.
-   Returns Promise<{ sigma:6, iters, converged, breakReason }>.
+   _readbackPair — read back a vec4-packed (n, s) field pair and
+   unpack the 6 Voigt components as separate Float32Array(N³)s.
+
+   Returns Promise<[xx, yy, zz, yz, xz, xy]>, each a Float32Array(N³)
+   in the lab's i*N²+j*N+k storage order.  Used after CG converges
+   to extract per-voxel strain or stress for field visualization.
+
+   Cost: 2× v4Size readback ≈ 2 MB at N=32, 16 MB at N=64.  Plus an
+   N³ unpack loop.  ~5-30 ms typical depending on N.
    ════════════════════════════════════════════════════════════ */
-ElasticSolverFull.prototype.solveLoadCaseFull = async function(eps_bar) {
+ElasticSolverFull.prototype._readbackPair = async function(pair) {
+  var d = this.device;
+  var V = this.v4Size;
+  var rbN = d.createBuffer({ size: V, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  var rbS = d.createBuffer({ size: V, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  var enc = d.createCommandEncoder();
+  enc.copyBufferToBuffer(pair.n, 0, rbN, 0, V);
+  enc.copyBufferToBuffer(pair.s, 0, rbS, 0, V);
+  d.queue.submit([enc.finish()]);
+  await Promise.all([rbN.mapAsync(GPUMapMode.READ), rbS.mapAsync(GPUMapMode.READ)]);
+  var aN = new Float32Array(rbN.getMappedRange().slice(0));
+  var aS = new Float32Array(rbS.getMappedRange().slice(0));
+  rbN.unmap(); rbS.unmap();
+  rbN.destroy(); rbS.destroy();
+
+  /* Unpack vec4 lanes 0/1/2 from each of the two buffers.
+     n: [xx, yy, zz, _]  ·  s: [yz, xz, xy, _] */
+  var N3 = this.N3;
+  var xx = new Float32Array(N3), yy = new Float32Array(N3), zz = new Float32Array(N3);
+  var yz = new Float32Array(N3), xz = new Float32Array(N3), xy = new Float32Array(N3);
+  for (var i = 0; i < N3; i++) {
+    var b = 4 * i;
+    xx[i] = aN[b + 0];
+    yy[i] = aN[b + 1];
+    zz[i] = aN[b + 2];
+    yz[i] = aS[b + 0];
+    xz[i] = aS[b + 1];
+    xy[i] = aS[b + 2];
+  }
+  return [xx, yy, zz, yz, xz, xy];
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   extractFieldsForLCFull — port of extractFieldsForLC from the
+   normal-only solver, adapted for the full-Voigt 6-component
+   stress and strain.
+
+   Differences from the normal-only version:
+
+   (1) σ_VM includes shear terms (full von Mises stress).  The
+       normal-only solver pins shears to zero, so its σ_VM uses
+       only the deviatoric normal differences.  Full-Voigt
+       computes shears explicitly, so they enter the σ_VM norm:
+
+         σ_VM = sqrt( 0.5 · ( (σxx−σyy)² + (σyy−σzz)² + (σzz−σxx)²
+                              + 6·(σyz² + σxz² + σxy²) ) )
+
+       Practical effect: stress hot-spots at material interfaces
+       are slightly more pronounced under full-Voigt because shear
+       localization at boundaries is now captured.
+
+   (2) u'(x) reconstruction uses only the 3 normal strain components.
+       For the 3 normal LCs (eps_bar with one of exx/eyy/ezz set to 1),
+       u'_c is reconstructed from ε'_cc via the same spectral
+       inversion as normal-only (ε'_cc / (i·ξ_c) → u'_c).  For the 3
+       shear LCs this method is not called (homogenizeFull skips
+       capture for solver-internal LCs 3/4/5).
+
+   Inputs:
+     eps_bar_6: [exx, eyy, ezz, eyz, exz, exy]  — full 6-component LC
+     sigArr_6:  [σxx, σyy, σzz, σyz, σxz, σxy]  — per-voxel stress arrays
+                (Float32Array(N³) each), already on CPU.
+
+   Returns Promise<{ u_prime: [Fx, Fy, Fz], sigma_vm: F, N, eps_bar }>
+     where eps_bar is the 3-vector of NORMAL components [exx, eyy, ezz]
+     for backward compatibility with the existing raymarcher consumer.
+   ════════════════════════════════════════════════════════════ */
+ElasticSolverFull.prototype.extractFieldsForLCFull = async function(eps_bar_6, sigArr_6) {
+  var N  = this.N;
+  var N3 = this.N3;
+
+  /* 1. Read back per-voxel strain ε (all 6 components). */
+  var epsArr = await this._readbackPair(this.eps);
+
+  /* 2. σ_VM from sigArr (already CPU-side, 6-component) — full von Mises
+        formula including shear terms. */
+  var sigma_vm = new Float32Array(N3);
+  var sxx = sigArr_6[0], syy = sigArr_6[1], szz = sigArr_6[2];
+  var syz = sigArr_6[3], sxz = sigArr_6[4], sxy = sigArr_6[5];
+  for (var i = 0; i < N3; i++) {
+    var d01 = sxx[i] - syy[i];
+    var d12 = syy[i] - szz[i];
+    var d20 = szz[i] - sxx[i];
+    var shear2 = syz[i]*syz[i] + sxz[i]*sxz[i] + sxy[i]*sxy[i];
+    sigma_vm[i] = Math.sqrt(0.5 * (d01*d01 + d12*d12 + d20*d20) + 3 * shear2);
+  }
+
+  /* 3. u'(x) per normal component via spectral inversion.  Identical math
+        to the normal-only solver — operates on the 3 normal strain
+        components only (Voigt indices 0, 1, 2). */
+  var u_prime = [new Float32Array(N3), new Float32Array(N3), new Float32Array(N3)];
+  var lineBuf = new Float64Array(2 * N);
+  var halfN = N >> 1;
+
+  for (var c = 0; c < 3; c++) {
+    var ebar = eps_bar_6[c];
+    var src  = epsArr[c];
+
+    /* Pack ε'_cc as complex (real input, imag=0). */
+    var work = new Float64Array(2 * N3);
+    for (var p = 0; p < N3; p++) {
+      work[2*p]     = src[p] - ebar;
+      work[2*p + 1] = 0;
+    }
+
+    _es_fft3d(work, N, false, lineBuf);
+
+    /* Spectral divide by 1/(i·ξ_c).
+       (re + i·im) / (i·ξ) = (im - i·re) / ξ  for real ξ. */
+    for (var iX = 0; iX < N; iX++) {
+      var kx   = (iX < halfN) ? iX : iX - N;
+      var nyqX = (iX === halfN);
+      for (var iY = 0; iY < N; iY++) {
+        var ky   = (iY < halfN) ? iY : iY - N;
+        var nyqY = (iY === halfN);
+        for (var iZ = 0; iZ < N; iZ++) {
+          var kz   = (iZ < halfN) ? iZ : iZ - N;
+          var nyqZ = (iZ === halfN);
+
+          var idx = (iX*N + iY)*N + iZ;
+          var ti  = 2 * idx;
+
+          var k_d = (c === 0) ? kx : (c === 1 ? ky : kz);
+
+          if (k_d === 0 || nyqX || nyqY || nyqZ) {
+            work[ti] = 0; work[ti+1] = 0;
+          } else {
+            var re = work[ti], im = work[ti+1];
+            var inv = 1 / k_d;
+            work[ti]   =  im * inv;
+            work[ti+1] = -re * inv;
+          }
+        }
+      }
+    }
+
+    _es_fft3d(work, N, true, lineBuf);
+
+    /* Pack real part into output. */
+    var dst = u_prime[c];
+    for (var q = 0; q < N3; q++) dst[q] = work[2*q];
+  }
+
+  return {
+    u_prime:  u_prime,
+    sigma_vm: sigma_vm,
+    N:        N,
+    eps_bar:  [eps_bar_6[0], eps_bar_6[1], eps_bar_6[2]]   /* normal components only */
+  };
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   solveLoadCaseFull — one CG run for a single 6-component eps_bar.
+
+   opts (optional):
+     { captureFields: true } — after CG converges, also extract
+        per-voxel u'(x) and σ_VM(x) by reading back the converged
+        strain and stress fields and calling extractFieldsForLCFull.
+        Only meaningful for normal LCs (solver-internal indices 0/1/2);
+        shear LCs (3/4/5) produce non-physical u'(x) under the diagonal
+        spectral inversion and should not request capture.
+
+   Returns Promise<{ sigma:6, iters, converged, breakReason, fields }>.
+     fields: null unless opts.captureFields, then
+             { u_prime: [Fx,Fy,Fz], sigma_vm: F, N, eps_bar }
+   ════════════════════════════════════════════════════════════ */
+ElasticSolverFull.prototype.solveLoadCaseFull = async function(eps_bar, opts) {
   var d = this.device;
 
   /* 1. eps = b = uniform macroscopic strain.
@@ -974,7 +1165,19 @@ ElasticSolverFull.prototype.solveLoadCaseFull = async function(eps_bar) {
   d.queue.submit([encS.finish()]);
 
   var sigma = await this._readbackSigmaBar();
-  return { sigma: sigma, iters: iters, converged: converged, breakReason: breakReason };
+
+  /* Optional per-voxel field extraction.  Done here, before any subsequent
+     LC overwrites the eps buffer.  Reads back the full 6-component stress
+     field via _readbackPair, then calls extractFieldsForLCFull which also
+     reads back the strain.  Only meaningful for normal LCs (solver-internal
+     0/1/2); the caller (homogenizeFull) guards shear LCs out of capture. */
+  var fields = null;
+  if (opts && opts.captureFields) {
+    var sigArr_6 = await this._readbackPair(this.sig);
+    fields = await this.extractFieldsForLCFull(eps_bar, sigArr_6);
+  }
+
+  return { sigma: sigma, iters: iters, converged: converged, breakReason: breakReason, fields: fields };
 };
 
 
@@ -983,18 +1186,47 @@ ElasticSolverFull.prototype.solveLoadCaseFull = async function(eps_bar) {
    plus derived Ex/Ey/Ez/Gxy/Gxz/Gyz/Poisson + Zener A.
    Coordinate convention is SOLVER-INTERNAL — the X↔Z + yz↔xy
    relabeling is applied at the solveDesignElasticFull boundary.
+
+   opts (optional):
+     { captureFieldsLCs: [0, 1, 2] } — array of SOLVER-internal LC
+        indices to capture per-voxel u'(x) and σ_VM(x) for.  Only
+        normal LCs (0=xx, 1=yy, 2=zz) are valid capture targets;
+        shear LCs (3=yz, 4=xz, 5=xy) are silently skipped because
+        the diagonal spectral inversion for u'(x) is not defined
+        for off-diagonal strain components.  Default [] (no capture).
    ════════════════════════════════════════════════════════════ */
-ElasticSolverFull.prototype.homogenizeFull = async function() {
+ElasticSolverFull.prototype.homogenizeFull = async function(opts) {
+  opts = opts || {};
+
+  /* Normalize captureFieldsLCs to an array of valid normal-LC indices */
+  var captureLCs = opts.captureFieldsLCs;
+  if (captureLCs == null) captureLCs = [];
+  if (typeof captureLCs === 'number') captureLCs = (captureLCs >= 0) ? [captureLCs] : [];
+  /* Silently filter out invalid (shear) LC indices, with one console warning */
+  var filteredCapture = [];
+  var droppedShear = false;
+  for (var ci = 0; ci < captureLCs.length; ci++) {
+    var lcIdx = captureLCs[ci];
+    if (lcIdx >= 0 && lcIdx <= 2) filteredCapture.push(lcIdx);
+    else if (lcIdx >= 3 && lcIdx <= 5) droppedShear = true;
+  }
+  if (droppedShear) {
+    console.warn('[homogenizeFull] captureFieldsLCs ignored for shear LCs (3/4/5) — u\'(x) reconstruction is defined only for normal LCs (0/1/2)');
+  }
+
   var voigtLabels = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
   var C_eff = new Float64Array(36);
   var totalIters = 0;
   var allConverged = true;
   var perLC = [];
+  var capturedByLC = {};   /* solver-LC-index → fields */
 
   for (var lc = 0; lc < 6; lc++) {
     var eps_bar = [0, 0, 0, 0, 0, 0];
     eps_bar[lc] = 1;
-    var res = await this.solveLoadCaseFull(eps_bar);
+    var lcOpts = (filteredCapture.indexOf(lc) >= 0) ? { captureFields: true } : null;
+    var res = await this.solveLoadCaseFull(eps_bar, lcOpts);
+    if (res.fields) capturedByLC[lc] = res.fields;
     totalIters += res.iters;
     if (!res.converged) allConverged = false;
     for (var P = 0; P < 6; P++) C_eff[P * 6 + lc] = res.sigma[P];
@@ -1019,7 +1251,7 @@ ElasticSolverFull.prototype.homogenizeFull = async function() {
   var S = invert6x6(C_eff);
   if (S === null) {
     return { valid: false, reject_reason: 'singular_C_eff', C_eff: C_eff, perLC: perLC,
-             totalIters: totalIters, allConverged: allConverged };
+             totalIters: totalIters, allConverged: allConverged, fieldsByLC: capturedByLC };
   }
 
   var Ex  = 1 / S[0 * 6 + 0];
@@ -1046,7 +1278,8 @@ ElasticSolverFull.prototype.homogenizeFull = async function() {
     C_eff: C_eff, S: S,
     perLC: perLC,
     totalIters: totalIters,
-    allConverged: allConverged
+    allConverged: allConverged,
+    fieldsByLC: capturedByLC
   };
 };
 
@@ -1085,6 +1318,16 @@ ElasticSolverFull.prototype.destroy = function() {
    recipe → Ex/Ey/Ez/Gxy/Gxz/Gyz with the X↔Z + yz↔xy relabel
    applied at the boundary so callers see physical-axis coordinates.
 
+   opts (optional):
+     { captureFieldsLCs: [0, 1, 2] }  — physical-axis indices (0=X,
+        1=Y, 2=Z) to capture per-voxel u'(x) and σ_VM(x) for.  Default
+        [0, 1, 2] — captures all three normal physical axes so the lab
+        raymarcher can toggle load direction without re-solving.  Pass
+        [] to skip field extraction for solver-only workflows.
+        Shear-LC capture (would need physical indices 3/4/5) is not
+        supported; the diagonal spectral inversion for u'(x) is only
+        defined for normal strain components.
+
    Returns Promise<{
      name, family, mode, rho,
      Ex_MPa, Ey_MPa, Ez_MPa,
@@ -1095,6 +1338,8 @@ ElasticSolverFull.prototype.destroy = function() {
      Es_MPa, nu (constituent),
      iters, converged, valid,
      perLC,                  // solver-internal labels — diagnostic only
+     fieldsByAxis,           // { x, y, z } in PHYSICAL coords (each
+                             //   { u_prime, sigma_vm, N, eps_bar } or null)
      tRast_ms, tGamma_ms, tCG_ms
    }>
    ════════════════════════════════════════════════════════════ */
@@ -1105,6 +1350,20 @@ async function solveDesignElasticFull(recipe, N, opts) {
   /* Coordinate swap from solver to physical:
      LC 0↔2 (xx↔zz), LC 1 (yy unchanged), LC 3↔5 (yz↔xy), LC 4 (xz unchanged) */
   var SWAP = [2, 1, 0, 5, 4, 3];
+
+  /* Normalize captureFieldsLCs to physical-axis indices, then translate
+     to solver-internal LC indices via SWAP[phys] for the homogenizeFull
+     call.  Only normal physical axes 0/1/2 are valid. */
+  var captureLCs_phys = opts.captureFieldsLCs;
+  if (captureLCs_phys == null) captureLCs_phys = [0, 1, 2];
+  if (typeof captureLCs_phys === 'number') {
+    captureLCs_phys = (captureLCs_phys >= 0) ? [captureLCs_phys] : [];
+  }
+  var captureLCs_solver = [];
+  for (var ci = 0; ci < captureLCs_phys.length; ci++) {
+    var p = captureLCs_phys[ci];
+    if (p >= 0 && p <= 2) captureLCs_solver.push(SWAP[p]);   /* solver LC = SWAP[phys] */
+  }
 
   var family = recipe.family;
   var params = KERNELS[family].parseRecipe(recipe);
@@ -1142,7 +1401,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
   solver.uploadDesign(solid, Gamma, C_s, C_v, C_0);
 
   var t2 = performance.now();
-  var hom = await solver.homogenizeFull();
+  var hom = await solver.homogenizeFull({ captureFieldsLCs: captureLCs_solver });
   var tCG = performance.now() - t2;
   solver.destroy();   /* FFT plan stays alive (cached) */
 
@@ -1185,6 +1444,30 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var C44p = C_phys[3 * 6 + 3];
   var zenerA = (C11p - C12p) > 1e-30 ? (2 * C44p) / (C11p - C12p) : NaN;
 
+  /* Build fieldsByAxis from fieldsByLC.  hom.fieldsByLC is keyed by
+     solver-internal LC indices (0/1/2 for normal LCs).  Map each
+     captured physical axis to its corresponding solver LC via SWAP,
+     then apply the X↔Z component swap inside each fieldset so u_prime
+     and eps_bar are presented in physical-axis coordinates. */
+  var fieldsByAxis = { x: null, y: null, z: null };
+  var axisName = ['x', 'y', 'z'];
+  if (hom.fieldsByLC) {
+    for (var phys = 0; phys < 3; phys++) {
+      var solverIdx = SWAP[phys];                /* 2-phys for the normal block */
+      var f = hom.fieldsByLC[solverIdx];
+      if (!f) continue;
+      /* Swap u_prime[0] ↔ u_prime[2] and eps_bar[0] ↔ eps_bar[2] so the
+         returned fieldset is in physical-axis coordinates. */
+      var tmpU = f.u_prime[0];
+      f.u_prime[0] = f.u_prime[2];
+      f.u_prime[2] = tmpU;
+      var tmpE = f.eps_bar[0];
+      f.eps_bar[0] = f.eps_bar[2];
+      f.eps_bar[2] = tmpE;
+      fieldsByAxis[axisName[phys]] = f;
+    }
+  }
+
   return {
     name:     recipe.name,
     family:   family,
@@ -1202,6 +1485,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
     iters:    hom.totalIters,
     converged: hom.allConverged,
     perLC:    hom.perLC,
+    fieldsByAxis: fieldsByAxis,    /* { x, y, z } — each { u_prime, sigma_vm, N, eps_bar } in PHYSICAL coords, or null */
     tRast_ms: tRast,
     tGamma_ms: tGamma,
     tCG_ms:   tCG
