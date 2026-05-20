@@ -190,15 +190,17 @@ function renderDesignGrid(){
        slider (stress mode uses the same warp; colormap reads on the
        deformed shape — standard FEA viz). */
     var showControls = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
-    /* A.3.1 — colorbar overlay only when stress raymarcher is mounted and
-       fields are available.  Shows the p95-clipped colormap cap (what
-       yellow saturation represents), with the true max still surfaced
-       in the per-tile readout for full transparency. */
+    /* A.3.1 / A.3.3 — colorbar overlay only when stress raymarcher is
+       mounted and fields are available.  resolveStressDisplay picks
+       per-design or shared cap + gamma based on stressNormMode. */
     var showColorbar = (VIEW_STATE.mode === 'stress' && useRM &&
                         d.results && d.results._fieldsByAxis);
-    var stressP95MPa = showColorbar
-                       ? computeStressP95AcrossAxes(d.results._fieldsByAxis)
-                       : 0;
+    var stressDisplay = showColorbar
+                        ? resolveStressDisplay(d, LAB_STATE.designs)
+                        : null;
+    var stressCapMPa = stressDisplay ? stressDisplay.cap   : 0;
+    var stressGamma  = stressDisplay ? stressDisplay.gamma : 1.0;
+    var stressMode   = stressDisplay ? stressDisplay.mode  : 'per';
     var stressMaxMPa = showColorbar
                        ? computeStressMaxAcrossAxes(d.results._fieldsByAxis)
                        : 0;
@@ -237,7 +239,7 @@ function renderDesignGrid(){
         viewportInner +
         '<div class="vp-axis">+Z<br>↑ +Y<br>→ +X</div>' +
         (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
-        (showColorbar ? buildStressColorbar(stressP95MPa) : '') +
+        (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +
         (showControls ? buildDeformControl(d.id, amp, (typeof getLoadAxis === 'function') ? getLoadAxis(d.id) : 'z') : '') +
       '</div>' +
       buildSummary(stats) +
@@ -267,10 +269,11 @@ function renderDesignGrid(){
       var rkAxis = (typeof getLoadAxis === 'function') ? getLoadAxis(rkid) : 'z';
       var fs = rdesign.results._fieldsByAxis[rkAxis];
       if (fs) {
-        /* A.3.1 — colormap normalized to p95 across all three axes for
-           bulk-visibility on long-tail σ_VM distributions. */
-        var sharedP95 = computeStressP95AcrossAxes(rdesign.results._fieldsByAxis);
-        rkrm.uploadFields(fs, sharedP95);
+        /* A.3.3 — resolve cap + gamma based on current normalization mode
+           (per-design auto or shared across designs). */
+        var sd = resolveStressDisplay(rdesign, LAB_STATE.designs);
+        rkrm.uploadFields(fs, sd.cap);
+        if (rkrm.setStressGamma) rkrm.setStressGamma(sd.gamma);
       }
     }
     if (rkrm.setViewMode) rkrm.setViewMode(VIEW_STATE.mode);
@@ -330,11 +333,10 @@ function renderDesignGrid(){
       var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
       if (rm && !rm.failed && rm.uploadFields && design && design.results &&
           design.results._fieldsByAxis && design.results._fieldsByAxis[axis]) {
-        /* A.3.1 — use shared σ_VM p95 across all three axes so the colormap
-           range stays calibrated when toggling (and bulk-visible thanks to
-           percentile clipping on the long-tail σ_VM distribution). */
-        var sharedP95 = computeStressP95AcrossAxes(design.results._fieldsByAxis);
-        rm.uploadFields(design.results._fieldsByAxis[axis], sharedP95);
+        /* A.3.3 — resolve cap + gamma based on current normalization mode. */
+        var sd2 = resolveStressDisplay(design, LAB_STATE.designs);
+        rm.uploadFields(design.results._fieldsByAxis[axis], sd2.cap);
+        if (rm.setStressGamma) rm.setStressGamma(sd2.gamma);
       } else if (rm && !rm.failed && rm.uploadFields) {
         /* No fields for selected axis → re-render so the empty-viewport
            fallback shows.  Same path as the no-fields-yet pre-run case. */
@@ -493,34 +495,37 @@ function computeStressMaxAcrossAxes(fieldsByAxis){
 
 
 /* ----------------------------------------------------------
-   A.3.1 — Compute σ_VM 95th-percentile cap for colormap
-   normalization.  σ_VM has a long-tailed distribution (sharp
-   stress concentrations at solid/void interfaces push the
-   absolute max well above the bulk), so normalizing the
-   colormap to max leaves most of the structure rendered in
-   the bottom of the viridis range.
+   A.3.3 — Compute σ_VM distribution stats across all three
+   captured axes for one design.
 
-   Standard FEA fix: clip the colormap top at the 95th
-   percentile of "significant" σ_VM voxels.  ~5% of solid
-   surface saturates to yellow (the actual concentrations);
-   the bulk gets the full color range.
+   Returns { p95, median, max, autoGamma }.
 
-   Two-pass algorithm:
-     1. Find global max across all three axes.
-     2. Filter to voxels with σ_VM > 1% of max.  Excludes void
-        (Cv = Cs · 1e-4 means void σ_VM is ~0.01-0.1% of solid
-        peak — orders of magnitude below the 1% cutoff).
-     3. Sort filtered values, return the 95th-percentile entry.
+   p95       — 95th percentile of significant voxels (excludes
+               void via 1%-of-max threshold).  Used as the
+               colormap top in per-design mode.
+   median    — 50th percentile of the same pool.  Used to
+               compute autoGamma.
+   max       — true max σ_VM across all voxels.  Surfaced in
+               the readout for honest reporting.
+   autoGamma — γ chosen so that median, after pow(t, γ) remap,
+               lands at the colormap midpoint (0.5).  Clamped
+               to [0.3, 1.0] so the remap never under-shoots
+               (heavy darkening) or over-shoots (raising 1.0
+               above 1.0 makes no visual sense).
 
-   Cost: ~30K-100K voxels per axis × 3 axes, dominant cost is
-   the sort (~20-50 ms at N=32).  Computed once per render or
-   axis-toggle, negligible vs. the ~5 s solve.
+   For sheet-TPMS-style structures with tight distributions
+   (median ≈ p95/2), autoGamma comes out near 1.0 → no
+   visual change.  For thin-wall and long-tail structures,
+   autoGamma comes out lower (0.3-0.5) and significantly
+   brightens the visible low-stress bulk.
 
-   Returns 0 if no axes have data, or the global max if no
-   voxels clear the threshold (degenerate uniform-zero case).
+   Cost: one sort of significant-voxel array (~30K-100K
+   floats), ~20-50 ms at N=32.  Replaces the separate
+   computeStressP95AcrossAxes call.
    ---------------------------------------------------------- */
-function computeStressP95AcrossAxes(fieldsByAxis){
-  if (!fieldsByAxis) return 0;
+function computeStressStatsAcrossAxes(fieldsByAxis){
+  var noData = { p95: 0, median: 0, max: 0, autoGamma: 1.0 };
+  if (!fieldsByAxis) return noData;
   var axes = ['x', 'y', 'z'];
 
   /* Pass 1: global max */
@@ -533,9 +538,9 @@ function computeStressP95AcrossAxes(fieldsByAxis){
       if (sv[j] > globalMax) globalMax = sv[j];
     }
   }
-  if (globalMax === 0) return 0;
+  if (globalMax === 0) return noData;
 
-  /* Pass 2: count significant voxels (above 1% of max) */
+  /* Pass 2: count significant voxels (>1% of max — excludes void) */
   var threshold = globalMax * 0.01;
   var nSig = 0;
   for (var i2 = 0; i2 < axes.length; i2++){
@@ -546,11 +551,11 @@ function computeStressP95AcrossAxes(fieldsByAxis){
       if (sv2[j2] > threshold) nSig++;
     }
   }
-  if (nSig === 0) return globalMax;
+  if (nSig === 0) {
+    return { p95: globalMax, median: globalMax * 0.5, max: globalMax, autoGamma: 1.0 };
+  }
 
-  /* Pass 3: collect significant values into a flat Float32Array,
-     sort numerically, return p95.  Float32Array.sort() is numeric
-     by default — no comparator needed. */
+  /* Pass 3: collect, sort, extract p95 + median */
   var significant = new Float32Array(nSig);
   var idx = 0;
   for (var i3 = 0; i3 < axes.length; i3++){
@@ -562,27 +567,145 @@ function computeStressP95AcrossAxes(fieldsByAxis){
     }
   }
   significant.sort();
+  var p95 = significant[Math.floor(nSig * 0.95)];
+  var median = significant[Math.floor(nSig * 0.50)];
 
+  /* Auto-gamma: map median to colormap midpoint (0.5).
+     γ such that pow(median/p95, γ) = 0.5  →  γ = log(0.5)/log(medianNorm). */
+  var autoGamma = 1.0;
+  if (p95 > 0) {
+    var medianNorm = median / p95;
+    if (medianNorm > 0.01 && medianNorm < 0.99) {
+      autoGamma = Math.log(0.5) / Math.log(medianNorm);
+      autoGamma = Math.max(0.3, Math.min(1.0, autoGamma));
+    }
+  }
+
+  return { p95: p95, median: median, max: globalMax, autoGamma: autoGamma };
+}
+
+
+/* A.3.3 — Compute global σ_VM p95 across ALL designs in the
+   comparison set, for shared-mode normalization.
+
+   Pools significant voxels (>1% of each design's max) from all
+   axes of all designs, then takes the 95th percentile of the
+   pooled distribution.  This is what every design's uploadFields
+   uses as its stress cap in shared mode, so "yellow" anywhere
+   maps to the same σ_VM value.
+
+   In shared mode, gamma is fixed at 1.0 — linear viridis — so
+   cross-design comparison is direct.
+
+   Returns 0 if no designs have field data yet.
+   ---------------------------------------------------------- */
+function computeGlobalStressP95(designs){
+  if (!designs || designs.length === 0) return 0;
+  var axes = ['x', 'y', 'z'];
+
+  /* Pass 1: global max across ALL designs */
+  var globalMax = 0;
+  for (var d = 0; d < designs.length; d++){
+    var fb = designs[d].results && designs[d].results._fieldsByAxis;
+    if (!fb) continue;
+    for (var i = 0; i < axes.length; i++){
+      var f = fb[axes[i]];
+      if (!f || !f.sigma_vm) continue;
+      var sv = f.sigma_vm;
+      for (var j = 0; j < sv.length; j++){
+        if (sv[j] > globalMax) globalMax = sv[j];
+      }
+    }
+  }
+  if (globalMax === 0) return 0;
+
+  /* Pass 2: count significant voxels across all designs+axes */
+  var threshold = globalMax * 0.01;
+  var nSig = 0;
+  for (var d2 = 0; d2 < designs.length; d2++){
+    var fb2 = designs[d2].results && designs[d2].results._fieldsByAxis;
+    if (!fb2) continue;
+    for (var i2 = 0; i2 < axes.length; i2++){
+      var f2 = fb2[axes[i2]];
+      if (!f2 || !f2.sigma_vm) continue;
+      var sv2 = f2.sigma_vm;
+      for (var j2 = 0; j2 < sv2.length; j2++){
+        if (sv2[j2] > threshold) nSig++;
+      }
+    }
+  }
+  if (nSig === 0) return globalMax;
+
+  /* Pass 3: collect + sort + p95 */
+  var significant = new Float32Array(nSig);
+  var idx = 0;
+  for (var d3 = 0; d3 < designs.length; d3++){
+    var fb3 = designs[d3].results && designs[d3].results._fieldsByAxis;
+    if (!fb3) continue;
+    for (var i3 = 0; i3 < axes.length; i3++){
+      var f3 = fb3[axes[i3]];
+      if (!f3 || !f3.sigma_vm) continue;
+      var sv3 = f3.sigma_vm;
+      for (var j3 = 0; j3 < sv3.length; j3++){
+        if (sv3[j3] > threshold) significant[idx++] = sv3[j3];
+      }
+    }
+  }
+  significant.sort();
   return significant[Math.floor(nSig * 0.95)];
 }
 
 
+/* A.3 / A.3.1 / A.3.3 — Resolve the (cap, gamma) pair for one design's
+   stress upload, based on the current normalization mode.
+
+   per-design mode (default):
+     cap   = p95 of this design's own σ_VM
+     gamma = auto-tuned so the design's median maps to colormap midpoint
+   shared mode:
+     cap   = global p95 across ALL designs
+     gamma = 1.0 (linear viridis for honest cross-comparison)
+
+   Returns { cap, gamma } in MPa / unitless.
+   ---------------------------------------------------------- */
+function resolveStressDisplay(design, allDesigns){
+  var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
+  if (mode === 'shared') {
+    var globalP95 = computeGlobalStressP95(allDesigns);
+    return { cap: globalP95, gamma: 1.0, mode: 'shared' };
+  }
+  /* per-design */
+  var stats = computeStressStatsAcrossAxes(design.results && design.results._fieldsByAxis);
+  return { cap: stats.p95, gamma: stats.autoGamma, mode: 'per' };
+}
+
+
+/* A.3.1 — Backward-compat wrapper around stats.p95.  Some readout code
+   still calls this directly. */
+function computeStressP95AcrossAxes(fieldsByAxis){
+  return computeStressStatsAcrossAxes(fieldsByAxis).p95;
+}
+
+
 /* ----------------------------------------------------------
-   A.3 — Build the stress-mode colorbar overlay HTML.
+   A.3 / A.3.3 — Build the stress-mode colorbar overlay HTML.
 
    Renders a small vertical bar on the right side of the
    viewport with a CSS-gradient approximation of viridis.
-   A.3.1 — the numeric top label is the σ_VM p95 (the value
-   at which the colormap saturates yellow), not the true max.
-   The "p95" suffix tells the user the colormap is clipped at
-   the 95th percentile.  True max is shown in the per-tile
-   readout below the viewport.
 
-   Inline-styled to keep the A.3 push out of lab.css; can be
-   promoted to .stress-colorbar selectors in a later polish
-   pass alongside the deform-control axis toggle.
+   capMPa  — value at the top of the colorbar (yellow saturation).
+             In per-design mode this is the design's own p95.
+             In shared mode this is the global p95 across all
+             designs.
+   gamma   — non-linear remap exponent applied in the shader
+             before the colormap lookup.  In per-design mode
+             this is auto-tuned; in shared mode it's 1.0.
+   mode    — 'per' or 'shared'.  Drives the small annotation
+             below the cap value so users know which mode they
+             are looking at and whether the colormap is linear
+             in σ_VM.
    ---------------------------------------------------------- */
-function buildStressColorbar(stressP95MPa){
+function buildStressColorbar(capMPa, gamma, mode){
   /* Viridis stops sampled at 8 anchor points for the CSS gradient. */
   var grad = 'linear-gradient(to top, ' +
              'rgb(68,1,84) 0%, rgb(72,40,120) 15%, rgb(62,73,137) 30%, ' +
@@ -602,19 +725,27 @@ function buildStressColorbar(stressP95MPa){
                      'font:9px JetBrains Mono,ui-monospace,monospace; ' +
                      'color:rgba(255,255,255,0.55); letter-spacing:0.08em; ' +
                      'text-transform:uppercase;';
-  /* Format the p95 in sensible units */
-  var p95Str;
-  if (stressP95MPa >= 1000) p95Str = (stressP95MPa/1000).toFixed(2) + ' GPa';
-  else if (stressP95MPa >= 1) p95Str = stressP95MPa.toFixed(1) + ' MPa';
-  else if (stressP95MPa > 0) p95Str = stressP95MPa.toExponential(1) + ' MPa';
-  else p95Str = '—';
-  /* "p95" annotation below the value (smaller, dimmer) tells the user
-     the colormap is percentile-clipped, not max-normalized. */
-  var p95SuffixStyle = 'display:block; font-size:8px; color:rgba(255,255,255,0.45); ' +
-                       'letter-spacing:0.08em; margin-top:1px;';
+  /* Format the cap in sensible units */
+  var capStr;
+  if (capMPa >= 1000) capStr = (capMPa/1000).toFixed(2) + ' GPa';
+  else if (capMPa >= 1) capStr = capMPa.toFixed(1) + ' MPa';
+  else if (capMPa > 0) capStr = capMPa.toExponential(1) + ' MPa';
+  else capStr = '—';
+
+  /* Suffix annotation:
+       per-design with γ<1 — "p95 γ=X.XX"  (non-linear, auto-tuned)
+       per-design with γ=1 — "p95"          (already linear naturally)
+       shared              — "global p95"   (cross-design comparable)  */
+  var suffixText;
+  if (mode === 'shared') suffixText = 'global p95';
+  else if (gamma < 0.99) suffixText = 'p95 · γ=' + gamma.toFixed(2);
+  else                   suffixText = 'p95';
+  var suffixStyle = 'display:block; font-size:8px; color:rgba(255,255,255,0.45); ' +
+                    'letter-spacing:0.08em; margin-top:1px;';
+
   return '<div class="stress-colorbar-header" style="'+headerStyle+'">σ_VM</div>' +
          '<div class="stress-colorbar" style="'+barStyle+'"></div>' +
-         '<div class="stress-colorbar-label-top" style="'+labelTopStyle+'">'+p95Str +
-           '<span style="'+p95SuffixStyle+'">p95</span></div>' +
+         '<div class="stress-colorbar-label-top" style="'+labelTopStyle+'">'+capStr +
+           '<span style="'+suffixStyle+'">'+suffixText+'</span></div>' +
          '<div class="stress-colorbar-label-bot" style="'+labelBotStyle+'">0</div>';
 }

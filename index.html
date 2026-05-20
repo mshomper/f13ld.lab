@@ -67,6 +67,20 @@
       <button class="view-tab"        data-mode="buckle"  onclick="onViewModeClick('buckle')">Buckling modes</button>
       <button class="view-tab"        data-mode="curve"   onclick="onViewModeClick('curve')">σ–ε curve</button>
     </div>
+    <!-- A.3.3 — Stress-normalization toggle (per-design auto vs shared linear).
+         Hidden in non-stress modes; toggled via onViewModeClick. -->
+    <div class="stress-norm-toggle-group" id="stressNormToggle"
+         style="display:none; align-items:center; gap:0; margin-left:12px;">
+      <span style="font:10px JetBrains Mono,ui-monospace,monospace; color:rgba(255,255,255,0.5); letter-spacing:0.08em; margin-right:6px; text-transform:uppercase;">σ_VM scale</span>
+      <button class="stress-norm-btn active" data-norm="per"
+              onclick="onStressNormToggleClick('per')"
+              title="Per-design auto-calibration. Each tile uses its own p95 cap and auto-gamma for spatial pattern discovery."
+              style="background:#c8f542; border:1px solid #c8f542; color:#0a0a0a; font:11px JetBrains Mono,ui-monospace,monospace; padding:3px 9px; cursor:pointer; letter-spacing:0.05em; line-height:1;">per</button>
+      <button class="stress-norm-btn" data-norm="shared"
+              onclick="onStressNormToggleClick('shared')"
+              title="Shared scale across designs. Global p95 cap, linear viridis. 'Yellow' means the same σ_VM everywhere — for cross-design comparison."
+              style="background:transparent; border:1px solid rgba(255,255,255,0.18); color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; padding:3px 9px; cursor:pointer; letter-spacing:0.05em; line-height:1;">shared</button>
+    </div>
     <div class="right">
       <span class="pill" id="loadedPill">3 of 3 designs loaded</span>
       <span class="pill" id="solverPill">solver idle</span>
@@ -109,8 +123,6 @@
       <a class="selftest-link" id="selftestLink" onclick="runSelfTest()">▸ Self-test FFT</a>
       <a class="selftest-link" id="rasterTestLink" onclick="runRasterizeTest()">▸ Rasterize 3 demos</a>
       <a class="selftest-link" id="elasticTestLink" onclick="runElasticTest()">▸ Run elastic · 3 demos</a>
-      <a class="selftest-link" id="cpuStokesTestLink" onclick="runCPUStokesSmokeTest()">▸ CPU Stokes ref · Schwarz P (N=16)</a>
-      <a class="selftest-link" id="gpuStokesTestLink" onclick="runGPUStokesSmokeTest()">▸ GPU Stokes · Schwarz P (N=16)</a>
     </div>
   </div>
 
@@ -132,10 +144,7 @@
 <script src="14-rasterizer.js"></script>
 <script src="15-demo-recipes.js"></script>
 <script src="16-elastic-solver.js"></script>
-<script src="18-stokes-cpu-ref.js"></script>
-<script src="19-stokes-solver.js"></script>
 <script src="20-svg-mocks.js"></script>
-<script src="21-raymarcher.js"></script>
 <script src="30-view-tabs.js"></script>
 <script src="40-design-grid.js"></script>
 <script src="50-controls.js"></script>

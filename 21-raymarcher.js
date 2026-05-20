@@ -80,6 +80,11 @@ function buildLabRaymarcherFS(stepCount) {
     'uniform float uStressUploaded;',
     'uniform highp sampler3D uStress;',
     'uniform float uStressMin; uniform float uStressMax;',
+    /* A.3.3 — gamma correction applied to normalized σ_VM before viridis.
+       In per-design mode, auto-tuned so the median lands at the colormap
+       midpoint (brightens long-tail / low-bulk distributions).
+       In shared mode, fixed at 1.0 (linear colormap for cross-comparison). */
+    'uniform float uStressGamma;',
 
     'const float H = 3.141593;',
 
@@ -261,6 +266,9 @@ function buildLabRaymarcherFS(stepCount) {
     '    vec3 pos_unstretched = pos / (vec3(1.0) + uDeformAmp * uEpsBar);',
     '    vec3 p_eval_stress = pos_unstretched - uDeformAmp * sampleDisp(pos_unstretched);',
     '    float sv = sampleStress(p_eval_stress);',
+    /* A.3.3 — gamma correction: t -> t^γ.  γ<1 brightens the low end of the
+       colormap, γ=1 is linear (used in shared mode for cross-comparison). */
+    '    sv = pow(clamp(sv, 0.0, 1.0), uStressGamma);',
     '    col = viridis(sv) * diff;',
     '  } else {',
     '    float dy = dot(n, vec3(0.0,1.0,0.0));',
@@ -405,7 +413,11 @@ function LabRaymarcher() {
        for shared-per-design normalization. */
     stressUploaded: 0,
     stressMin: 0,
-    stressMax: 1
+    stressMax: 1,
+    /* A.3.3 — gamma correction for σ_VM colormap.  1.0 = linear (default,
+       matches shared-mode behavior).  Per-design mode sets this to an
+       auto-computed value < 1 to brighten the low end. */
+    stressGamma: 1.0
   };
 
   /* A.2 — pointer/wheel state for user-controlled rotation in deform/stress modes */
@@ -466,7 +478,9 @@ LabRaymarcher.prototype._compileShader = function() {
    /* A.2.1 — macroscopic strain direction */
    'uEpsBar',
    /* A.3 — Stress colormap uniforms */
-   'uStress','uStressMin','uStressMax','uStressUploaded'].forEach(function(name){
+   'uStress','uStressMin','uStressMax','uStressUploaded',
+   /* A.3.3 — Gamma correction for non-linear σ_VM colormap remapping */
+   'uStressGamma'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -803,6 +817,18 @@ LabRaymarcher.prototype.setDeformAmp = function(v) {
   this._dirty = true;
 };
 
+/* A.3.3 — setStressGamma(γ) — push the stress colormap gamma
+   directly to the shader without triggering a grid re-render.
+   Called by 40-design-grid.js whenever the stress normalization
+   mode changes (per-design vs shared) or fields are re-uploaded
+   on axis toggle.  γ=1.0 = linear viridis; γ<1 brightens low end. */
+LabRaymarcher.prototype.setStressGamma = function(gamma) {
+  if (this.failed) return;
+  if (gamma == null || !isFinite(gamma)) gamma = 1.0;
+  this._u.stressGamma = Math.max(0.1, Math.min(2.0, gamma));
+  this._dirty = true;
+};
+
 
 /* ════════════════════════════════════════════════════════════
    A.2 — Pointer/wheel handlers for user-controlled rotation
@@ -934,6 +960,8 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uStressUploaded, S.stressUploaded);
   gl.uniform1f(u.uStressMin,      S.stressMin);
   gl.uniform1f(u.uStressMax,      S.stressMax);
+  /* A.3.3 — non-linear remap of σ_VM before viridis lookup. */
+  gl.uniform1f(u.uStressGamma,    S.stressGamma);
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
