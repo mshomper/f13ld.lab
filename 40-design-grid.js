@@ -240,7 +240,15 @@ function renderDesignGrid(){
         '<div class="vp-axis">+Z<br>↑ +Y<br>→ +X</div>' +
         (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
         (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +
-        (showControls ? buildDeformControl(d.id, amp, (typeof getLoadAxis === 'function') ? getLoadAxis(d.id) : 'z') : '') +
+        (showControls
+          ? (VIEW_STATE.mode === 'stress'
+              ? buildStressControl(d.id,
+                                   (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0,
+                                   (typeof getDispInterp === 'function') ? getDispInterp(d.id) : 'linear')
+              : buildDeformControl(d.id, amp,
+                                   (typeof getLoadAxis === 'function') ? getLoadAxis(d.id) : 'z',
+                                   (typeof getDispInterp === 'function') ? getDispInterp(d.id) : 'linear'))
+          : '') +
       '</div>' +
       buildSummary(stats) +
       '</div>';
@@ -278,6 +286,10 @@ function renderDesignGrid(){
     }
     if (rkrm.setViewMode) rkrm.setViewMode(VIEW_STATE.mode);
     if (rkrm.setDeformAmp) rkrm.setDeformAmp(getDeformAmp(rkid));
+    /* 4b — push per-design sampling kernel (linear / cubic) at mount. */
+    if (rkrm.setDispInterp) rkrm.setDispInterp(
+      (typeof getDispInterp === 'function') ? getDispInterp(rkid) : 'linear'
+    );
   }
 
   /* Pause raymarchers if we're in a non-geometry view (defensive — they
@@ -299,9 +311,9 @@ function renderDesignGrid(){
       var id = e.target.dataset.designId;
       var v = parseFloat(e.target.value);
       onDeformAmpInput(id, v);
-      /* Update the displayed ×N label inline (no DOM rebuild). */
+      /* 4b — update the displayed "% cell" label inline (no DOM rebuild). */
       var labelEl = e.target.parentNode.querySelector('.v');
-      if (labelEl) labelEl.textContent = '×' + (v*200).toFixed(0);
+      if (labelEl) labelEl.textContent = (v*20).toFixed(1) + '% cell';
       /* Push to raymarcher uniform if mounted; otherwise let the SVG
          fallback re-render handle visual update. */
       var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
@@ -309,6 +321,73 @@ function renderDesignGrid(){
         rm.setDeformAmp(v);
       } else {
         if (typeof renderDesignGrid === 'function') renderDesignGrid();
+      }
+    });
+  }
+
+  /* 4b — Wire stress saturation sliders.  Per-design multiplier on the
+     auto p95 cap.  On input: update state, re-resolve the (cap, gamma)
+     pair, re-upload σ_VM normalization to the raymarcher (cheap — the
+     R8 stress texture stays; only stressMin/stressMax/stressGamma change),
+     and update the readout/colorbar inline. */
+  var satSliders = document.querySelectorAll('.sat-slider');
+  for (var ss = 0; ss < satSliders.length; ss++){
+    satSliders[ss].addEventListener('input', function(e){
+      var id = e.target.dataset.designId;
+      var v = parseFloat(e.target.value);
+      if (typeof onStressSatInput === 'function') onStressSatInput(id, v);
+      /* Update inline label */
+      var labelEl = e.target.parentNode.querySelector('.v');
+      if (labelEl) labelEl.textContent = '×' + v.toFixed(2) + ' auto';
+      /* Find design, re-resolve display params, re-upload stress norm
+         to raymarcher.  We DON'T need to re-upload the u'/σ_VM texture
+         data — uploadFields with the same fieldset and new stressMaxOverride
+         just rebinds the R8 texture with new byte normalization, which is
+         the cheapest way to push a new cap to the shader. */
+      var design = null;
+      for (var di = 0; di < LAB_STATE.designs.length; di++){
+        if (LAB_STATE.designs[di].id === id){ design = LAB_STATE.designs[di]; break; }
+      }
+      var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
+      if (rm && !rm.failed && rm.uploadFields && design && design.results && design.results._fieldsByAxis) {
+        var axis = (typeof getLoadAxis === 'function') ? getLoadAxis(id) : 'z';
+        var fs = design.results._fieldsByAxis[axis];
+        if (fs) {
+          var sd = resolveStressDisplay(design, LAB_STATE.designs);
+          rm.uploadFields(fs, sd.cap);
+          if (rm.setStressGamma) rm.setStressGamma(sd.gamma);
+        }
+      }
+      /* Re-render to refresh the colorbar overlay (its CSS-side labels
+         show the new cap value).  This is a DOM rebuild, but stress
+         saturation isn't typically dragged at 60Hz — pulled or stepped. */
+      if (typeof renderDesignGrid === 'function') renderDesignGrid();
+    });
+  }
+
+  /* 4b — Wire interp toggle (lin / cub).  On click: update state, push
+     uDispInterp to the matching raymarcher, swap active class on the
+     pair inline (no full re-render). */
+  var interpBtns = document.querySelectorAll('.disp-interp-btn');
+  for (var ib = 0; ib < interpBtns.length; ib++){
+    interpBtns[ib].addEventListener('click', function(e){
+      var btn = e.currentTarget;
+      var id   = btn.dataset.designId;
+      var mode = btn.dataset.mode;
+      if (!id || !mode) return;
+      if (typeof onDispInterpClick === 'function') onDispInterpClick(id, mode);
+      var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
+      if (rm && !rm.failed && rm.setDispInterp) {
+        rm.setDispInterp(mode);
+      }
+      /* Swap visual active state across the pair, inline. */
+      var siblings = btn.parentNode.querySelectorAll('.disp-interp-btn');
+      for (var sb = 0; sb < siblings.length; sb++){
+        var sibMode = siblings[sb].dataset.mode;
+        var isActive = (sibMode === mode);
+        siblings[sb].style.background = isActive ? '#c8f542' : 'transparent';
+        siblings[sb].style.borderColor = isActive ? '#c8f542' : 'rgba(255,255,255,0.18)';
+        siblings[sb].style.color = isActive ? '#0a0a0a' : 'rgba(255,255,255,0.55)';
       }
     });
   }
@@ -375,7 +454,7 @@ function buildSummary(stats){
   return html;
 }
 
-function buildDeformControl(designId, amp, axis){
+function buildDeformControl(designId, amp, axis, interp){
   /* A.2.2 — Load-axis toggle.  Three buttons (X/Y/Z) — clicking one
      re-uploads the matching fieldset from d.results._fieldsByAxis
      to the raymarcher.  Inline styles avoid touching lab.css for
@@ -390,16 +469,55 @@ function buildDeformControl(designId, amp, axis){
     return '<button class="load-axis-btn" data-design-id="'+designId+'" data-axis="'+ax+'" ' +
            'style="'+base + (active ? on : '') +'">'+ax.toUpperCase()+'</button>';
   }
+  /* 4b — interp toggle: lin / cub.  Same visual language as X/Y/Z. */
+  function ibtn(mode, label) {
+    var active = (interp === mode);
+    var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
+               'color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; ' +
+               'padding:2px 7px; cursor:pointer; letter-spacing:0.05em; line-height:1;';
+    var on   = 'background:#c8f542; border-color:#c8f542; color:#0a0a0a;';
+    return '<button class="disp-interp-btn" data-design-id="'+designId+'" data-mode="'+mode+'" ' +
+           'style="'+base + (active ? on : '') +'">'+label+'</button>';
+  }
   var toggleStyle = 'display:inline-flex; gap:0; margin-right:8px;';
-  /* Make sibling buttons share borders — collapse the middle button's
-     side borders so the trio reads as a segmented control. */
+  /* 4b — slider value 0..1 now maps to "δ_max as % of cell".  Default 0.25
+     → 5% cell stretch.  Step 0.01 preserves smooth slider feel. */
   return '<div class="vp-deform-control show">' +
     '<div class="load-axis-toggle" style="'+toggleStyle+'">' +
       btn('x') + btn('y') + btn('z') +
     '</div>' +
     '<label>amp</label>' +
     '<input type="range" min="0" max="1" step="0.01" value="'+amp+'" data-design-id="'+designId+'" class="amp-slider">' +
-    '<span class="v">×'+(amp*200).toFixed(0)+'</span>' +
+    '<span class="v">'+(amp*20).toFixed(1)+'% cell</span>' +
+    '<div class="disp-interp-toggle" style="'+toggleStyle+'; margin-left:10px;">' +
+      ibtn('linear', 'lin') + ibtn('cubic', 'cub') +
+    '</div>' +
+    '</div>';
+}
+
+/* 4b — Stress mode saturation slider.  Per-design multiplier on the
+   auto p95 cap.  Range 0..2 with default 1.0 (= no change).  Value
+   reads as "× auto" so the user sees how far they're scaling from
+   the auto-tuned baseline.  Reuses the .amp-slider visual but tags
+   class .sat-slider for handler routing. */
+function buildStressControl(designId, sat, interp){
+  function ibtn(mode, label) {
+    var active = (interp === mode);
+    var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
+               'color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; ' +
+               'padding:2px 7px; cursor:pointer; letter-spacing:0.05em; line-height:1;';
+    var on   = 'background:#c8f542; border-color:#c8f542; color:#0a0a0a;';
+    return '<button class="disp-interp-btn" data-design-id="'+designId+'" data-mode="'+mode+'" ' +
+           'style="'+base + (active ? on : '') +'">'+label+'</button>';
+  }
+  var toggleStyle = 'display:inline-flex; gap:0; margin-left:10px;';
+  return '<div class="vp-deform-control show">' +
+    '<label>sat</label>' +
+    '<input type="range" min="0" max="2" step="0.05" value="'+sat+'" data-design-id="'+designId+'" class="sat-slider">' +
+    '<span class="v">×'+sat.toFixed(2)+' auto</span>' +
+    '<div class="disp-interp-toggle" style="'+toggleStyle+'">' +
+      ibtn('linear', 'lin') + ibtn('cubic', 'cub') +
+    '</div>' +
     '</div>';
 }
 
@@ -407,15 +525,22 @@ function readoutForDesign(d, mode){
   var r = d.results || {};
   var amp = getDeformAmp(d.id);
   if (mode === 'geom')   return d.title + ' · ρ=' + d.rho_rel.toFixed(2);
-  if (mode === 'deform') return 'δ_max scaled · amp ×' + (amp*200).toFixed(0);
+  /* 4b — slider value × 0.20 = δ_max as fraction of cell half-extent.
+     Independent of design's natural u'_max; cross-design comparable. */
+  if (mode === 'deform') return 'δ_max = ' + (amp*20).toFixed(1) + '% of cell';
   if (mode === 'stress' && LAB_STATE.runHasCompleted){
     /* A.3.1 — show p95 (colormap cap — what yellow saturation represents)
        and the true max separately.  Honest reporting: the colorbar tells
        you yellow = p95, the readout tells you what the actual peak σ_VM
-       was.  Units auto-format at the GPa boundary. */
+       was.  Units auto-format at the GPa boundary.
+       4b — readout shows the EFFECTIVE cap (auto p95 × user saturation
+       multiplier) and the user multiplier value.  When sat ≠ 1.0 the
+       cap is what the colorbar yellow actually represents on this design. */
     if (r._fieldsByAxis) {
       var p95 = computeStressP95AcrossAxes(r._fieldsByAxis);
       var trueMax = computeStressMaxAcrossAxes(r._fieldsByAxis);
+      var satMul = (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0;
+      var effCap = p95 * satMul;
       if (p95 > 0 || trueMax > 0) {
         function fmt(v){
           if (v >= 1000) return (v/1000).toFixed(2) + ' GPa';
@@ -423,7 +548,8 @@ function readoutForDesign(d, mode){
           if (v > 0) return v.toExponential(1) + ' MPa';
           return '—';
         }
-        return 'σ_VM p95=' + fmt(p95) + ' · max ' + fmt(trueMax) + ' · amp ×' + (amp*200).toFixed(0);
+        var satNote = (Math.abs(satMul - 1.0) < 0.01) ? '' : ' (×'+satMul.toFixed(2)+' auto)';
+        return 'σ_VM cap=' + fmt(effCap) + satNote + ' · max ' + fmt(trueMax);
       }
     }
     return 'σ_VM,max = — (not computed)';
@@ -594,7 +720,7 @@ function computeStressStatsAcrossAxes(fieldsByAxis){
    uses as its stress cap in shared mode, so "yellow" anywhere
    maps to the same σ_VM value.
 
-   In shared mode, gamma is fixed at 1.0 — linear viridis — so
+   In shared mode, gamma is fixed at 1.0 — linear cividis — so
    cross-design comparison is direct.
 
    Returns 0 if no designs have field data yet.
@@ -664,19 +790,26 @@ function computeGlobalStressP95(designs){
      gamma = auto-tuned so the design's median maps to colormap midpoint
    shared mode:
      cap   = global p95 across ALL designs
-     gamma = 1.0 (linear viridis for honest cross-comparison)
+     gamma = 1.0 (linear cividis for honest cross-comparison)
 
-   Returns { cap, gamma } in MPa / unitless.
+   4b — both modes multiply the resolved cap by the per-design user
+   saturation slider (0..2, default 1.0).  Slider value 1.0 is a no-op.
+   Sub-1 values pull the cap down (earlier saturation; high-stress regions
+   blow out); super-1 values push the cap up (de-saturation; peak stress
+   reads as mid-spectrum).
+
+   Returns { cap, gamma, mode } in MPa / unitless / string.
    ---------------------------------------------------------- */
 function resolveStressDisplay(design, allDesigns){
   var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
+  var sat  = (typeof getStressSat === 'function') ? getStressSat(design.id) : 1.0;
   if (mode === 'shared') {
     var globalP95 = computeGlobalStressP95(allDesigns);
-    return { cap: globalP95, gamma: 1.0, mode: 'shared' };
+    return { cap: globalP95 * sat, gamma: 1.0, mode: 'shared' };
   }
   /* per-design */
   var stats = computeStressStatsAcrossAxes(design.results && design.results._fieldsByAxis);
-  return { cap: stats.p95, gamma: stats.autoGamma, mode: 'per' };
+  return { cap: stats.p95 * sat, gamma: stats.autoGamma, mode: 'per' };
 }
 
 
@@ -691,7 +824,7 @@ function computeStressP95AcrossAxes(fieldsByAxis){
    A.3 / A.3.3 — Build the stress-mode colorbar overlay HTML.
 
    Renders a small vertical bar on the right side of the
-   viewport with a CSS-gradient approximation of viridis.
+   viewport with a CSS-gradient approximation of cividis.
 
    capMPa  — value at the top of the colorbar (yellow saturation).
              In per-design mode this is the design's own p95.
@@ -706,11 +839,13 @@ function computeStressP95AcrossAxes(fieldsByAxis){
              in σ_VM.
    ---------------------------------------------------------- */
 function buildStressColorbar(capMPa, gamma, mode){
-  /* Viridis stops sampled at 8 anchor points for the CSS gradient. */
+  /* 4b — Cividis stops sampled at t = i/7 from matplotlib cividis (same
+     8 anchors used by the shader cividis() function).  CSS percentages
+     match: i/7 × 100% for i = 0..7. */
   var grad = 'linear-gradient(to top, ' +
-             'rgb(68,1,84) 0%, rgb(72,40,120) 15%, rgb(62,73,137) 30%, ' +
-             'rgb(49,104,142) 45%, rgb(38,130,142) 60%, rgb(53,183,121) 75%, ' +
-             'rgb(110,206,88) 88%, rgb(253,231,37) 100%)';
+             'rgb(0,32,77) 0%, rgb(28,62,101) 14.3%, rgb(60,88,120) 28.6%, ' +
+             'rgb(91,114,124) 42.9%, rgb(127,137,117) 57.1%, rgb(170,162,99) 71.4%, ' +
+             'rgb(216,193,76) 85.7%, rgb(255,234,70) 100%)';
   var barStyle = 'position:absolute; right:14px; top:46px; bottom:68px; ' +
                  'width:8px; border-radius:1px; background:' + grad + '; ' +
                  'border:1px solid rgba(255,255,255,0.18);';

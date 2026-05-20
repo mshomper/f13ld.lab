@@ -8,8 +8,14 @@
 var VIEW_STATE = {
   mode: 'geom',                            // current view mode
   deformAmps: { /* designId: 0..1 */ },    // per-design deformation amplitude
+                                            //   4b — slider value 0..1 now maps to
+                                            //   "δ_max as fraction of cell half-extent",
+                                            //   capped at 0..20% (slider×0.20).
+                                            //   Default 0.25 → 5% cell stretch.
   loadAxis:   { /* designId: 'x'|'y'|'z' */ },  // A.2.2 — per-design active load axis
-  stressNormMode: 'per'                    // A.3.3 — 'per' (auto per-design) | 'shared' (global p95, linear)
+  stressNormMode: 'per',                   // A.3.3 — 'per' (auto per-design) | 'shared' (global p95, linear)
+  dispInterp: { /* designId: 'linear'|'cubic' */ },  // 4b — per-design u'(x)/σ_VM(x) sampling kernel
+  stressSat:  { /* designId: 0..2 */ }     // 4b — per-design saturation multiplier on auto p95 cap
 };
 
 /* ----------------------------------------------------------
@@ -59,11 +65,57 @@ function onDeformAmpInput(designId, amp){
 
 /* ----------------------------------------------------------
    Get the deformation amplitude for a given design,
-   defaulting to 0.5 if never set.
+   defaulting to 0.25 if never set.
+
+   4b — slider value now maps to "δ_max as fraction of cell
+   half-extent" via slider × 0.20.  Default 0.25 → 5% cell
+   stretch (was 0.5 → 50× raw multiplier before reframe).
+   The raymarcher uses _u'_maxNorm (computed at upload time)
+   to convert the slider value to an effective shader multiplier
+   that lands the largest displacement at exactly (slider×20)%
+   of the cell half-extent.
    ---------------------------------------------------------- */
 function getDeformAmp(designId){
-  if (VIEW_STATE.deformAmps[designId] === undefined) return 0.5;
+  if (VIEW_STATE.deformAmps[designId] === undefined) return 0.25;
   return VIEW_STATE.deformAmps[designId];
+}
+
+
+/* ----------------------------------------------------------
+   4b — Per-design displacement sampling kernel.
+     'linear'  — hardware trilinear (default; matches pre-4b behavior)
+     'cubic'   — 8-tap B-spline cubic via Sigg-Hadwiger trick (smoother
+                 on thin walls; ~8× sampling cost but on Matt's NVIDIA
+                 GPU the difference is imperceptible at lab grid sizes).
+   Applied to both u'(x) sampling (deform mode) and σ_VM(x) sampling
+   (stress mode) consistently.
+   ---------------------------------------------------------- */
+function getDispInterp(designId){
+  return VIEW_STATE.dispInterp[designId] || 'linear';
+}
+
+function onDispInterpClick(designId, mode){
+  if (mode !== 'linear' && mode !== 'cubic') return;
+  VIEW_STATE.dispInterp[designId] = mode;
+}
+
+
+/* ----------------------------------------------------------
+   4b — Per-design stress colormap saturation multiplier.
+   Slider value 0..2 with default 1.0:
+     0.5 — cap = 0.5 × auto p95   (saturates earlier; high-stress
+                                    regions blow out to yellow)
+     1.0 — cap = 1.0 × auto p95   (current behavior)
+     2.0 — cap = 2.0 × auto p95   (de-saturates; peak stress reads
+                                    as mid-spectrum)
+   ---------------------------------------------------------- */
+function getStressSat(designId){
+  if (VIEW_STATE.stressSat[designId] === undefined) return 1.0;
+  return VIEW_STATE.stressSat[designId];
+}
+
+function onStressSatInput(designId, sat){
+  VIEW_STATE.stressSat[designId] = sat;
 }
 
 /* ----------------------------------------------------------

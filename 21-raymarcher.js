@@ -71,8 +71,12 @@ function buildLabRaymarcherFS(stepCount) {
        the full displacement u(x) = ε̄·x + u'(x) rather than just u'(x).
        A.3 — uStress is an R8 3D texture of σ_VM(x) normalized to [0,1]
        via uStressMin/uStressMax.  In stress mode (uViewMode == 2), the
-       surface shading replaces the iridescent palette with viridis(σ_VM)
-       evaluated at the hit point. */
+       surface shading replaces the iridescent palette with cividis(σ_VM)
+       evaluated at the hit point.
+       4b — uDispInterp gates the displacement and stress sampling kernel:
+       0 = hardware trilinear (default), 1 = 8-tap B-spline cubic via
+       Sigg-Hadwiger trick.  Cubic smooths the warped surface on thin-wall
+       structures where amp × |u'| approaches voxel scale. */
     'uniform float uViewMode; uniform float uDispUploaded; uniform float uDeformAmp;',
     'uniform highp sampler3D uDisp;',
     'uniform vec3 uDispOffset; uniform vec3 uDispScale;',
@@ -80,11 +84,15 @@ function buildLabRaymarcherFS(stepCount) {
     'uniform float uStressUploaded;',
     'uniform highp sampler3D uStress;',
     'uniform float uStressMin; uniform float uStressMax;',
-    /* A.3.3 — gamma correction applied to normalized σ_VM before viridis.
+    /* A.3.3 — gamma correction applied to normalized σ_VM before cividis.
        In per-design mode, auto-tuned so the median lands at the colormap
        midpoint (brightens long-tail / low-bulk distributions).
        In shared mode, fixed at 1.0 (linear colormap for cross-comparison). */
     'uniform float uStressGamma;',
+    /* 4b — sampling kernel selector: 0 = trilinear, 1 = 8-tap B-spline cubic */
+    'uniform float uDispInterp;',
+    /* 4b — texture resolution for cubic kernel offset math.  Set at upload time. */
+    'uniform float uTexN;',
 
     'const float H = 3.141593;',
 
@@ -96,38 +104,154 @@ function buildLabRaymarcherFS(stepCount) {
     '  return t * (uFieldMax - uFieldMin) + uFieldMin;',
     '}',
 
-    /* sampleDisp: returns u\'(p) decoded from the RGBA8 3D texture, or
-       vec3(0) if no displacement data is uploaded.  Used by implicit()
-       for backward-warp in deformed view. */
-    'vec3 sampleDisp(vec3 p) {',
-    '  if (uDispUploaded < 0.5) return vec3(0.0);',
-    '  vec3 uvw = fract(p/(2.0*H) + 0.5);',
+    /* 4b — Sigg-Hadwiger 8-tap cubic B-spline kernel helpers.
+
+       Cubic B-spline interpolation in 1D:
+         out(x) = Σ_i B(x - i) · sample[i],   for i = floor(x)-1 .. floor(x)+2
+       where B is the cubic B-spline basis function with support on (-2, 2):
+         B(t) for t∈[0,1]:  (3|t|³ - 6t² + 4)/6
+         B(t) for t∈[1,2]:  (2-|t|)³ / 6
+       The Sigg-Hadwiger trick (Sigg & Hadwiger 2005, GPU Gems 2 ch.20)
+       exploits the GPU's hardware trilinear filter: each pair of B-spline
+       samples merges into ONE trilinear lookup at a carefully offset
+       position, weighted by the combined B-spline weight.  In 3D this
+       reduces 64 nearest-neighbor taps to 8 trilinear taps.
+
+       Inputs:
+         tc — texture coordinate in [0,1] (texel-space lookup pre-fract)
+         N  — texture resolution (e.g. 32 or 64) for the lookup grid
+       Returns the 8 weighted offsets + weights as four vec3 pairs.
+       Implementation below inlines the 8-tap directly for each sample call
+       since GLSL ES 3.00 doesn't support function-local arrays portably. */
+    'vec3 sampleDisp_linear(vec3 uvw) {',
     '  vec3 raw = texture(uDisp, uvw).rgb;',
     '  return raw * uDispScale + uDispOffset;',
     '}',
-
-    /* sampleStress: returns σ_VM(p) normalized to [0,1] from the R8 3D
-       texture, or 0.0 if no stress data is uploaded.  Used by main() in
-       stress view mode to drive the viridis colormap. */
-    'float sampleStress(vec3 p) {',
-    '  if (uStressUploaded < 0.5) return 0.0;',
-    '  vec3 uvw = fract(p/(2.0*H) + 0.5);',
+    'float sampleStress_linear(vec3 uvw) {',
     '  return texture(uStress, uvw).r;',
     '}',
 
-    /* Viridis colormap — Iñigo Quílez quintic polynomial approximation
-       of matplotlib viridis.  Perceptually uniform, colorblind-friendly,
-       the de facto standard for scientific stress/data visualization.
-       Input clamped to [0,1]; no LUT texture needed. */
-    'vec3 viridis(float x) {',
+    /* 8-tap cubic B-spline for vec3 displacement.
+       Reference: Sigg & Hadwiger, "Fast Third-Order Texture Filtering",
+       GPU Gems 2, 2005.  All scalar math is precomputed per-call; the
+       compiler unrolls the 8 trilinear lookups. */
+    'vec3 sampleDisp_cubic(vec3 uvw) {',
+    '  vec3 coord = uvw * uTexN - 0.5;',
+    '  vec3 frac  = fract(coord);',
+    '  vec3 base  = (coord - frac) + 0.5;',
+    /* B-spline weights for each axis */
+    '  vec3 w0 = (1.0/6.0) * ((1.0 - frac) * (1.0 - frac) * (1.0 - frac));',
+    '  vec3 w1 = (1.0/6.0) * (3.0*frac*frac*frac - 6.0*frac*frac + 4.0);',
+    '  vec3 w2 = (1.0/6.0) * (-3.0*frac*frac*frac + 3.0*frac*frac + 3.0*frac + 1.0);',
+    '  vec3 w3 = (1.0/6.0) * (frac * frac * frac);',
+    /* Merged paired weights and offsets (per-axis) */
+    '  vec3 g0 = w0 + w1;',
+    '  vec3 g1 = w2 + w3;',
+    '  vec3 h0 = (base - 1.0 + w1 / g0) / uTexN;',
+    '  vec3 h1 = (base + 1.0 + w3 / g1) / uTexN;',
+    /* 8 trilinear lookups, each gathering 8 neighbors via hardware filter */
+    '  vec3 t000 = texture(uDisp, vec3(h0.x, h0.y, h0.z)).rgb;',
+    '  vec3 t100 = texture(uDisp, vec3(h1.x, h0.y, h0.z)).rgb;',
+    '  vec3 t010 = texture(uDisp, vec3(h0.x, h1.y, h0.z)).rgb;',
+    '  vec3 t110 = texture(uDisp, vec3(h1.x, h1.y, h0.z)).rgb;',
+    '  vec3 t001 = texture(uDisp, vec3(h0.x, h0.y, h1.z)).rgb;',
+    '  vec3 t101 = texture(uDisp, vec3(h1.x, h0.y, h1.z)).rgb;',
+    '  vec3 t011 = texture(uDisp, vec3(h0.x, h1.y, h1.z)).rgb;',
+    '  vec3 t111 = texture(uDisp, vec3(h1.x, h1.y, h1.z)).rgb;',
+    /* Trilinear blend by merged weights */
+    '  vec3 mx00 = mix(t100, t000, g0.x);',
+    '  vec3 mx10 = mix(t110, t010, g0.x);',
+    '  vec3 mx01 = mix(t101, t001, g0.x);',
+    '  vec3 mx11 = mix(t111, t011, g0.x);',
+    '  vec3 my0  = mix(mx10, mx00, g0.y);',
+    '  vec3 my1  = mix(mx11, mx01, g0.y);',
+    '  vec3 raw  = mix(my1,  my0,  g0.z);',
+    '  return raw * uDispScale + uDispOffset;',
+    '}',
+
+    /* 8-tap cubic B-spline for scalar stress.  Same kernel structure;
+       reads from uStress and returns a single channel. */
+    'float sampleStress_cubic(vec3 uvw) {',
+    '  vec3 coord = uvw * uTexN - 0.5;',
+    '  vec3 frac  = fract(coord);',
+    '  vec3 base  = (coord - frac) + 0.5;',
+    '  vec3 w0 = (1.0/6.0) * ((1.0 - frac) * (1.0 - frac) * (1.0 - frac));',
+    '  vec3 w1 = (1.0/6.0) * (3.0*frac*frac*frac - 6.0*frac*frac + 4.0);',
+    '  vec3 w2 = (1.0/6.0) * (-3.0*frac*frac*frac + 3.0*frac*frac + 3.0*frac + 1.0);',
+    '  vec3 w3 = (1.0/6.0) * (frac * frac * frac);',
+    '  vec3 g0 = w0 + w1;',
+    '  vec3 g1 = w2 + w3;',
+    '  vec3 h0 = (base - 1.0 + w1 / g0) / uTexN;',
+    '  vec3 h1 = (base + 1.0 + w3 / g1) / uTexN;',
+    '  float t000 = texture(uStress, vec3(h0.x, h0.y, h0.z)).r;',
+    '  float t100 = texture(uStress, vec3(h1.x, h0.y, h0.z)).r;',
+    '  float t010 = texture(uStress, vec3(h0.x, h1.y, h0.z)).r;',
+    '  float t110 = texture(uStress, vec3(h1.x, h1.y, h0.z)).r;',
+    '  float t001 = texture(uStress, vec3(h0.x, h0.y, h1.z)).r;',
+    '  float t101 = texture(uStress, vec3(h1.x, h0.y, h1.z)).r;',
+    '  float t011 = texture(uStress, vec3(h0.x, h1.y, h1.z)).r;',
+    '  float t111 = texture(uStress, vec3(h1.x, h1.y, h1.z)).r;',
+    '  float mx00 = mix(t100, t000, g0.x);',
+    '  float mx10 = mix(t110, t010, g0.x);',
+    '  float mx01 = mix(t101, t001, g0.x);',
+    '  float mx11 = mix(t111, t011, g0.x);',
+    '  float my0  = mix(mx10, mx00, g0.y);',
+    '  float my1  = mix(mx11, mx01, g0.y);',
+    '  return mix(my1, my0, g0.z);',
+    '}',
+
+    /* sampleDisp: returns u\'(p) decoded from the RGBA8 3D texture, or
+       vec3(0) if no displacement data is uploaded.  Branches on uDispInterp:
+       0 = linear (1-tap), 1 = cubic B-spline (8-tap). */
+    'vec3 sampleDisp(vec3 p) {',
+    '  if (uDispUploaded < 0.5) return vec3(0.0);',
+    '  vec3 uvw = fract(p/(2.0*H) + 0.5);',
+    '  return (uDispInterp > 0.5) ? sampleDisp_cubic(uvw) : sampleDisp_linear(uvw);',
+    '}',
+
+    /* sampleStress: returns σ_VM(p) normalized to [0,1] from the R8 3D
+       texture, or 0.0 if no stress data is uploaded.  Same linear/cubic
+       branch as sampleDisp. */
+    'float sampleStress(vec3 p) {',
+    '  if (uStressUploaded < 0.5) return 0.0;',
+    '  vec3 uvw = fract(p/(2.0*H) + 0.5);',
+    '  return (uDispInterp > 0.5) ? sampleStress_cubic(uvw) : sampleStress_linear(uvw);',
+    '}',
+
+    /* Cividis colormap — Nuñez, Anderton & Renslow (2018).  Designed
+       for colorblind safety AND perceptual uniformity in monochrome
+       print — softer than viridis (no harsh yellow), better matched
+       to F13LD's matte aesthetic.  Implementation is piecewise-linear
+       interpolation across 8 anchor stops sampled directly from
+       matplotlib cividis at uniform t = 0, 1/7, 2/7, …, 1.  Exact at
+       anchor points; linear between (visible band-banding is below
+       perceptual threshold at 8 stops for cividis since the colormap
+       is already locally near-linear in RGB). */
+    'vec3 cividis(float x) {',
     '  x = clamp(x, 0.0, 1.0);',
-    '  vec4 x1 = vec4(1.0, x, x*x, x*x*x);',
-    '  vec4 x2 = x1 * x1.w * x;',
-    '  return vec3(',
-    '    dot(x1, vec4( 0.280268003, -0.143510503,  2.225793877, -14.815088879)) + dot(x2.xy, vec2( 25.212752309, -11.772589584)),',
-    '    dot(x1, vec4(-0.002117546,  1.617109353, -1.909305070,   2.701152864)) + dot(x2.xy, vec2( -1.685288385,   0.178738871)),',
-    '    dot(x1, vec4( 0.300805501,  2.614906601, -12.019139090, 28.933312018)) + dot(x2.xy, vec2(-33.491294770,  13.762053843))',
-    '  );',
+    '  float xs = x * 7.0;',
+    '  float seg = floor(xs);',
+    '  float t   = xs - seg;',
+    /* Anchor stops sampled at t = i/7 for i = 0..7 from matplotlib cividis */
+    '  vec3 c0 = vec3(0.0000, 0.1255, 0.3020);',
+    '  vec3 c1 = vec3(0.1098, 0.2431, 0.3961);',
+    '  vec3 c2 = vec3(0.2353, 0.3451, 0.4706);',
+    '  vec3 c3 = vec3(0.3569, 0.4471, 0.4863);',
+    '  vec3 c4 = vec3(0.4980, 0.5373, 0.4588);',
+    '  vec3 c5 = vec3(0.6667, 0.6353, 0.3882);',
+    '  vec3 c6 = vec3(0.8471, 0.7569, 0.2980);',
+    '  vec3 c7 = vec3(1.0000, 0.9176, 0.2745);',
+    /* Select segment via cascaded mix.  Branchless: each mix picks (a,b)
+       when seg matches its index, otherwise inherits from later mixes. */
+    '  vec3 a = c0; vec3 b = c1;',
+    '  if (seg >= 6.5)      { a = c6; b = c7; }',
+    '  else if (seg >= 5.5) { a = c5; b = c6; }',
+    '  else if (seg >= 4.5) { a = c4; b = c5; }',
+    '  else if (seg >= 3.5) { a = c3; b = c4; }',
+    '  else if (seg >= 2.5) { a = c2; b = c3; }',
+    '  else if (seg >= 1.5) { a = c1; b = c2; }',
+    '  else if (seg >= 0.5) { a = c0; b = c1; }',
+    '  return mix(a, b, t);',
     '}',
 
     /* getExtent: world-space half-extent of the bounding box per axis.
@@ -249,10 +373,14 @@ function buildLabRaymarcherFS(stepCount) {
     '  float l3fill = max(dot(n, normalize(vec3(-0.5,-1.0,-1.5))), 0.0) * 0.3;',
     '  float diff = 0.35 + max(dot(n, l1), 0.0)*0.7 + max(dot(n, l2), 0.0)*0.25 + l3fill;',
 
-    /* A.3 — Surface shading: stress mode applies viridis(σ_VM) with
+    /* A.3 — Surface shading: stress mode applies cividis(σ_VM) with
        diffuse-only lighting (no specular/rim) so the colormap reads
        clearly.  Other modes (geom, deform) keep the iridescent palette
        and full lighting.
+
+       4b — Colormap is cividis (matte navy → khaki → soft amber);
+       previously viridis (deep purple → bright yellow).  Same gamma
+       and saturation cap pipeline applies.
 
        A.3.2 — σ_VM is sampled at p_eval — the material coordinate that
        implicit() also evaluates at — so the stress value matches what
@@ -269,7 +397,7 @@ function buildLabRaymarcherFS(stepCount) {
     /* A.3.3 — gamma correction: t -> t^γ.  γ<1 brightens the low end of the
        colormap, γ=1 is linear (used in shared mode for cross-comparison). */
     '    sv = pow(clamp(sv, 0.0, 1.0), uStressGamma);',
-    '    col = viridis(sv) * diff;',
+    '    col = cividis(sv) * diff;',
     '  } else {',
     '    float dy = dot(n, vec3(0.0,1.0,0.0));',
     '    float dz = dot(n, vec3(0.0,0.0,1.0));',
@@ -399,14 +527,17 @@ function LabRaymarcher() {
     /* A.2 — deformed/stress view */
     viewMode: 0,                  /* 0=geom, 1=deform, 2=stress (effective; gated by _dispUploaded) */
     dispUploaded: 0,              /* float mirror of _dispUploaded for shader */
-    deformAmp: 0.5,                /* direct multiplier on natural u\'(x) */
+    deformAmp: 0.25,               /* 4b — slider value (0..1); maps to (slider×20)% δ_max/cell.
+                                      Default 0.25 → 5% cell stretch.  Shader multiplier is
+                                      derived as (deformAmp * 0.20 * H) / u'_maxNorm and
+                                      pushed via setDeformAmp(). */
     dispOffset: [0, 0, 0],         /* per-component (min) for RGBA8 → signed decode */
     dispScale:  [1, 1, 1],         /* per-component (max-min) */
     /* A.2.1 — macroscopic strain direction (physical-axis labels post-A.1.5).
        Populated by uploadFields from fieldsObj.eps_bar.  Defaults to zero
        so the macro-stretch term has no effect until fields are uploaded. */
     epsBar: [0, 0, 0],
-    /* A.3 — stress field for viridis colormap in stress view mode.
+    /* A.3 — stress field for cividis colormap in stress view mode.
        stressUploaded float-mirror gates the shader's colormap branch.
        stressMin pinned to 0 (colormap convention).  stressMax is in MPa;
        design-grid passes the per-design (across-axis) max into uploadFields
@@ -417,8 +548,20 @@ function LabRaymarcher() {
     /* A.3.3 — gamma correction for σ_VM colormap.  1.0 = linear (default,
        matches shared-mode behavior).  Per-design mode sets this to an
        auto-computed value < 1 to brighten the low end. */
-    stressGamma: 1.0
+    stressGamma: 1.0,
+    /* 4b — Sampling kernel: 0 = trilinear (default), 1 = 8-tap cubic B-spline.
+       Set via setDispInterp() based on per-design VIEW_STATE.dispInterp. */
+    dispInterp: 0,
+    /* 4b — Texture resolution N for cubic kernel offset math.  Set at upload
+       time to match the actual 3D texture size (the solver's grid N). */
+    texN: 32
   };
+
+  /* 4b — Maximum |u'| component encountered at upload time, in world units
+     (the same units as world position p in the shader, where the cell occupies
+     [-π, +π]³).  Used by setDeformAmp() to scale the slider value into the
+     effective shader multiplier.  Stays 0 until the first uploadFields call. */
+  this._uPrimeMaxNorm = 0;
 
   /* A.2 — pointer/wheel state for user-controlled rotation in deform/stress modes */
   this._pointerDown = false;
@@ -480,7 +623,9 @@ LabRaymarcher.prototype._compileShader = function() {
    /* A.3 — Stress colormap uniforms */
    'uStress','uStressMin','uStressMax','uStressUploaded',
    /* A.3.3 — Gamma correction for non-linear σ_VM colormap remapping */
-   'uStressGamma'].forEach(function(name){
+   'uStressGamma',
+   /* 4b — sampling kernel selector + texture resolution for cubic offsets */
+   'uDispInterp','uTexN'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -735,6 +880,22 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
   this._u.dispUploaded = 1.0;
   this._u.dispOffset = [minV[0], minV[1], minV[2]];
   this._u.dispScale  = [scl[0],  scl[1],  scl[2]];
+  /* 4b — texture resolution exposed to shader for cubic kernel offset math. */
+  this._u.texN = N;
+
+  /* 4b — Compute the maximum |u'| component across all voxels and channels.
+     setDeformAmp() uses this to scale the slider value into a shader
+     multiplier such that the most-displaced voxel moves by (slider×20)%
+     of the cell half-extent. */
+  var uMaxAbs = 0;
+  for (var cu = 0; cu < 3; cu++) {
+    var src = uP[cu];
+    for (var iu = 0; iu < N3; iu++) {
+      var av = Math.abs(src[iu]);
+      if (av > uMaxAbs) uMaxAbs = av;
+    }
+  }
+  this._uPrimeMaxNorm = uMaxAbs;
 
   if (fieldsObj.eps_bar && fieldsObj.eps_bar.length === 3) {
     this._u.epsBar = [fieldsObj.eps_bar[0], fieldsObj.eps_bar[1], fieldsObj.eps_bar[2]];
@@ -808,12 +969,63 @@ LabRaymarcher.prototype.setViewMode = function(mode) {
   this._dirty = true;
 };
 
-/* setDeformAmp(v) — pushes the amp slider value (0..1) directly to
-   the shader uniform without triggering a grid re-render.  Called
-   by the design-grid slider input handler on every input event. */
+/* setDeformAmp(sliderValue) — push the amp slider to the shader,
+   scaled into world units.
+
+   4b — slider value is interpreted as "max displacement as fraction of
+   cell half-extent", capped at 20%:
+     effective_shader_amp = (sliderValue * 0.20 * H) / u'_maxNorm
+   where H = π (cell half-extent in world units) and u'_maxNorm is the
+   largest |u'_x|, |u'_y|, or |u'_z| observed at upload time.
+
+   At sliderValue=1.0 the most-displaced voxel moves by 20% of the cell
+   half-extent.  At sliderValue=0.25 (default) it moves 5%.  Decoupling
+   the slider from the natural displacement magnitude per design means
+   every design renders at a directly comparable visual stretch.
+
+   If no fields have been uploaded yet, falls back to the legacy raw
+   multiplier (sliderValue * 200) so the geom-mode default behavior
+   (cube doesn't move) is unchanged. */
 LabRaymarcher.prototype.setDeformAmp = function(v) {
   if (this.failed) return;
-  this._u.deformAmp = v;
+  var sliderClamped = Math.max(0, Math.min(1, v));
+  var effective;
+  if (this._uPrimeMaxNorm > 1e-12) {
+    var H = Math.PI;                       /* cell half-extent in world units */
+    effective = (sliderClamped * 0.20 * H) / this._uPrimeMaxNorm;
+  } else {
+    /* No displacement uploaded yet; preserve previous "×200 raw" mapping
+       so any callers driving the slider before uploadFields still see
+       a sensible scale.  Effectively unused once fields land. */
+    effective = sliderClamped * 200;
+  }
+  this._u.deformAmp = effective;
+  this._dirty = true;
+};
+
+/* 4b — getter for effective δ_max as fraction of cell half-extent at
+   the current slider value.  Used by design-grid readout to display
+   the physically meaningful "δ_max = X% of cell" label.
+
+   Returns 0 if no fields are uploaded.  Otherwise returns the maximum
+   displacement (post-amp-scaling) as a fraction of H = π.  At the default
+   slider value 0.25 this returns 0.05 (5%).  At slider 1.0 it returns
+   0.20 (20%, the cap).  Independent of the design's natural u'_max. */
+LabRaymarcher.prototype.getDeformDeltaFraction = function(sliderValue) {
+  if (this.failed || this._uPrimeMaxNorm <= 1e-12) return 0;
+  var clamped = Math.max(0, Math.min(1, sliderValue));
+  return clamped * 0.20;
+};
+
+/* 4b — setDispInterp(mode) — push the displacement/stress sampling
+   kernel selector to the shader.
+     'linear' → 1-tap hardware trilinear (default; matches pre-4b)
+     'cubic'  → 8-tap Sigg-Hadwiger B-spline cubic (smoother on thin
+                walls; ~8× sampling cost but imperceptible on Matt's
+                hardware at lab grid sizes). */
+LabRaymarcher.prototype.setDispInterp = function(mode) {
+  if (this.failed) return;
+  this._u.dispInterp = (mode === 'cubic') ? 1.0 : 0.0;
   this._dirty = true;
 };
 
@@ -821,7 +1033,7 @@ LabRaymarcher.prototype.setDeformAmp = function(v) {
    directly to the shader without triggering a grid re-render.
    Called by 40-design-grid.js whenever the stress normalization
    mode changes (per-design vs shared) or fields are re-uploaded
-   on axis toggle.  γ=1.0 = linear viridis; γ<1 brightens low end. */
+   on axis toggle.  γ=1.0 = linear cividis; γ<1 brightens low end. */
 LabRaymarcher.prototype.setStressGamma = function(gamma) {
   if (this.failed) return;
   if (gamma == null || !isFinite(gamma)) gamma = 1.0;
@@ -960,8 +1172,11 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uStressUploaded, S.stressUploaded);
   gl.uniform1f(u.uStressMin,      S.stressMin);
   gl.uniform1f(u.uStressMax,      S.stressMax);
-  /* A.3.3 — non-linear remap of σ_VM before viridis lookup. */
+  /* A.3.3 — non-linear remap of σ_VM before cividis lookup. */
   gl.uniform1f(u.uStressGamma,    S.stressGamma);
+  /* 4b — sampling kernel selector + texture resolution */
+  gl.uniform1f(u.uDispInterp,     S.dispInterp);
+  gl.uniform1f(u.uTexN,           S.texN);
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
