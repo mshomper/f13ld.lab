@@ -1,0 +1,751 @@
+/* ============================================================
+   F13LD.lab · 22-stiffness-viz.js  (push 5)
+
+   Directional Young's modulus surface E(n̂) renderer for the
+   Stiffness ⊕ tab.  Per-design WebGL canvas displays the locus
+   of vectors r(n̂) = E(n̂) · n̂ over the unit sphere, colored by
+   E(n̂) / E_max via cividis.
+
+   ── Math ────────────────────────────────────────────────
+   For a Voigt 6×6 compliance tensor S (the inverse of the
+   effective stiffness, derived from the full-Voigt FFT-CG
+   solver in 16b-elastic-solver-full.js), the directional
+   Young's modulus along unit vector n̂ is:
+
+     1/E(n̂) = v^T · S · v
+     where v = [n_x², n_y², n_z², 2 n_y n_z, 2 n_x n_z, 2 n_x n_y]
+
+   The factor-of-2 on shear v-entries absorbs the engineering-
+   shear Voigt convention.  Verified for cubic crystal [100]
+   (1/E = S₁₁) and [111] (1/E = (S₁₁ + 2S₁₂ + 4S₄₄)/3).
+   References: Hill (1952), Cowin (1989), Ting (2005).
+
+   ── Architecture ────────────────────────────────────────
+   - Icosphere mesh with 3 subdivisions: 642 verts, 1280 tris.
+     Generated once at module load, shared VBO across all
+     designs.  Vertices are unit-length direction vectors.
+   - Vertex shader: takes the 36 entries of S as uniform array,
+     computes 1/E and E per vertex, scales position by E/E_max.
+     ~36 multiplies + 30 adds per vertex; trivial GPU load.
+   - Fragment shader: cividis colormap on E/E_max, with diffuse
+     lighting using the radial direction as the normal approx.
+   - Per-design state lives in LAB_SV_REGISTRY (parallel to
+     LAB_RM_REGISTRY).  Same IntersectionObserver pattern as
+     the raymarcher to pause off-screen tiles.
+
+   ── Normalization modes ─────────────────────────────────
+   - 'per'    — each design uses its own E_max.  Every surface
+                fills its viewport at saturation; cross-design
+                magnitude comparison via the absolute readout.
+   - 'shared' — all designs use max(E_max) across designs.  The
+                stiffest design fills its viewport; weaker ones
+                appear proportionally smaller.  Same toggle UI
+                as the stress-field tab (push 4b reused).
+
+   ── External dependencies (resolved at call time) ───────
+   - VIEW_STATE                  (30-view-tabs.js)
+   - getStressNormMode           (30-view-tabs.js — shared toggle)
+   - LAB_STATE                   (07-lab-state.js or similar)
+   ============================================================ */
+
+
+/* ════════════════════════════════════════════════════════════
+   Icosphere generator — once at module load.
+   Builds an icosahedron, subdivides 3 times, normalizes each
+   midpoint onto the unit sphere.  Returns shared Float32Array
+   positions and Uint16Array indices used by every StiffnessViz
+   instance via the same VBO.
+   ════════════════════════════════════════════════════════════ */
+function _buildIcosphere(subdivisions) {
+  var phi = (1 + Math.sqrt(5)) / 2;
+  /* Base icosahedron: 12 verts as the corners of three mutually
+     perpendicular golden rectangles. */
+  var verts = [
+    [-1,  phi,  0], [ 1,  phi,  0], [-1, -phi,  0], [ 1, -phi,  0],
+    [ 0, -1,  phi], [ 0,  1,  phi], [ 0, -1, -phi], [ 0,  1, -phi],
+    [ phi, 0, -1], [ phi, 0,  1], [-phi, 0, -1], [-phi, 0,  1]
+  ];
+  for (var i = 0; i < verts.length; i++) {
+    var v = verts[i];
+    var L = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+    v[0] /= L; v[1] /= L; v[2] /= L;
+  }
+  var faces = [
+    [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+    [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+    [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+    [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]
+  ];
+
+  var midCache = {};
+  function midpoint(a, b) {
+    var key = (a < b) ? (a + ',' + b) : (b + ',' + a);
+    if (midCache[key] !== undefined) return midCache[key];
+    var va = verts[a], vb = verts[b];
+    var mx = (va[0] + vb[0]) * 0.5,
+        my = (va[1] + vb[1]) * 0.5,
+        mz = (va[2] + vb[2]) * 0.5;
+    var L = Math.sqrt(mx*mx + my*my + mz*mz);
+    verts.push([mx / L, my / L, mz / L]);
+    var idx = verts.length - 1;
+    midCache[key] = idx;
+    return idx;
+  }
+
+  for (var s = 0; s < subdivisions; s++) {
+    var newFaces = [];
+    for (var f = 0; f < faces.length; f++) {
+      var a = faces[f][0], b = faces[f][1], c = faces[f][2];
+      var ab = midpoint(a, b);
+      var bc = midpoint(b, c);
+      var ca = midpoint(c, a);
+      newFaces.push([a,  ab, ca]);
+      newFaces.push([b,  bc, ab]);
+      newFaces.push([c,  ca, bc]);
+      newFaces.push([ab, bc, ca]);
+    }
+    faces = newFaces;
+  }
+
+  var positions = new Float32Array(verts.length * 3);
+  for (var v = 0; v < verts.length; v++) {
+    positions[v*3 + 0] = verts[v][0];
+    positions[v*3 + 1] = verts[v][1];
+    positions[v*3 + 2] = verts[v][2];
+  }
+  /* Uint16 is sufficient through ~6 subdivisions; subdivisions=3 → 642 verts. */
+  var indices = new Uint16Array(faces.length * 3);
+  for (var fi = 0; fi < faces.length; fi++) {
+    indices[fi*3 + 0] = faces[fi][0];
+    indices[fi*3 + 1] = faces[fi][1];
+    indices[fi*3 + 2] = faces[fi][2];
+  }
+  return { positions: positions, indices: indices, nVerts: verts.length, nTris: faces.length };
+}
+
+var LAB_SV_MESH = _buildIcosphere(3);   /* 642 verts, 1280 tris */
+
+
+/* ════════════════════════════════════════════════════════════
+   Shaders — GLSL ES 3.00 for WebGL2.
+
+   The vertex shader does the full E(n̂) computation per vertex,
+   reading 36 floats of S from a uniform array.  The S matrix is
+   stored row-major (S[i*6 + j]); since the solver returns a
+   symmetric tensor, the upper and lower triangles are equal.
+
+   uS:     row-major 6×6 compliance in MPa^-1
+   uEmax:  the E value used for normalization (per-design or shared)
+   uRot:   3×3 rotation matrix (auto-rotate + user drag)
+   uZoom:  scalar size multiplier for the canvas display
+   uAspect: width/height for non-square canvases
+   ════════════════════════════════════════════════════════════ */
+var LAB_SV_VS = [
+  '#version 300 es',
+  'precision highp float;',
+  'in vec3 aPos;',                /* unit direction (icosphere vert) */
+  'uniform float uS[36];',         /* row-major Voigt 6×6 compliance */
+  'uniform float uEmax;',          /* normalization (per-design or shared) */
+  'uniform mat3 uRot;',
+  'uniform float uZoom;',
+  'uniform float uAspect;',
+  'out float vERatio;',            /* E(n̂) / uEmax — for fragment colormap */
+  'out vec3 vNormal;',             /* radial direction — diffuse approx */
+
+  'void main() {',
+  /* Voigt v vector with engineering-shear factor of 2 on shear entries.
+     v = [n_x², n_y², n_z², 2 n_y n_z, 2 n_x n_z, 2 n_x n_y] */
+  '  vec3 n = aPos;',              /* aPos is already unit-length from icosphere */
+  '  float v0 = n.x*n.x;',
+  '  float v1 = n.y*n.y;',
+  '  float v2 = n.z*n.z;',
+  '  float v3 = 2.0 * n.y * n.z;',
+  '  float v4 = 2.0 * n.x * n.z;',
+  '  float v5 = 2.0 * n.x * n.y;',
+  '  float vv[6];',
+  '  vv[0]=v0; vv[1]=v1; vv[2]=v2; vv[3]=v3; vv[4]=v4; vv[5]=v5;',
+  /* inv_E = v^T S v.  S is symmetric, so we sum all 36 terms;
+     equivalent to 2× off-diagonal summation but cleaner. */
+  '  float inv_E = 0.0;',
+  '  for (int i = 0; i < 6; i++) {',
+  '    for (int j = 0; j < 6; j++) {',
+  '      inv_E += uS[i*6 + j] * vv[i] * vv[j];',
+  '    }',
+  '  }',
+  /* Clamp guards against pathological negative inv_E (would mean a
+     non-positive-definite S — solver should never produce that, but
+     belt-and-suspenders for the visual). */
+  '  float E = (inv_E > 1e-30) ? (1.0 / inv_E) : 0.0;',
+  '  float r = clamp(E / max(uEmax, 1e-30), 0.0, 1.0);',
+
+  /* Position the vertex at r(n̂)·n̂ scaled by zoom.
+     The icosphere is in local space; world transform is uRot · pos.
+     aPos is the radial direction, so the displaced vertex is r·aPos. */
+  '  vec3 pos = aPos * r;',
+  '  vec3 world = uRot * pos;',
+  /* Orthographic projection — no perspective for this small inline
+     canvas; the radial-property visualization reads cleanest with
+     a flat camera.  uAspect adjusts X to keep the surface circular. */
+  '  gl_Position = vec4(world.x * uZoom / uAspect, world.y * uZoom, world.z * 0.5, 1.0);',
+
+  '  vERatio = r;',
+  /* Approximate normal with the radial direction.  True normal would
+     require the gradient of r over the sphere (more involved).  For
+     diffuse-only shading this is visually fine — the surface gradient
+     contribution is dominated by the radial slope, and the cividis
+     colormap carries the actual data. */
+  '  vNormal = uRot * normalize(aPos);',
+  '}'
+].join('\n');
+
+
+var LAB_SV_FS = [
+  '#version 300 es',
+  'precision highp float;',
+  'in float vERatio;',
+  'in vec3 vNormal;',
+  'out vec4 fragColor;',
+
+  /* Cividis colormap — same 8-stop piecewise-linear function used by
+     21-raymarcher.js.  Duplicated here so the file can stand alone;
+     the alternative (uniform LUT texture) trades clarity for one less
+     line of duplication, not worth it. */
+  'vec3 cividis(float x) {',
+  '  x = clamp(x, 0.0, 1.0);',
+  '  float xs = x * 7.0;',
+  '  float seg = floor(xs);',
+  '  float t   = xs - seg;',
+  '  vec3 c0 = vec3(0.0000, 0.1255, 0.3020);',
+  '  vec3 c1 = vec3(0.1098, 0.2431, 0.3961);',
+  '  vec3 c2 = vec3(0.2353, 0.3451, 0.4706);',
+  '  vec3 c3 = vec3(0.3569, 0.4471, 0.4863);',
+  '  vec3 c4 = vec3(0.4980, 0.5373, 0.4588);',
+  '  vec3 c5 = vec3(0.6667, 0.6353, 0.3882);',
+  '  vec3 c6 = vec3(0.8471, 0.7569, 0.2980);',
+  '  vec3 c7 = vec3(1.0000, 0.9176, 0.2745);',
+  '  vec3 a = c0; vec3 b = c1;',
+  '  if (seg >= 6.5)      { a = c6; b = c7; }',
+  '  else if (seg >= 5.5) { a = c5; b = c6; }',
+  '  else if (seg >= 4.5) { a = c4; b = c5; }',
+  '  else if (seg >= 3.5) { a = c3; b = c4; }',
+  '  else if (seg >= 2.5) { a = c2; b = c3; }',
+  '  else if (seg >= 1.5) { a = c1; b = c2; }',
+  '  else if (seg >= 0.5) { a = c0; b = c1; }',
+  '  return mix(a, b, t);',
+  '}',
+
+  'void main() {',
+  /* Diffuse-only lighting from a fixed key light direction — matches
+     the raymarcher's "diff" formula at the lower bound (0.35 ambient
+     + 0.75 forward + bounce) so the two views share visual language. */
+  '  vec3 l1 = normalize(vec3(1.0, 1.8, 2.0));',
+  '  vec3 l2 = normalize(vec3(-0.8, -0.3, 0.6));',
+  '  vec3 n = normalize(vNormal);',
+  '  float diff = 0.35 + max(dot(n, l1), 0.0) * 0.70 + max(dot(n, l2), 0.0) * 0.25;',
+  '  vec3 col = cividis(vERatio) * diff;',
+  '  fragColor = vec4(col, 1.0);',
+  '}'
+].join('\n');
+
+
+/* ════════════════════════════════════════════════════════════
+   StiffnessViz class — one canvas per design.
+
+   Lifecycle mirrors LabRaymarcher:
+     - Constructor sets up canvas, GL context, compiled program,
+       cached uniform locations, default state.
+     - uploadDesign(S_mpa, rho) loads the 6×6 compliance, computes
+       per-design E_max via 642-vertex CPU sample, computes
+       E_min and anisotropy ratio for the readout.
+     - setEmaxGlobal(E) overrides the per-design Emax (used in
+       shared-normalization mode).
+     - setActive(b) gates the animation loop (IntersectionObserver).
+     - destroy() releases GL resources.
+   ════════════════════════════════════════════════════════════ */
+function StiffnessViz() {
+  this.canvas = document.createElement('canvas');
+  this.canvas.style.width = '100%';
+  this.canvas.style.height = '100%';
+  this.canvas.style.display = 'block';
+  this.canvas.style.touchAction = 'none';
+
+  this.gl = this.canvas.getContext('webgl2', { antialias: true, alpha: false });
+  this.failed = !this.gl;
+  if (this.failed) { return; }
+
+  this._prog       = null;
+  this._uloc       = {};
+  this._vboPos     = null;
+  this._iboTris    = null;
+  this._meshUploaded = false;
+
+  /* Per-design state */
+  this._S        = new Float32Array(36);    /* row-major Voigt 6×6 compliance, MPa^-1 */
+  this._stats    = { E_max: 0, E_min: 0, aniso: 1, hasData: false };
+  this._EmaxUse  = 1;                        /* what the shader uses (per or shared) */
+
+  /* Render state */
+  this._active     = false;
+  this._dirty      = true;
+  this._rotY       = 0;
+  this._rotX       = 0.3;                    /* slight tilt — same default as raymarcher */
+  this._lastTickMs = 0;
+  this._u = {
+    zoom:    1.6,                            /* slight padding inside the viewport */
+    aspect:  1.0                             /* updated per-frame from canvas size */
+  };
+
+  /* Pointer interaction state — same conventions as raymarcher */
+  this._pointerDown   = false;
+  this._lastPointerX  = 0;
+  this._lastPointerY  = 0;
+
+  this._setupGL();
+  if (!this._compileShader())  { this.failed = true; return; }
+  this._uploadMesh();
+  this._attachInteractionHandlers();
+}
+
+StiffnessViz.prototype._setupGL = function() {
+  var gl = this.gl;
+  gl.clearColor(0, 0, 0, 1);
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+  gl.frontFace(gl.CCW);
+};
+
+StiffnessViz.prototype._mkShader = function(type, src) {
+  var gl = this.gl;
+  var sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    console.error('[StiffnessViz] shader compile failed:\n' + gl.getShaderInfoLog(sh));
+    gl.deleteShader(sh);
+    return null;
+  }
+  return sh;
+};
+
+StiffnessViz.prototype._compileShader = function() {
+  var gl = this.gl;
+  var vs = this._mkShader(gl.VERTEX_SHADER,   LAB_SV_VS);
+  var fs = this._mkShader(gl.FRAGMENT_SHADER, LAB_SV_FS);
+  if (!vs || !fs) return false;
+  var prg = gl.createProgram();
+  gl.attachShader(prg, vs);
+  gl.attachShader(prg, fs);
+  gl.linkProgram(prg);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(prg, gl.LINK_STATUS)) {
+    console.error('[StiffnessViz] program link failed:\n' + gl.getProgramInfoLog(prg));
+    return false;
+  }
+  this._prog = prg;
+  /* Cache uniform locations.  uS is an array — getUniformLocation('uS')
+     returns the location of element 0; subsequent elements are at
+     ['uS[1]', 'uS[2]', …].  We bind via uniform1fv with the whole array. */
+  var L = {};
+  ['uS[0]','uEmax','uRot','uZoom','uAspect'].forEach(function(name){
+    L[name] = gl.getUniformLocation(prg, name);
+  });
+  this._uloc = L;
+  return true;
+};
+
+StiffnessViz.prototype._uploadMesh = function() {
+  var gl = this.gl;
+  this._vboPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, this._vboPos);
+  gl.bufferData(gl.ARRAY_BUFFER, LAB_SV_MESH.positions, gl.STATIC_DRAW);
+  this._iboTris = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this._iboTris);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, LAB_SV_MESH.indices, gl.STATIC_DRAW);
+  /* Bind aPos attribute */
+  gl.useProgram(this._prog);
+  var posLoc = gl.getAttribLocation(this._prog, 'aPos');
+  gl.bindBuffer(gl.ARRAY_BUFFER, this._vboPos);
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+  this._meshUploaded = true;
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   uploadDesign(S_mpa, rho)
+     S_mpa : Float64Array(36) or Array(36) — row-major Voigt 6×6
+             compliance in MPa^-1 from solveDesignElasticFull.
+     rho   : volume fraction (unused for math; here for future
+             metric overlays).
+   Computes per-design E_max, E_min, and anisotropy ratio by
+   evaluating E(n̂) at all 642 icosphere vertices.  Stores S
+   coefficients and stats for the shader and readout.
+   ════════════════════════════════════════════════════════════ */
+StiffnessViz.prototype.uploadDesign = function(S_mpa /*, rho */) {
+  if (this.failed) return;
+  if (!S_mpa || S_mpa.length !== 36) {
+    this._stats = { E_max: 0, E_min: 0, aniso: 1, hasData: false };
+    this._dirty = true;
+    return;
+  }
+
+  /* Convert to Float32Array for the GL uniform.  Even if input is
+     already Float32, .set() handles it cleanly. */
+  for (var k = 0; k < 36; k++) this._S[k] = S_mpa[k];
+
+  /* Sample E(n̂) at every icosphere vertex to find E_max / E_min.
+     Same math as the vertex shader, mirrored on the CPU. */
+  var positions = LAB_SV_MESH.positions;
+  var nV        = LAB_SV_MESH.nVerts;
+  var Emax = -Infinity, Emin = Infinity;
+  for (var vi = 0; vi < nV; vi++) {
+    var nx = positions[vi*3 + 0];
+    var ny = positions[vi*3 + 1];
+    var nz = positions[vi*3 + 2];
+    var v0 = nx*nx,        v1 = ny*ny,        v2 = nz*nz;
+    var v3 = 2.0 * ny*nz,  v4 = 2.0 * nx*nz,  v5 = 2.0 * nx*ny;
+    var vv = [v0, v1, v2, v3, v4, v5];
+    var inv_E = 0;
+    for (var i = 0; i < 6; i++) {
+      for (var j = 0; j < 6; j++) {
+        inv_E += S_mpa[i*6 + j] * vv[i] * vv[j];
+      }
+    }
+    if (inv_E > 1e-30) {
+      var E = 1.0 / inv_E;
+      if (E > Emax) Emax = E;
+      if (E < Emin) Emin = E;
+    }
+  }
+  if (!isFinite(Emax) || Emax <= 0) {
+    this._stats = { E_max: 0, E_min: 0, aniso: 1, hasData: false };
+  } else {
+    this._stats = {
+      E_max: Emax,
+      E_min: Emin,
+      aniso: (Emin > 1e-30) ? (Emax / Emin) : Infinity,
+      hasData: true
+    };
+  }
+  /* Default to per-design normalization unless overridden via setEmaxGlobal */
+  this._EmaxUse = this._stats.E_max || 1;
+  this._dirty = true;
+};
+
+/* setEmaxGlobal(E) — override per-design Emax with a shared value.
+   Used in 'shared' normalization mode to make all designs render
+   on the same scale.  Pass null/undefined to revert to per-design. */
+StiffnessViz.prototype.setEmaxGlobal = function(E) {
+  if (this.failed) return;
+  if (E == null || !isFinite(E) || E <= 0) {
+    this._EmaxUse = this._stats.E_max || 1;
+  } else {
+    this._EmaxUse = E;
+  }
+  this._dirty = true;
+};
+
+StiffnessViz.prototype.getStats = function() {
+  /* Returns a copy so callers can't mutate internal state. */
+  return {
+    E_max:    this._stats.E_max,
+    E_min:    this._stats.E_min,
+    aniso:    this._stats.aniso,
+    hasData:  this._stats.hasData
+  };
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   Render loop — auto-rotate when no pointer interaction, render
+   on-dirty otherwise.  Same pattern as LabRaymarcher.
+   ════════════════════════════════════════════════════════════ */
+StiffnessViz.prototype.setActive = function(b) {
+  if (this.failed) return;
+  if (b && !this._active) {
+    this._active = true;
+    this._lastTickMs = performance.now();
+    var self = this;
+    this._raf = requestAnimationFrame(function tick(ts){
+      if (!self._active) return;
+      self._tick(ts);
+      self._raf = requestAnimationFrame(tick);
+    });
+  } else if (!b && this._active) {
+    this._active = false;
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = null;
+  }
+};
+
+StiffnessViz.prototype._tick = function(ts) {
+  /* Slow auto-rotation — about half the speed of the raymarcher's geom
+     mode so the lobes are readable.  Pauses while user is dragging. */
+  if (!this._pointerDown) {
+    var dt = (ts - this._lastTickMs) * 0.001;
+    if (dt > 0.1) dt = 0.1;
+    this._rotY += dt * 0.25;
+    this._dirty = true;
+  }
+  this._lastTickMs = ts;
+  if (this._dirty) this._render();
+};
+
+StiffnessViz.prototype._render = function() {
+  if (this.failed || !this._meshUploaded) return;
+  var gl = this.gl;
+
+  /* Resize backing-store to match CSS pixels × dpr, clamped */
+  var dpr = Math.min(2, window.devicePixelRatio || 1);
+  var w = Math.max(1, Math.floor(this.canvas.clientWidth  * dpr));
+  var h = Math.max(1, Math.floor(this.canvas.clientHeight * dpr));
+  if (this.canvas.width !== w || this.canvas.height !== h) {
+    this.canvas.width = w;
+    this.canvas.height = h;
+  }
+  gl.viewport(0, 0, w, h);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  /* Build rotation matrix: pitch (X) then yaw (Y) */
+  var cy = Math.cos(this._rotY), sy = Math.sin(this._rotY);
+  var cx = Math.cos(this._rotX), sx = Math.sin(this._rotX);
+  /* Row-major equivalent of  R_x(rotX) · R_y(rotY) — applied as a
+     column-major mat3 so the WebGL convention matches.  Using direct
+     element layout to avoid pulling in a matrix lib. */
+  var rot = new Float32Array([
+     cy,         0,     -sy,
+     sx * sy,    cx,     sx * cy,
+     cx * sy,   -sx,     cx * cy
+  ]);
+
+  gl.useProgram(this._prog);
+  gl.uniform1fv(this._uloc['uS[0]'], this._S);
+  gl.uniform1f (this._uloc.uEmax,    this._EmaxUse);
+  gl.uniformMatrix3fv(this._uloc.uRot, false, rot);
+  gl.uniform1f (this._uloc.uZoom,    this._u.zoom);
+  gl.uniform1f (this._uloc.uAspect,  w / h);
+
+  /* Mesh attribs are already bound from _uploadMesh; rebind defensively
+     in case another GL context (the raymarcher's) was just active. */
+  gl.bindBuffer(gl.ARRAY_BUFFER, this._vboPos);
+  var posLoc = gl.getAttribLocation(this._prog, 'aPos');
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this._iboTris);
+
+  gl.drawElements(gl.TRIANGLES, LAB_SV_MESH.nTris * 3, gl.UNSIGNED_SHORT, 0);
+  this._dirty = false;
+};
+
+StiffnessViz.prototype.destroy = function() {
+  if (this.failed) return;
+  this.setActive(false);
+  var gl = this.gl;
+  if (this._vboPos)  { gl.deleteBuffer(this._vboPos);   this._vboPos = null; }
+  if (this._iboTris) { gl.deleteBuffer(this._iboTris);  this._iboTris = null; }
+  if (this._prog)    { gl.deleteProgram(this._prog);    this._prog = null; }
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   Pointer/wheel handlers — drag-rotate and wheel-zoom, same
+   conventions as the raymarcher.
+   ════════════════════════════════════════════════════════════ */
+StiffnessViz.prototype._attachInteractionHandlers = function() {
+  if (!this.canvas) return;
+  var self = this;
+
+  this.canvas.addEventListener('pointerdown', function(e) {
+    self._pointerDown = true;
+    self._lastPointerX = e.clientX;
+    self._lastPointerY = e.clientY;
+    self.canvas.setPointerCapture(e.pointerId);
+    self.canvas.style.cursor = 'grabbing';
+  });
+  this.canvas.addEventListener('pointermove', function(e) {
+    if (!self._pointerDown) return;
+    var dx = e.clientX - self._lastPointerX;
+    var dy = e.clientY - self._lastPointerY;
+    self._lastPointerX = e.clientX;
+    self._lastPointerY = e.clientY;
+    /* Same touchscreen-style "grab the scene" convention as the raymarcher */
+    self._rotY -= dx * 0.012;
+    self._rotX -= dy * 0.012;
+    var lim = Math.PI * 0.49;
+    if (self._rotX >  lim) self._rotX =  lim;
+    if (self._rotX < -lim) self._rotX = -lim;
+    self._dirty = true;
+  });
+  var onPointerUp = function(e) {
+    if (!self._pointerDown) return;
+    self._pointerDown = false;
+    try { self.canvas.releasePointerCapture(e.pointerId); } catch (_e) { /* fine */ }
+    self.canvas.style.cursor = '';
+  };
+  this.canvas.addEventListener('pointerup',     onPointerUp);
+  this.canvas.addEventListener('pointercancel', onPointerUp);
+
+  /* Wheel zoom — clamp [0.8, 3.0] for the stiffness surface (different
+     range than the raymarcher because the surface fills less of the
+     viewport).  Step proportional to current zoom for smooth UX. */
+  this.canvas.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    var z = self._u.zoom;
+    var step = z * 0.001 * e.deltaY;
+    z = z * (1.0 - step);
+    if (z < 0.8) z = 0.8;
+    if (z > 3.0) z = 3.0;
+    self._u.zoom = z;
+    self._dirty = true;
+  }, { passive: false });
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   Per-design registry — parallel to LAB_RM_REGISTRY.  Same
+   pattern: canvases live in a hidden cache div between grid
+   re-renders so their GL contexts survive.
+   ════════════════════════════════════════════════════════════ */
+var LAB_SV_REGISTRY  = {};   /* designId → StiffnessViz */
+var LAB_SV_CACHE_DIV = null;
+
+function ensureSVCacheDiv() {
+  if (LAB_SV_CACHE_DIV) return LAB_SV_CACHE_DIV;
+  var d = document.createElement('div');
+  d.id = 'sv-canvas-cache';
+  d.style.display = 'none';
+  d.style.position = 'absolute';
+  d.style.width = '0';
+  d.style.height = '0';
+  document.body.appendChild(d);
+  LAB_SV_CACHE_DIV = d;
+  return d;
+}
+
+function getOrCreateStiffnessViz(designId) {
+  var sv = LAB_SV_REGISTRY[designId];
+  if (sv && !sv.failed) return sv;
+  sv = new StiffnessViz();
+  if (sv.failed) return null;
+  LAB_SV_REGISTRY[designId] = sv;
+  ensureSVCacheDiv().appendChild(sv.canvas);
+  return sv;
+}
+
+function disposeStiffnessViz(designId) {
+  var sv = LAB_SV_REGISTRY[designId];
+  if (!sv) return;
+  if (sv.canvas && sv.canvas.parentNode) sv.canvas.parentNode.removeChild(sv.canvas);
+  sv.destroy();
+  delete LAB_SV_REGISTRY[designId];
+}
+
+function pauseAllStiffnessViz() {
+  for (var id in LAB_SV_REGISTRY) {
+    if (LAB_SV_REGISTRY.hasOwnProperty(id)) LAB_SV_REGISTRY[id].setActive(false);
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   IntersectionObserver for stiffness tiles — parallel to the
+   raymarcher's.  Single shared observer; pauses when off-screen
+   or tab not visible.
+   ════════════════════════════════════════════════════════════ */
+var LAB_SV_IO = null;
+
+function ensureSVObserver() {
+  if (LAB_SV_IO) return LAB_SV_IO;
+  if (typeof IntersectionObserver === 'undefined') return null;
+  LAB_SV_IO = new IntersectionObserver(function(entries) {
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var id = e.target.getAttribute('data-design-id');
+      if (!id) continue;
+      var sv = LAB_SV_REGISTRY[id];
+      if (!sv) continue;
+      var shouldRun = e.isIntersecting && !document.hidden;
+      sv.setActive(shouldRun);
+    }
+  }, { threshold: 0.01 });
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      pauseAllStiffnessViz();
+    } else {
+      for (var id in LAB_SV_REGISTRY) {
+        if (!LAB_SV_REGISTRY.hasOwnProperty(id)) continue;
+        var sv = LAB_SV_REGISTRY[id];
+        var mount = document.querySelector('.sv-mount[data-design-id="' + id + '"]');
+        if (!mount) continue;
+        var r = mount.getBoundingClientRect();
+        var visible = r.bottom > 0 && r.top < window.innerHeight;
+        sv.setActive(visible);
+      }
+    }
+  });
+  return LAB_SV_IO;
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   mountStiffnessTiles — called by 40-design-grid.js after each
+   grid render.  Walks all .sv-mount placeholders, attaches the
+   matching canvas, registers IntersectionObserver.
+   ════════════════════════════════════════════════════════════ */
+function mountStiffnessTiles() {
+  var io = ensureSVObserver();
+  var mounts = document.querySelectorAll('.sv-mount');
+  for (var i = 0; i < mounts.length; i++) {
+    var mount = mounts[i];
+    var id = mount.getAttribute('data-design-id');
+    if (!id) continue;
+    var sv = LAB_SV_REGISTRY[id];
+    if (!sv) continue;
+    if (sv.canvas && sv.canvas.parentNode !== mount) {
+      mount.appendChild(sv.canvas);
+    }
+    if (io) io.observe(mount);
+  }
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   computeGlobalStiffEmax — max E_max across all designs.  Used
+   in 'shared' normalization mode so every surface renders on the
+   same scale.  Returns 0 if no designs have stiffness data.
+   ════════════════════════════════════════════════════════════ */
+function computeGlobalStiffEmax(allDesigns) {
+  if (!allDesigns || allDesigns.length === 0) return 0;
+  var maxE = 0;
+  for (var i = 0; i < allDesigns.length; i++) {
+    var sv = LAB_SV_REGISTRY[allDesigns[i].id];
+    if (sv && sv._stats && sv._stats.hasData) {
+      if (sv._stats.E_max > maxE) maxE = sv._stats.E_max;
+    }
+  }
+  return maxE;
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   resolveStiffEmax — pick the Emax value to use for one design's
+   render, based on the global normalization mode (shared with
+   the stress tab via getStressNormMode()).
+
+     'per'    → design's own E_max
+     'shared' → max(E_max) across all designs
+
+   Returns Emax in MPa.
+   ════════════════════════════════════════════════════════════ */
+function resolveStiffEmax(design, allDesigns) {
+  var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
+  if (mode === 'shared') {
+    var globalE = computeGlobalStiffEmax(allDesigns);
+    if (globalE > 0) return globalE;
+  }
+  var sv = LAB_SV_REGISTRY[design.id];
+  if (sv && sv._stats && sv._stats.hasData) return sv._stats.E_max;
+  return 1;
+}

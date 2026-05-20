@@ -125,6 +125,8 @@ function renderDesignGrid(){
        · geom   → recipe required (always)
        · deform → recipe AND d.results._fieldsByAxis[activeAxis] required
        · stress → recipe AND d.results._fieldsByAxis[activeAxis] required
+       · stiff  → push 5 — d.results.S (full Voigt compliance) required;
+                  no recipe needed since the surface is purely tensor-driven
      A.2.2 — gating now considers the active load axis from VIEW_STATE. */
   var rmDesigns = [];   /* [{i, id}, …] */
   var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
@@ -147,12 +149,39 @@ function renderDesignGrid(){
   }
   function isRMDesign(idx){ for (var k = 0; k < rmDesigns.length; k++) if (rmDesigns[k].i === idx) return true; return false; }
 
+  /* Push 5 — Stiffness ⊕ tile gating.  Separate registry/canvas/shader
+     from the raymarcher (parallel pattern; see 22-stiffness-viz.js).
+     Eligibility: design has a full Voigt compliance matrix in results.S
+     (post-push 4a, full-Voigt is the production path, so every successful
+     elastic Run All populates this). */
+  var svDesigns = [];   /* [{i, id}, …] */
+  var svMode = (VIEW_STATE.mode === 'stiff');
+  if (svMode) {
+    for (var si = 0; si < LAB_STATE.designs.length && si < 3; si++) {
+      var sd_g = LAB_STATE.designs[si];
+      if (!sd_g.results || !sd_g.results.S || sd_g.results.S.length !== 36) continue;
+      if (typeof getOrCreateStiffnessViz === 'function') {
+        var svInst = getOrCreateStiffnessViz(sd_g.id);
+        if (svInst) {
+          /* Upload compliance to the GL viz.  Cheap (36 floats + 642 CPU
+             samples for E_max/E_min stats).  Re-uploading on every render
+             is fine — uploadDesign is idempotent and won't trigger a GL
+             buffer realloc. */
+          svInst.uploadDesign(sd_g.results.S);
+        }
+      }
+      svDesigns.push({ i: si, id: sd_g.id });
+    }
+  }
+  function isSVDesign(idx){ for (var k = 0; k < svDesigns.length; k++) if (svDesigns[k].i === idx) return true; return false; }
+
   for (var i = 0; i < LAB_STATE.designs.length && i < 3; i++){
     var d = LAB_STATE.designs[i];
     var fam = familyKey(d);
     var amp = getDeformAmp(d.id);
     var svgInner = '';
     var useRM = rmModes && isRMDesign(i);
+    var useSV = svMode && isSVDesign(i);   /* push 5 — stiffness GL viz */
 
     if (VIEW_STATE.mode === 'geom') {
       if (!useRM) svgInner = svgGeom(fam, false, 0);
@@ -172,8 +201,13 @@ function renderDesignGrid(){
       }
     }
     else if (VIEW_STATE.mode === 'stiff'){
-      if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stiffness surface');
-      else svgInner = svgStiffness(d.results.zener, d.color, i);
+      /* Push 5 — fallback only when full Voigt compliance is missing.
+         Successful elastic Run All always populates d.results.S, so this
+         branch fires pre-run, on failed solves, or for stub designs. */
+      if (!useSV) {
+        if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stiffness surface');
+        else svgInner = svgStiffness((d.results && d.results.zener) || 1.0, d.color, i);
+      }
     }
     else if (VIEW_STATE.mode === 'thermal'){
       if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Enable Thermal · Run to see κ surface');
@@ -209,9 +243,18 @@ function renderDesignGrid(){
     else if (RUN_STATE && RUN_STATE.running && i === RUN_STATE.currentIndex) statusClass = 'running';
     else statusClass = 'idle';
 
-    var viewportInner = useRM
-      ? '<div class="rm-mount" data-design-id="'+d.id+'" style="width:100%;height:100%;"></div>'
-      : '<svg viewBox="0 0 400 320" preserveAspectRatio="xMidYMid meet">'+svgInner+'</svg>';
+    /* Push 5 — viewport tile dispatcher:
+         useSV → .sv-mount (StiffnessViz canvas)
+         useRM → .rm-mount (LabRaymarcher canvas)
+         else  → inline SVG (mock or empty-state) */
+    var viewportInner;
+    if (useSV) {
+      viewportInner = '<div class="sv-mount" data-design-id="'+d.id+'" style="width:100%;height:100%;"></div>';
+    } else if (useRM) {
+      viewportInner = '<div class="rm-mount" data-design-id="'+d.id+'" style="width:100%;height:100%;"></div>';
+    } else {
+      viewportInner = '<svg viewBox="0 0 400 320" preserveAspectRatio="xMidYMid meet">'+svgInner+'</svg>';
+    }
 
     /* Honest provenance line.  When a real run has produced results, append a
        small decoration that shows where the numbers came from.  d.results._runSource
@@ -257,6 +300,8 @@ function renderDesignGrid(){
 
   /* Mount any raymarcher canvases into their .rm-mount placeholders */
   if (typeof mountRaymarcherTiles === 'function') mountRaymarcherTiles();
+  /* Push 5 — mount any stiffness-viz canvases into their .sv-mount placeholders */
+  if (typeof mountStiffnessTiles === 'function') mountStiffnessTiles();
 
   /* A.2 — Push per-design state to mounted raymarchers AFTER mount.
      The raymarcher needs the current view mode (gates auto-rotate +
@@ -290,6 +335,21 @@ function renderDesignGrid(){
     if (rkrm.setDispInterp) rkrm.setDispInterp(
       (typeof getDispInterp === 'function') ? getDispInterp(rkid) : 'linear'
     );
+  }
+
+  /* Push 5 — Push per-design Emax to mounted StiffnessViz instances after
+     mount.  Reuses the per/shared toggle from the stress-field tab (push
+     4b precedent) via resolveStiffEmax → getStressNormMode.  In 'shared'
+     mode every design renders against the global max E across designs;
+     in 'per' mode each surface saturates against its own E_max. */
+  for (var svk = 0; svk < svDesigns.length; svk++) {
+    var svkid = svDesigns[svk].id;
+    var svkSV = (typeof LAB_SV_REGISTRY !== 'undefined') ? LAB_SV_REGISTRY[svkid] : null;
+    if (!svkSV || svkSV.failed) continue;
+    var svDesign = LAB_STATE.designs[svDesigns[svk].i];
+    if (typeof resolveStiffEmax === 'function') {
+      svkSV.setEmaxGlobal(resolveStiffEmax(svDesign, LAB_STATE.designs));
+    }
   }
 
   /* Pause raymarchers if we're in a non-geometry view (defensive — they
@@ -554,7 +614,30 @@ function readoutForDesign(d, mode){
     }
     return 'σ_VM,max = — (not computed)';
   }
-  if (mode === 'stiff'  && LAB_STATE.runHasCompleted) return 'E_max = ' + (r.E11*1.05).toFixed(2) + ' GPa';
+  /* Push 5 — Stiffness ⊕ readout: pull real E_max / E_min / anisotropy
+     ratio from the StiffnessViz GL instance (which computed them via
+     642-vertex CPU sampling at upload time).  Falls back to the old
+     surrogate when no GL viz is mounted (pre-run or fallback design). */
+  if (mode === 'stiff'){
+    if (LAB_STATE.runHasCompleted && typeof LAB_SV_REGISTRY !== 'undefined') {
+      var sv = LAB_SV_REGISTRY[d.id];
+      if (sv && sv.getStats) {
+        var ss = sv.getStats();
+        if (ss.hasData) {
+          function fmtE(v){
+            if (v >= 1000) return (v/1000).toFixed(2) + ' GPa';
+            if (v >= 1)    return v.toFixed(1)        + ' MPa';
+            if (v > 0)     return v.toExponential(1)  + ' MPa';
+            return '—';
+          }
+          var anisoStr = isFinite(ss.aniso) ? ss.aniso.toFixed(2) : '∞';
+          return 'E_max ' + fmtE(ss.E_max) + ' · E_min ' + fmtE(ss.E_min) +
+                 ' · aniso ' + anisoStr;
+        }
+      }
+    }
+    return 'E_max = — (not computed)';
+  }
   if (mode === 'thermal'&& LAB_STATE.runHasCompleted){
     return r.kappa_z === 0 ? 'κ_max = — (not computed)'
                             : 'κ_max = ' + (r.kappa_z*1.04).toFixed(2) + ' W/mK';

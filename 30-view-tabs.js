@@ -35,14 +35,23 @@ function onViewModeClick(mode){
     }
   }
 
-  /* A.3.3 — show/hide the stress-normalization toggle based on view mode.
-     Only appears when stress tab is active.  The toggle's hidden state
-     is set by display style; visual highlight of the active button is
-     handled in updateStressNormToggleVisual. */
+  /* A.3.3 — show/hide the per/shared normalization toggle based on view
+     mode.  Push 5 — toggle is now dual-purpose: in stress mode it scales
+     the σ_VM colormap cap; in stiff mode it scales the E(n̂) surface
+     normalization (per-design vs shared E_max across designs).  Same
+     state variable (stressNormMode) drives both. */
   var normGroup = document.getElementById('stressNormToggle');
   if (normGroup) {
-    normGroup.style.display = (mode === 'stress') ? '' : 'none';
+    normGroup.style.display = (mode === 'stress' || mode === 'stiff') ? '' : 'none';
     updateStressNormToggleVisual();
+    /* Push 5 — swap the label text so the user knows what the toggle
+       affects in the current mode.  The visible label is the first
+       <span> child of the toggle group. */
+    var labelEl = normGroup.querySelector('span');
+    if (labelEl) {
+      if (mode === 'stiff')      labelEl.textContent = 'E surface scale';
+      else if (mode === 'stress') labelEl.textContent = 'σ_VM scale';
+    }
   }
 
   // Re-render
