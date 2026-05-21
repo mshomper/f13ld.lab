@@ -1328,6 +1328,16 @@ ElasticSolverFull.prototype.destroy = function() {
         supported; the diagonal spectral inversion for u'(x) is only
         defined for normal strain components.
 
+     { connectivity: { minLargestFraction: 0.99 } } — optional
+        pre-CG gating threshold.  If the rasterized voxel mask has
+        disconnected components and the largest component represents
+        less than `minLargestFraction` of total solid voxels, the
+        solver early-returns { valid: false, reject_reason:
+        'disconnected', connectivity } BEFORE building Γ.  Omit (or
+        pass undefined) to keep the default warn-only behavior — the
+        connectivity report is always computed and surfaced on the
+        return object regardless of whether rejection is enabled.
+
    Returns Promise<{
      name, family, mode, rho,
      Ex_MPa, Ey_MPa, Ez_MPa,
@@ -1340,6 +1350,10 @@ ElasticSolverFull.prototype.destroy = function() {
      perLC,                  // solver-internal labels — diagnostic only
      fieldsByAxis,           // { x, y, z } in PHYSICAL coords (each
                              //   { u_prime, sigma_vm, N, eps_bar } or null)
+     connectivity,           // { numComponents, sizes, largest, smallest,
+                             //   totalSolid, largestFraction, orphans } —
+                             //   from 14a-connectivity.js, or null if
+                             //   that file isn't loaded
      tRast_ms, tGamma_ms, tCG_ms
    }>
    ════════════════════════════════════════════════════════════ */
@@ -1378,6 +1392,42 @@ async function solveDesignElasticFull(recipe, N, opts) {
   for (var v = 0; v < solid.length; v++) inside += solid[v];
   var rho = inside / solid.length;
 
+  /* Periodic 6-connectivity check (14a-connectivity.js).  Runs between
+     rasterization and the (expensive) Γ build / CG solve.  Always
+     computes; surfaces on the returned object as `connectivity`.
+     Warn-only by default; rejects pre-CG if a threshold is provided.
+
+     opts.connectivity (optional):
+       { minLargestFraction: 0.99 } — if largest component < threshold,
+         return { valid: false, reject_reason: 'disconnected', connectivity }
+         BEFORE Γ is built.  Skips CG entirely on disconnected geometries.
+       Omit to keep the warn-only behavior (default — no rejections). */
+  var connectivity = null;
+  if (typeof checkVoxelConnectivity === 'function') {
+    var tConn0 = performance.now();
+    connectivity = checkVoxelConnectivity(solid, N);
+    var tConn  = performance.now() - tConn0;
+    if (connectivity.numComponents > 1) {
+      console.warn('[connectivity] ' + connectivity.orphans + ' orphan voxel(s) in ' +
+                   (connectivity.numComponents - 1) + ' island(s) (largest = ' +
+                   (connectivity.largestFraction * 100).toFixed(2) + '% of solid · ' +
+                   tConn.toFixed(1) + ' ms)');
+    }
+    var connOpts = opts.connectivity || null;
+    if (connOpts && typeof connOpts.minLargestFraction === 'number' &&
+        connectivity.numComponents > 0 &&
+        connectivity.largestFraction < connOpts.minLargestFraction) {
+      return {
+        name: recipe.name, family: family, mode: args.mode, rho: rho,
+        valid: false, reject_reason: 'disconnected',
+        connectivity: connectivity,
+        Es_MPa: (recipe.material && recipe.material.Es_MPa) || 110000,
+        nu:     (recipe.material && recipe.material.nu)     || 0.34,
+        tRast_ms: tRast, tGamma_ms: 0, tCG_ms: 0
+      };
+    }
+  }
+
   var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
   var Es = mat.Es_MPa, nu = mat.nu;
   var C_s = isoC(Es, nu);
@@ -1409,6 +1459,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
     return {
       name: recipe.name, family: family, mode: args.mode, rho: rho,
       valid: false, reject_reason: hom.reject_reason,
+      connectivity: connectivity,
       Es_MPa: Es, nu: nu,
       perLC: hom.perLC, iters: hom.totalIters, converged: hom.allConverged,
       tRast_ms: tRast, tGamma_ms: tGamma, tCG_ms: tCG
@@ -1486,6 +1537,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
     converged: hom.allConverged,
     perLC:    hom.perLC,
     fieldsByAxis: fieldsByAxis,    /* { x, y, z } — each { u_prime, sigma_vm, N, eps_bar } in PHYSICAL coords, or null */
+    connectivity: connectivity,    /* Push 6.1 — { numComponents, sizes, largest, smallest, totalSolid, largestFraction, orphans } or null if helper not loaded */
     tRast_ms: tRast,
     tGamma_ms: tGamma,
     tCG_ms:   tCG

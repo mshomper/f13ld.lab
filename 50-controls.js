@@ -252,7 +252,23 @@ async function runRealSweep(N){
 
     if (solveErr || !elasticResult || !elasticResult.valid){
       d.results = stubResults();
-      d.results._runSource = solveErr ? ('error: ' + solveErr.message) : 'invalid (singular C)';
+      /* Surface the rejection reason in the run-source pill so the user
+         knows why the design didn't solve.  Connectivity rejections also
+         carry the orphan / island counts forward to d.results so the
+         design grid can render a more informative readout if desired. */
+      var sourceMsg;
+      if (solveErr) {
+        sourceMsg = 'error: ' + solveErr.message;
+      } else if (elasticResult && elasticResult.reject_reason === 'disconnected') {
+        var conn = elasticResult.connectivity;
+        sourceMsg = 'disconnected · ' + (conn ? (conn.orphans + ' orphan voxels in ' +
+                    (conn.numComponents - 1) + ' island(s) · largest ' +
+                    (conn.largestFraction * 100).toFixed(1) + '%') : 'islands detected');
+        d.results.connectivity = conn || null;
+      } else {
+        sourceMsg = 'invalid (singular C)';
+      }
+      d.results._runSource = sourceMsg;
       d.results._error = true;
     } else {
       d.results = mapElasticToResults(elasticResult);
@@ -334,7 +350,14 @@ function mapElasticToResults(R){
        elastic solver is invoked with field capture (default since A.1).
        Underscore prefix = internal-only, not a UI metric.
        Shape: { x: {u_prime, sigma_vm, N, eps_bar}, y: {…}, z: {…} } */
-    _fieldsByAxis: R.fieldsByAxis || null
+    _fieldsByAxis: R.fieldsByAxis || null,
+    /* Push 6.1 — periodic 6-connectivity report from 14a-connectivity.js.
+       Always populated when the solver runs to completion (and on the
+       disconnected-reject path; null only on hard exceptions or when the
+       helper file isn't loaded).  Available for UI surfacing (e.g. an
+       "N orphans" badge in the design grid), and for the optional
+       opts.connectivity.minLargestFraction rejection gate. */
+    connectivity:  R.connectivity || null
   };
 }
 
