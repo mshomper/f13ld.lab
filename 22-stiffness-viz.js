@@ -13,12 +13,23 @@
    Young's modulus along unit vector n̂ is:
 
      1/E(n̂) = v^T · S · v
-     where v = [n_x², n_y², n_z², 2 n_y n_z, 2 n_x n_z, 2 n_x n_y]
+     where v = [n_x², n_y², n_z², n_y n_z, n_x n_z, n_x n_y]
 
-   The factor-of-2 on shear v-entries absorbs the engineering-
-   shear Voigt convention.  Verified for cubic crystal [100]
-   (1/E = S₁₁) and [111] (1/E = (S₁₁ + 2S₁₂ + 4S₄₄)/3).
-   References: Hill (1952), Cowin (1989), Ting (2005).
+   Our solver returns S in ENGINEERING-Voigt convention
+   (S_44 = 1/G, verified against Schwarz P where C44 = G
+   = 7.24 GPa in push 2 cross-validation).  With engineering
+   S, the v vector takes NO factor of 2 on shear entries.
+
+   The alternate "factor-2 on shear v" formula (Hill 1952,
+   Ting 2005) is correct only for TENSOR-Voigt S (where
+   S_44 = s_2323).  Using factor-2 v with engineering S
+   produces 3-6× false anisotropy on every direction off
+   the cube axes — this was push 5's original bug, fixed
+   in push 5.2 after Matt caught the standard-gyroid
+   anisotropy reading 3.29 instead of the expected ~1.05.
+
+   Verified cubic [111] limit (Schwarz P, C11/C12/C44 =
+   35.36/8.08/7.24):  E[100]=32.35, E[111]=19.04, E_max/E_min=1.70.
 
    ── Architecture ────────────────────────────────────────
    - Icosphere mesh with 3 subdivisions: 642 verts, 1280 tris.
@@ -153,15 +164,31 @@ var LAB_SV_VS = [
   'out vec3 vNormal;',             /* radial direction — diffuse approx */
 
   'void main() {',
-  /* Voigt v vector with engineering-shear factor of 2 on shear entries.
-     v = [n_x², n_y², n_z², 2 n_y n_z, 2 n_x n_z, 2 n_x n_y] */
+  /* Voigt v vector for ENGINEERING-VOIGT compliance.  S returned by the
+     solver has S_44 = 1/G (engineering convention; verified against Schwarz P
+     where C44 = G = 7.24 GPa in push 2 cross-validation).  With engineering S,
+     the directional Young's-modulus formula is
+
+       1/E(n̂) = v^T S v       where v = [n_x², n_y², n_z², n_yn_z, n_xn_z, n_xn_y]
+
+     NOTE: the alternate "factor-2 on shear v" convention seen in some
+     references (Hill 1952, Ting 2005) assumes TENSOR-Voigt S, where
+     S_44 = s_2323 (no factor 4).  Using factor-2 v with engineering S
+     inflates shear-shear contributions by 4×, producing 3-6× false
+     anisotropy on every direction containing shear — i.e., everything
+     off the cube axes.  Push 5.2 fix: drop the factor of 2.
+
+     Verified on Schwarz P (C11/C12/C44 = 35.36/8.08/7.24):
+       E[100] = 32.35 GPa,  E[111] = 19.04 GPa,  E_max/E_min = 1.70
+     Verified on near-isotropic gyroid (Zener ≈ 0.96):
+       E_max/E_min ≈ 1.05  (previously read 3.29 with the buggy v) */
   '  vec3 n = aPos;',              /* aPos is already unit-length from icosphere */
   '  float v0 = n.x*n.x;',
   '  float v1 = n.y*n.y;',
   '  float v2 = n.z*n.z;',
-  '  float v3 = 2.0 * n.y * n.z;',
-  '  float v4 = 2.0 * n.x * n.z;',
-  '  float v5 = 2.0 * n.x * n.y;',
+  '  float v3 = n.y * n.z;',
+  '  float v4 = n.x * n.z;',
+  '  float v5 = n.x * n.y;',
   '  float vv[6];',
   '  vv[0]=v0; vv[1]=v1; vv[2]=v2; vv[3]=v3; vv[4]=v4; vv[5]=v5;',
   /* inv_E = v^T S v.  S is symmetric, so we sum all 36 terms;
@@ -396,7 +423,10 @@ StiffnessViz.prototype.uploadDesign = function(S_mpa /*, rho */) {
   for (var k = 0; k < 36; k++) this._S[k] = S_mpa[k];
 
   /* Sample E(n̂) at every icosphere vertex to find E_max / E_min.
-     Same math as the vertex shader, mirrored on the CPU. */
+     Same math as the vertex shader, mirrored on the CPU.
+     Push 5.2 — uses the corrected engineering-Voigt v vector with NO
+     factor of 2 on shear entries.  See LAB_SV_VS header for the
+     convention derivation. */
   var positions = LAB_SV_MESH.positions;
   var nV        = LAB_SV_MESH.nVerts;
   var Emax = -Infinity, Emin = Infinity;
@@ -404,8 +434,8 @@ StiffnessViz.prototype.uploadDesign = function(S_mpa /*, rho */) {
     var nx = positions[vi*3 + 0];
     var ny = positions[vi*3 + 1];
     var nz = positions[vi*3 + 2];
-    var v0 = nx*nx,        v1 = ny*ny,        v2 = nz*nz;
-    var v3 = 2.0 * ny*nz,  v4 = 2.0 * nx*nz,  v5 = 2.0 * nx*ny;
+    var v0 = nx*nx,  v1 = ny*ny,  v2 = nz*nz;
+    var v3 = ny*nz,  v4 = nx*nz,  v5 = nx*ny;
     var vv = [v0, v1, v2, v3, v4, v5];
     var inv_E = 0;
     for (var i = 0; i < 6; i++) {
