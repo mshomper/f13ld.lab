@@ -14,7 +14,6 @@ var VIEW_STATE = {
                                             //   Default 0.25 → 5% cell stretch.
   loadAxis:   { /* designId: 'x'|'y'|'z' */ },  // A.2.2 — per-design active load axis
   stressNormMode: 'per',                   // A.3.3 — 'per' (auto per-design) | 'shared' (global p95, linear)
-  dispInterp: { /* designId: 'linear'|'cubic' */ },  // 4b — per-design u'(x)/σ_VM(x) sampling kernel
   stressSat:  { /* designId: 0..2 */ }     // 4b — per-design saturation multiplier on auto p95 cap
 };
 
@@ -87,25 +86,6 @@ function onDeformAmpInput(designId, amp){
 function getDeformAmp(designId){
   if (VIEW_STATE.deformAmps[designId] === undefined) return 0.25;
   return VIEW_STATE.deformAmps[designId];
-}
-
-
-/* ----------------------------------------------------------
-   4b — Per-design displacement sampling kernel.
-     'linear'  — hardware trilinear (default; matches pre-4b behavior)
-     'cubic'   — 8-tap B-spline cubic via Sigg-Hadwiger trick (smoother
-                 on thin walls; ~8× sampling cost but on Matt's NVIDIA
-                 GPU the difference is imperceptible at lab grid sizes).
-   Applied to both u'(x) sampling (deform mode) and σ_VM(x) sampling
-   (stress mode) consistently.
-   ---------------------------------------------------------- */
-function getDispInterp(designId){
-  return VIEW_STATE.dispInterp[designId] || 'linear';
-}
-
-function onDispInterpClick(designId, mode){
-  if (mode !== 'linear' && mode !== 'cubic') return;
-  VIEW_STATE.dispInterp[designId] = mode;
 }
 
 

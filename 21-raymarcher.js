@@ -73,10 +73,10 @@ function buildLabRaymarcherFS(stepCount) {
        via uStressMin/uStressMax.  In stress mode (uViewMode == 2), the
        surface shading replaces the iridescent palette with cividis(σ_VM)
        evaluated at the hit point.
-       4b — uDispInterp gates the displacement and stress sampling kernel:
-       0 = hardware trilinear (default), 1 = 8-tap B-spline cubic via
-       Sigg-Hadwiger trick.  Cubic smooths the warped surface on thin-wall
-       structures where amp × |u'| approaches voxel scale. */
+       4b — u'(x) and σ_VM(x) are sampled with an 8-tap B-spline cubic
+       kernel (Sigg-Hadwiger) unconditionally — the linear/cubic toggle
+       was removed because cubic is uniformly better at lab grid sizes
+       and the cost is imperceptible on target hardware. */
     'uniform float uViewMode; uniform float uDispUploaded; uniform float uDeformAmp;',
     'uniform highp sampler3D uDisp;',
     'uniform vec3 uDispOffset; uniform vec3 uDispScale;',
@@ -89,8 +89,6 @@ function buildLabRaymarcherFS(stepCount) {
        midpoint (brightens long-tail / low-bulk distributions).
        In shared mode, fixed at 1.0 (linear colormap for cross-comparison). */
     'uniform float uStressGamma;',
-    /* 4b — sampling kernel selector: 0 = trilinear, 1 = 8-tap B-spline cubic */
-    'uniform float uDispInterp;',
     /* 4b — texture resolution for cubic kernel offset math.  Set at upload time. */
     'uniform float uTexN;',
 
@@ -123,13 +121,6 @@ function buildLabRaymarcherFS(stepCount) {
        Returns the 8 weighted offsets + weights as four vec3 pairs.
        Implementation below inlines the 8-tap directly for each sample call
        since GLSL ES 3.00 doesn't support function-local arrays portably. */
-    'vec3 sampleDisp_linear(vec3 uvw) {',
-    '  vec3 raw = texture(uDisp, uvw).rgb;',
-    '  return raw * uDispScale + uDispOffset;',
-    '}',
-    'float sampleStress_linear(vec3 uvw) {',
-    '  return texture(uStress, uvw).r;',
-    '}',
 
     /* 8-tap cubic B-spline for vec3 displacement.
        Reference: Sigg & Hadwiger, "Fast Third-Order Texture Filtering",
@@ -201,21 +192,22 @@ function buildLabRaymarcherFS(stepCount) {
     '}',
 
     /* sampleDisp: returns u\'(p) decoded from the RGBA8 3D texture, or
-       vec3(0) if no displacement data is uploaded.  Branches on uDispInterp:
-       0 = linear (1-tap), 1 = cubic B-spline (8-tap). */
+       vec3(0) if no displacement data is uploaded.  Uses the 8-tap cubic
+       B-spline kernel unconditionally — the runtime linear/cubic toggle
+       was removed because cubic is uniformly better at lab grid sizes. */
     'vec3 sampleDisp(vec3 p) {',
     '  if (uDispUploaded < 0.5) return vec3(0.0);',
     '  vec3 uvw = fract(p/(2.0*H) + 0.5);',
-    '  return (uDispInterp > 0.5) ? sampleDisp_cubic(uvw) : sampleDisp_linear(uvw);',
+    '  return sampleDisp_cubic(uvw);',
     '}',
 
     /* sampleStress: returns σ_VM(p) normalized to [0,1] from the R8 3D
-       texture, or 0.0 if no stress data is uploaded.  Same linear/cubic
-       branch as sampleDisp. */
+       texture, or 0.0 if no stress data is uploaded.  Same cubic kernel
+       as sampleDisp. */
     'float sampleStress(vec3 p) {',
     '  if (uStressUploaded < 0.5) return 0.0;',
     '  vec3 uvw = fract(p/(2.0*H) + 0.5);',
-    '  return (uDispInterp > 0.5) ? sampleStress_cubic(uvw) : sampleStress_linear(uvw);',
+    '  return sampleStress_cubic(uvw);',
     '}',
 
     /* Cividis colormap — Nuñez, Anderton & Renslow (2018).  Designed
@@ -559,9 +551,6 @@ function LabRaymarcher() {
        matches shared-mode behavior).  Per-design mode sets this to an
        auto-computed value < 1 to brighten the low end. */
     stressGamma: 1.0,
-    /* 4b — Sampling kernel: 0 = trilinear (default), 1 = 8-tap cubic B-spline.
-       Set via setDispInterp() based on per-design VIEW_STATE.dispInterp. */
-    dispInterp: 0,
     /* 4b — Texture resolution N for cubic kernel offset math.  Set at upload
        time to match the actual 3D texture size (the solver's grid N). */
     texN: 32
@@ -634,8 +623,8 @@ LabRaymarcher.prototype._compileShader = function() {
    'uStress','uStressMin','uStressMax','uStressUploaded',
    /* A.3.3 — Gamma correction for non-linear σ_VM colormap remapping */
    'uStressGamma',
-   /* 4b — sampling kernel selector + texture resolution for cubic offsets */
-   'uDispInterp','uTexN'].forEach(function(name){
+   /* 4b — texture resolution for cubic kernel offsets */
+   'uTexN'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -1027,18 +1016,6 @@ LabRaymarcher.prototype.getDeformDeltaFraction = function(sliderValue) {
   return clamped * 0.20;
 };
 
-/* 4b — setDispInterp(mode) — push the displacement/stress sampling
-   kernel selector to the shader.
-     'linear' → 1-tap hardware trilinear (default; matches pre-4b)
-     'cubic'  → 8-tap Sigg-Hadwiger B-spline cubic (smoother on thin
-                walls; ~8× sampling cost but imperceptible on Matt's
-                hardware at lab grid sizes). */
-LabRaymarcher.prototype.setDispInterp = function(mode) {
-  if (this.failed) return;
-  this._u.dispInterp = (mode === 'cubic') ? 1.0 : 0.0;
-  this._dirty = true;
-};
-
 /* A.3.3 — setStressGamma(γ) — push the stress colormap gamma
    directly to the shader without triggering a grid re-render.
    Called by 40-design-grid.js whenever the stress normalization
@@ -1184,8 +1161,7 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uStressMax,      S.stressMax);
   /* A.3.3 — non-linear remap of σ_VM before cividis lookup. */
   gl.uniform1f(u.uStressGamma,    S.stressGamma);
-  /* 4b — sampling kernel selector + texture resolution */
-  gl.uniform1f(u.uDispInterp,     S.dispInterp);
+  /* 4b — texture resolution for cubic kernel offsets */
   gl.uniform1f(u.uTexN,           S.texN);
 
   gl.activeTexture(gl.TEXTURE0);

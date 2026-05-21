@@ -286,11 +286,9 @@ function renderDesignGrid(){
         (showControls
           ? (VIEW_STATE.mode === 'stress'
               ? buildStressControl(d.id,
-                                   (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0,
-                                   (typeof getDispInterp === 'function') ? getDispInterp(d.id) : 'linear')
+                                   (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0)
               : buildDeformControl(d.id, amp,
-                                   (typeof getLoadAxis === 'function') ? getLoadAxis(d.id) : 'z',
-                                   (typeof getDispInterp === 'function') ? getDispInterp(d.id) : 'linear'))
+                                   (typeof getLoadAxis === 'function') ? getLoadAxis(d.id) : 'z'))
           : '') +
       '</div>' +
       buildSummary(stats) +
@@ -331,10 +329,6 @@ function renderDesignGrid(){
     }
     if (rkrm.setViewMode) rkrm.setViewMode(VIEW_STATE.mode);
     if (rkrm.setDeformAmp) rkrm.setDeformAmp(getDeformAmp(rkid));
-    /* 4b — push per-design sampling kernel (linear / cubic) at mount. */
-    if (rkrm.setDispInterp) rkrm.setDispInterp(
-      (typeof getDispInterp === 'function') ? getDispInterp(rkid) : 'linear'
-    );
   }
 
   /* Push 5 — Push per-design viz params to mounted StiffnessViz instances
@@ -430,33 +424,6 @@ function renderDesignGrid(){
     });
   }
 
-  /* 4b — Wire interp toggle (lin / cub).  On click: update state, push
-     uDispInterp to the matching raymarcher, swap active class on the
-     pair inline (no full re-render). */
-  var interpBtns = document.querySelectorAll('.disp-interp-btn');
-  for (var ib = 0; ib < interpBtns.length; ib++){
-    interpBtns[ib].addEventListener('click', function(e){
-      var btn = e.currentTarget;
-      var id   = btn.dataset.designId;
-      var mode = btn.dataset.mode;
-      if (!id || !mode) return;
-      if (typeof onDispInterpClick === 'function') onDispInterpClick(id, mode);
-      var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
-      if (rm && !rm.failed && rm.setDispInterp) {
-        rm.setDispInterp(mode);
-      }
-      /* Swap visual active state across the pair, inline. */
-      var siblings = btn.parentNode.querySelectorAll('.disp-interp-btn');
-      for (var sb = 0; sb < siblings.length; sb++){
-        var sibMode = siblings[sb].dataset.mode;
-        var isActive = (sibMode === mode);
-        siblings[sb].style.background = isActive ? '#c8f542' : 'transparent';
-        siblings[sb].style.borderColor = isActive ? '#c8f542' : 'rgba(255,255,255,0.18)';
-        siblings[sb].style.color = isActive ? '#0a0a0a' : 'rgba(255,255,255,0.55)';
-      }
-    });
-  }
-
   /* A.2.2 — Wire load-axis toggle buttons.  On click: update state,
      re-upload the matching fieldset to the raymarcher, swap active-class
      on the buttons inline (no full re-render). */
@@ -519,7 +486,7 @@ function buildSummary(stats){
   return html;
 }
 
-function buildDeformControl(designId, amp, axis, interp){
+function buildDeformControl(designId, amp, axis){
   /* A.2.2 — Load-axis toggle.  Three buttons (X/Y/Z) — clicking one
      re-uploads the matching fieldset from d.results._fieldsByAxis
      to the raymarcher.  Inline styles avoid touching lab.css for
@@ -534,19 +501,13 @@ function buildDeformControl(designId, amp, axis, interp){
     return '<button class="load-axis-btn" data-design-id="'+designId+'" data-axis="'+ax+'" ' +
            'style="'+base + (active ? on : '') +'">'+ax.toUpperCase()+'</button>';
   }
-  /* 4b — interp toggle: lin / cub.  Same visual language as X/Y/Z. */
-  function ibtn(mode, label) {
-    var active = (interp === mode);
-    var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
-               'color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; ' +
-               'padding:2px 7px; cursor:pointer; letter-spacing:0.05em; line-height:1;';
-    var on   = 'background:#c8f542; border-color:#c8f542; color:#0a0a0a;';
-    return '<button class="disp-interp-btn" data-design-id="'+designId+'" data-mode="'+mode+'" ' +
-           'style="'+base + (active ? on : '') +'">'+label+'</button>';
-  }
   var toggleStyle = 'display:inline-flex; gap:0; margin-right:8px;';
   /* 4b — slider value 0..1 now maps to "δ_max as % of cell".  Default 0.25
-     → 5% cell stretch.  Step 0.01 preserves smooth slider feel. */
+     → 5% cell stretch.  Step 0.01 preserves smooth slider feel.
+     Sampling kernel is fixed at 8-tap cubic B-spline (Sigg-Hadwiger) —
+     the lin/cub toggle was removed because the cubic path is uniformly
+     better at lab grid sizes and the cost is imperceptible on target
+     hardware.  See 21-raymarcher.js sampleDisp/sampleStress. */
   return '<div class="vp-deform-control show">' +
     '<div class="load-axis-toggle" style="'+toggleStyle+'">' +
       btn('x') + btn('y') + btn('z') +
@@ -554,9 +515,6 @@ function buildDeformControl(designId, amp, axis, interp){
     '<label>amp</label>' +
     '<input type="range" min="0" max="1" step="0.01" value="'+amp+'" data-design-id="'+designId+'" class="amp-slider">' +
     '<span class="v">'+(amp*20).toFixed(1)+'% cell</span>' +
-    '<div class="disp-interp-toggle" style="'+toggleStyle+'; margin-left:10px;">' +
-      ibtn('linear', 'lin') + ibtn('cubic', 'cub') +
-    '</div>' +
     '</div>';
 }
 
@@ -564,25 +522,13 @@ function buildDeformControl(designId, amp, axis, interp){
    auto p95 cap.  Range 0..2 with default 1.0 (= no change).  Value
    reads as "× auto" so the user sees how far they're scaling from
    the auto-tuned baseline.  Reuses the .amp-slider visual but tags
-   class .sat-slider for handler routing. */
-function buildStressControl(designId, sat, interp){
-  function ibtn(mode, label) {
-    var active = (interp === mode);
-    var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
-               'color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; ' +
-               'padding:2px 7px; cursor:pointer; letter-spacing:0.05em; line-height:1;';
-    var on   = 'background:#c8f542; border-color:#c8f542; color:#0a0a0a;';
-    return '<button class="disp-interp-btn" data-design-id="'+designId+'" data-mode="'+mode+'" ' +
-           'style="'+base + (active ? on : '') +'">'+label+'</button>';
-  }
-  var toggleStyle = 'display:inline-flex; gap:0; margin-left:10px;';
+   class .sat-slider for handler routing.  Sampling kernel hardcoded
+   to cubic — see buildDeformControl note. */
+function buildStressControl(designId, sat){
   return '<div class="vp-deform-control show">' +
     '<label>sat</label>' +
     '<input type="range" min="0" max="2" step="0.05" value="'+sat+'" data-design-id="'+designId+'" class="sat-slider">' +
     '<span class="v">×'+sat.toFixed(2)+' auto</span>' +
-    '<div class="disp-interp-toggle" style="'+toggleStyle+'">' +
-      ibtn('linear', 'lin') + ibtn('cubic', 'cub') +
-    '</div>' +
     '</div>';
 }
 
