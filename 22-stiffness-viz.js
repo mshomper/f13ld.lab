@@ -145,10 +145,12 @@ var LAB_SV_MESH = _buildIcosphere(3);   /* 642 verts, 1280 tris */
    stored row-major (S[i*6 + j]); since the solver returns a
    symmetric tensor, the upper and lower triangles are equal.
 
-   uS:     row-major 6×6 compliance in MPa^-1
-   uEmax:  the E value used for normalization (per-design or shared)
-   uRot:   3×3 rotation matrix (auto-rotate + user drag)
-   uZoom:  scalar size multiplier for the canvas display
+   uS:      row-major 6×6 compliance in MPa^-1
+   uREmax:  divisor for radius (per-design E_max or shared global)
+   uCmin:   color stretch low end (per-design E_min or shared global)
+   uCmax:   color stretch high end (per-design E_max or shared global)
+   uRot:    3×3 rotation matrix (auto-rotate + user drag)
+   uZoom:   scalar size multiplier for the canvas display
    uAspect: width/height for non-square canvases
    ════════════════════════════════════════════════════════════ */
 var LAB_SV_VS = [
@@ -156,11 +158,24 @@ var LAB_SV_VS = [
   'precision highp float;',
   'in vec3 aPos;',                /* unit direction (icosphere vert) */
   'uniform float uS[36];',         /* row-major Voigt 6×6 compliance */
-  'uniform float uEmax;',          /* normalization (per-design or shared) */
+  /* Push 5.3 — radius and color now use independent normalizations.
+     uREmax  — divisor for the radial scale (per-design or shared via
+               the per/shared toggle; controls surface "size")
+     uCmin   — low end of the color stretch (per-design E_min or
+               shared global E_min across designs)
+     uCmax   — high end of the color stretch (per-design E_max or
+               shared global E_max across designs)
+     Previously a single uEmax drove both — but for near-isotropic
+     materials (Zener ≈ 1) the color input would compress to a
+     0.97-1.00 sliver of cividis (yellow), hiding all structure.
+     Splitting lets color always span the full cividis range. */
+  'uniform float uREmax;',
+  'uniform float uCmin;',
+  'uniform float uCmax;',
   'uniform mat3 uRot;',
   'uniform float uZoom;',
   'uniform float uAspect;',
-  'out float vERatio;',            /* E(n̂) / uEmax — for fragment colormap */
+  'out float vColor;',             /* color stretch input — for cividis */
   'out vec3 vNormal;',             /* radial direction — diffuse approx */
 
   'void main() {',
@@ -203,7 +218,15 @@ var LAB_SV_VS = [
      non-positive-definite S — solver should never produce that, but
      belt-and-suspenders for the visual). */
   '  float E = (inv_E > 1e-30) ? (1.0 / inv_E) : 0.0;',
-  '  float r = clamp(E / max(uEmax, 1e-30), 0.0, 1.0);',
+
+  /* Push 5.3 — radius and color use independent normalizations:
+       r      = E / uREmax            (clamped) — surface "size"
+       vColor = (E - uCmin) / (uCmax - uCmin)   — directional structure
+     In per-design mode both come from this design's own stats; in
+     shared mode both come from global stats across all designs. */
+  '  float r = clamp(E / max(uREmax, 1e-30), 0.0, 1.0);',
+  '  float cspan = max(uCmax - uCmin, 1e-30);',
+  '  vColor = clamp((E - uCmin) / cspan, 0.0, 1.0);',
 
   /* Position the vertex at r(n̂)·n̂ scaled by zoom.
      The icosphere is in local space; world transform is uRot · pos.
@@ -215,7 +238,6 @@ var LAB_SV_VS = [
      a flat camera.  uAspect adjusts X to keep the surface circular. */
   '  gl_Position = vec4(world.x * uZoom / uAspect, world.y * uZoom, world.z * 0.5, 1.0);',
 
-  '  vERatio = r;',
   /* Approximate normal with the radial direction.  True normal would
      require the gradient of r over the sphere (more involved).  For
      diffuse-only shading this is visually fine — the surface gradient
@@ -229,7 +251,7 @@ var LAB_SV_VS = [
 var LAB_SV_FS = [
   '#version 300 es',
   'precision highp float;',
-  'in float vERatio;',
+  'in float vColor;',              /* push 5.3 — independent color stretch */
   'in vec3 vNormal;',
   'out vec4 fragColor;',
 
@@ -269,7 +291,7 @@ var LAB_SV_FS = [
   '  vec3 l2 = normalize(vec3(-0.8, -0.3, 0.6));',
   '  vec3 n = normalize(vNormal);',
   '  float diff = 0.35 + max(dot(n, l1), 0.0) * 0.70 + max(dot(n, l2), 0.0) * 0.25;',
-  '  vec3 col = cividis(vERatio) * diff;',
+  '  vec3 col = cividis(vColor) * diff;',
   '  fragColor = vec4(col, 1.0);',
   '}'
 ].join('\n');
@@ -309,7 +331,12 @@ function StiffnessViz() {
   /* Per-design state */
   this._S        = new Float32Array(36);    /* row-major Voigt 6×6 compliance, MPa^-1 */
   this._stats    = { E_max: 0, E_min: 0, aniso: 1, hasData: false };
-  this._EmaxUse  = 1;                        /* what the shader uses (per or shared) */
+  /* Push 5.3 — split normalization: radius and color use independent
+     scales so near-isotropic materials still show directional color
+     structure even though their geometry is near-spherical. */
+  this._REmax    = 1;                        /* radius divisor (per or shared) */
+  this._Cmin     = 0;                        /* color stretch low end */
+  this._Cmax     = 1;                        /* color stretch high end */
 
   /* Render state */
   this._active     = false;
@@ -317,6 +344,11 @@ function StiffnessViz() {
   this._rotY       = 0;
   this._rotX       = 0.3;                    /* slight tilt — same default as raymarcher */
   this._lastTickMs = 0;
+  /* Push 5.3 — once the user has touched the canvas, auto-rotate stops
+     permanently for this tile.  The initial auto-rotate stays so the
+     surface is in motion when the tab first opens; the moment the user
+     engages, they're driving. */
+  this._userInteracted = false;
   this._u = {
     zoom:    1.6,                            /* slight padding inside the viewport */
     aspect:  1.0                             /* updated per-frame from canvas size */
@@ -337,8 +369,13 @@ StiffnessViz.prototype._setupGL = function() {
   var gl = this.gl;
   gl.clearColor(0, 0, 0, 1);
   gl.enable(gl.DEPTH_TEST);
-  gl.enable(gl.CULL_FACE);
-  gl.cullFace(gl.BACK);
+  /* Push 5.3 — DO NOT cull back faces.  Stiffness surfaces are non-convex
+     (e.g. saddle-topology lobes in design B), and back-face culling
+     incorrectly hides front faces in concave regions where the implicit
+     winding flips relative to the camera.  Symptom Matt caught: the
+     background showed through the surface at certain orientations.
+     1280 tris × 2 sides is still trivial GPU work. */
+  gl.disable(gl.CULL_FACE);
   gl.frontFace(gl.CCW);
 };
 
@@ -375,7 +412,7 @@ StiffnessViz.prototype._compileShader = function() {
      returns the location of element 0; subsequent elements are at
      ['uS[1]', 'uS[2]', …].  We bind via uniform1fv with the whole array. */
   var L = {};
-  ['uS[0]','uEmax','uRot','uZoom','uAspect'].forEach(function(name){
+  ['uS[0]','uREmax','uCmin','uCmax','uRot','uZoom','uAspect'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -459,22 +496,41 @@ StiffnessViz.prototype.uploadDesign = function(S_mpa /*, rho */) {
       hasData: true
     };
   }
-  /* Default to per-design normalization unless overridden via setEmaxGlobal */
-  this._EmaxUse = this._stats.E_max || 1;
+  /* Default to per-design normalization for both radius and color until
+     setVizParams is called by the design-grid push loop. */
+  this._REmax = this._stats.E_max || 1;
+  this._Cmin  = this._stats.E_min || 0;
+  this._Cmax  = this._stats.E_max || 1;
   this._dirty = true;
 };
 
-/* setEmaxGlobal(E) — override per-design Emax with a shared value.
-   Used in 'shared' normalization mode to make all designs render
-   on the same scale.  Pass null/undefined to revert to per-design. */
-StiffnessViz.prototype.setEmaxGlobal = function(E) {
+
+/* Push 5.3 — setVizParams(REmax, Cmin, Cmax)
+   Push per-design or shared normalization values to the shader.
+     REmax — radius divisor (E/REmax → vertex radial scale)
+     Cmin  — color stretch low end
+     Cmax  — color stretch high end
+   Called from 40-design-grid.js after mount, using resolveStiffViz which
+   honors the per/shared toggle.  In 'per' mode all three come from this
+   design's own stats; in 'shared' mode all three come from the global
+   E_min/E_max across all designs (so cross-design comparison shows
+   weaker designs as both smaller AND darker). */
+StiffnessViz.prototype.setVizParams = function(REmax, Cmin, Cmax) {
   if (this.failed) return;
-  if (E == null || !isFinite(E) || E <= 0) {
-    this._EmaxUse = this._stats.E_max || 1;
-  } else {
-    this._EmaxUse = E;
-  }
+  if (REmax != null && isFinite(REmax) && REmax > 0) this._REmax = REmax;
+  else this._REmax = this._stats.E_max || 1;
+  if (Cmin != null && isFinite(Cmin) && Cmin >= 0)   this._Cmin = Cmin;
+  else this._Cmin = this._stats.E_min || 0;
+  if (Cmax != null && isFinite(Cmax) && Cmax > 0)    this._Cmax = Cmax;
+  else this._Cmax = this._stats.E_max || 1;
   this._dirty = true;
+};
+
+/* setEmaxGlobal(E) — DEPRECATED in push 5.3; kept as a thin wrapper for
+   any caller that hasn't migrated to setVizParams.  Sets only the radius
+   normalization, leaving color stretch at per-design defaults. */
+StiffnessViz.prototype.setEmaxGlobal = function(E) {
+  this.setVizParams(E, this._stats.E_min, this._stats.E_max);
 };
 
 StiffnessViz.prototype.getStats = function() {
@@ -512,8 +568,11 @@ StiffnessViz.prototype.setActive = function(b) {
 
 StiffnessViz.prototype._tick = function(ts) {
   /* Slow auto-rotation — about half the speed of the raymarcher's geom
-     mode so the lobes are readable.  Pauses while user is dragging. */
-  if (!this._pointerDown) {
+     mode so the lobes are readable.  Push 5.3 — stops permanently once
+     the user has interacted with the tile (drag, pinch); the initial
+     auto-rotate on tab open is the only animated phase, after that the
+     user is in control. */
+  if (!this._pointerDown && !this._userInteracted) {
     var dt = (ts - this._lastTickMs) * 0.001;
     if (dt > 0.1) dt = 0.1;
     this._rotY += dt * 0.25;
@@ -552,7 +611,9 @@ StiffnessViz.prototype._render = function() {
 
   gl.useProgram(this._prog);
   gl.uniform1fv(this._uloc['uS[0]'], this._S);
-  gl.uniform1f (this._uloc.uEmax,    this._EmaxUse);
+  gl.uniform1f (this._uloc.uREmax,   this._REmax);
+  gl.uniform1f (this._uloc.uCmin,    this._Cmin);
+  gl.uniform1f (this._uloc.uCmax,    this._Cmax);
   gl.uniformMatrix3fv(this._uloc.uRot, false, rot);
   gl.uniform1f (this._uloc.uZoom,    this._u.zoom);
   gl.uniform1f (this._uloc.uAspect,  w / h);
@@ -589,6 +650,7 @@ StiffnessViz.prototype._attachInteractionHandlers = function() {
 
   this.canvas.addEventListener('pointerdown', function(e) {
     self._pointerDown = true;
+    self._userInteracted = true;     /* push 5.3 — disables auto-rotate permanently */
     self._lastPointerX = e.clientX;
     self._lastPointerY = e.clientY;
     self.canvas.setPointerCapture(e.pointerId);
@@ -619,9 +681,11 @@ StiffnessViz.prototype._attachInteractionHandlers = function() {
 
   /* Wheel zoom — clamp [0.8, 3.0] for the stiffness surface (different
      range than the raymarcher because the surface fills less of the
-     viewport).  Step proportional to current zoom for smooth UX. */
+     viewport).  Step proportional to current zoom for smooth UX.  Push
+     5.3 — wheel also counts as user interaction, stopping auto-rotate. */
   this.canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
+    self._userInteracted = true;
     var z = self._u.zoom;
     var step = z * 0.001 * e.deltaY;
     z = z * (1.0 - step);
@@ -758,24 +822,72 @@ function computeGlobalStiffEmax(allDesigns) {
   return maxE;
 }
 
+/* Push 5.3 — companion to computeGlobalStiffEmax.  Returns the smallest
+   E_min across all designs (the floor of the color stretch in shared
+   mode).  Returns 0 if no designs have stiffness data. */
+function computeGlobalStiffEmin(allDesigns) {
+  if (!allDesigns || allDesigns.length === 0) return 0;
+  var minE = Infinity;
+  for (var i = 0; i < allDesigns.length; i++) {
+    var sv = LAB_SV_REGISTRY[allDesigns[i].id];
+    if (sv && sv._stats && sv._stats.hasData) {
+      if (sv._stats.E_min < minE) minE = sv._stats.E_min;
+    }
+  }
+  return isFinite(minE) ? minE : 0;
+}
+
 
 /* ════════════════════════════════════════════════════════════
-   resolveStiffEmax — pick the Emax value to use for one design's
-   render, based on the global normalization mode (shared with
-   the stress tab via getStressNormMode()).
+   resolveStiffViz — pick the (REmax, Cmin, Cmax) triple for one
+   design's render, based on the global normalization mode (shared
+   with the stress tab via getStressNormMode()).
 
-     'per'    → design's own E_max
-     'shared' → max(E_max) across all designs
+   Push 5.3 — color stretch and radius stretch both honor the toggle:
 
-   Returns Emax in MPa.
+     'per' mode:
+       REmax = this design's E_max
+       Cmin  = this design's E_min   } color spans full cividis range
+       Cmax  = this design's E_max   } for every design
+
+     'shared' mode:
+       REmax = global max(E_max) across designs
+                 (strongest design fills viewport; weaker designs
+                  shrink proportionally)
+       Cmin  = global min(E_min) across designs
+                 (weak designs render as mostly-dark; strong as
+                  mostly-yellow; "same color = same E value" everywhere)
+       Cmax  = global max(E_max) across designs
+
+   Returns { REmax, Cmin, Cmax } all in MPa.
    ════════════════════════════════════════════════════════════ */
-function resolveStiffEmax(design, allDesigns) {
+function resolveStiffViz(design, allDesigns) {
+  var sv = LAB_SV_REGISTRY[design.id];
+  var localStats = (sv && sv.getStats) ? sv.getStats() : null;
+  if (!localStats || !localStats.hasData) {
+    return { REmax: 1, Cmin: 0, Cmax: 1 };
+  }
   var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
   if (mode === 'shared') {
-    var globalE = computeGlobalStiffEmax(allDesigns);
-    if (globalE > 0) return globalE;
+    var globalMax = computeGlobalStiffEmax(allDesigns);
+    var globalMin = computeGlobalStiffEmin(allDesigns);
+    return {
+      REmax: globalMax > 0 ? globalMax : localStats.E_max,
+      Cmin:  globalMin >= 0 ? globalMin : localStats.E_min,
+      Cmax:  globalMax > 0 ? globalMax : localStats.E_max
+    };
   }
-  var sv = LAB_SV_REGISTRY[design.id];
-  if (sv && sv._stats && sv._stats.hasData) return sv._stats.E_max;
-  return 1;
+  /* per-design */
+  return {
+    REmax: localStats.E_max,
+    Cmin:  localStats.E_min,
+    Cmax:  localStats.E_max
+  };
+}
+
+/* Backward-compat shim — push 5.0/5.1 used resolveStiffEmax returning a
+   single Emax.  Kept so any external caller (unlikely) doesn't break.
+   The 40-design-grid.js call site migrates to resolveStiffViz. */
+function resolveStiffEmax(design, allDesigns) {
+  return resolveStiffViz(design, allDesigns).REmax;
 }

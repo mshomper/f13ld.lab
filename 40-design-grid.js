@@ -337,18 +337,23 @@ function renderDesignGrid(){
     );
   }
 
-  /* Push 5 — Push per-design Emax to mounted StiffnessViz instances after
-     mount.  Reuses the per/shared toggle from the stress-field tab (push
-     4b precedent) via resolveStiffEmax → getStressNormMode.  In 'shared'
-     mode every design renders against the global max E across designs;
-     in 'per' mode each surface saturates against its own E_max. */
+  /* Push 5 — Push per-design viz params to mounted StiffnessViz instances
+     after mount.  Reuses the per/shared toggle from the stress-field tab
+     (push 4b precedent) via resolveStiffViz → getStressNormMode.
+     Push 5.3 — resolver now returns (REmax, Cmin, Cmax) so the per/shared
+     toggle drives BOTH radius normalization AND color stretch.  In 'shared'
+     mode every design renders against the global max E across designs AND
+     stretches color over the global E_min..E_max range, so weaker designs
+     read as both smaller and darker — matching the stress tab's "same
+     color = same value everywhere" cross-comparison pattern. */
   for (var svk = 0; svk < svDesigns.length; svk++) {
     var svkid = svDesigns[svk].id;
     var svkSV = (typeof LAB_SV_REGISTRY !== 'undefined') ? LAB_SV_REGISTRY[svkid] : null;
     if (!svkSV || svkSV.failed) continue;
     var svDesign = LAB_STATE.designs[svDesigns[svk].i];
-    if (typeof resolveStiffEmax === 'function') {
-      svkSV.setEmaxGlobal(resolveStiffEmax(svDesign, LAB_STATE.designs));
+    if (typeof resolveStiffViz === 'function' && svkSV.setVizParams) {
+      var vp = resolveStiffViz(svDesign, LAB_STATE.designs);
+      svkSV.setVizParams(vp.REmax, vp.Cmin, vp.Cmax);
     }
   }
 
