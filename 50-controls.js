@@ -319,6 +319,16 @@ function mapElasticToResults(R){
     rho:          R.rho,
     iters:        R.iters,
     converged:    R.converged,
+    /* Push 5 — full Voigt 6×6 effective compliance (S) and stiffness (C_eff)
+       tensors in PHYSICAL-axis coordinates, units MPa.  S is consumed by the
+       Stiffness ⊕ tab (22-stiffness-viz.js) to render the directional
+       Young's modulus surface E(n̂) = 1 / (v^T·S·v).  C_eff is plumbed
+       through for future use (orthotropy diagnostics, Mohr-3D viz).
+       Stored as plain Array(36) (the solver does Array.from on the
+       Float64Array at the API boundary so downstream consumers don't
+       have to worry about typed-array identity. */
+    S:            R.S || null,
+    C_eff:        R.C_eff || null,
     /* Per-voxel fields for Deformed / Stress tab raymarchers (Push A.2/A.3).
        A.2.2 — captures all three physical axes by default.  null until the
        elastic solver is invoked with field capture (default since A.1).
