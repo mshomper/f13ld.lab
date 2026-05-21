@@ -317,8 +317,28 @@ function StiffnessViz() {
   this.canvas.style.height = '100%';
   this.canvas.style.display = 'block';
   this.canvas.style.touchAction = 'none';
+  /* Push 5.5 — CSS radial gradient background: darker sage (#6b6e64) base,
+     lighter in center, darker at edges.  Three intermediate stops give a
+     roughly squared falloff that visually matches the r*r mix() the
+     raymarcher's shader uses, so the two viewport types feel consistent.
+     The GL framebuffer is rendered transparent (clearColor alpha=0) so
+     this CSS bg shows through where the surface doesn't cover. */
+  this.canvas.style.background =
+    'radial-gradient(circle at 50% 50%, ' +
+      'rgb(119, 122, 112) 0%, ' +
+      'rgb(115, 118, 108) 25%, ' +
+      'rgb(107, 110, 100) 60%, ' +
+      'rgb( 95,  98,  88) 100%)';
 
-  this.gl = this.canvas.getContext('webgl2', { antialias: true, alpha: false });
+  /* Push 5.5 — alpha:true + premultipliedAlpha:false so the CSS background
+     above shows through wherever the GL clear color (transparent black) is
+     visible.  The surface fragment shader still outputs vec4(col, 1.0) so
+     the surface itself is fully opaque against the CSS background. */
+  this.gl = this.canvas.getContext('webgl2', {
+    antialias: true,
+    alpha: true,
+    premultipliedAlpha: false
+  });
   this.failed = !this.gl;
   if (this.failed) { return; }
 
@@ -367,14 +387,12 @@ function StiffnessViz() {
 
 StiffnessViz.prototype._setupGL = function() {
   var gl = this.gl;
-  /* Push 5.4 — viewport background lightened from pure black to sage gray
-     (#8e9184).  Motivation: the cividis colormap's low end is deep navy,
-     which had near-zero contrast against black — directions of low E(n̂)
-     were nearly invisible.  Against sage the low-end pops dramatically.
-     Cividis mid-tone blends somewhat with sage by design — directions of
-     "average" stiffness feel like negative space, focusing the eye on
-     the stiff (yellow) and compliant (navy) extremes. */
-  gl.clearColor(142/255, 145/255, 132/255, 1);
+  /* Push 5.5 — clearColor is transparent so the CSS radial-gradient
+     background set in the constructor shows through wherever the surface
+     doesn't cover.  The CSS bg is darker sage (#6b6e64) with a subtle
+     center-light gradient.  See StiffnessViz constructor for the gradient
+     definition. */
+  gl.clearColor(0, 0, 0, 0);
   gl.enable(gl.DEPTH_TEST);
   /* Push 5.3 — DO NOT cull back faces.  Stiffness surfaces are non-convex
      (e.g. saddle-topology lobes in design B), and back-face culling

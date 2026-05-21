@@ -327,13 +327,17 @@ function buildLabRaymarcherFS(stepCount) {
     '  vec3 ro = rot * vec3(0.0, 0.0, zoom);',
     '  vec3 rd = normalize(rot * vec3(uv.x, uv.y, -1.6));',
     '  float r = clamp(length(uv) * 1.1, 0.0, 1.0);',
-    /* Push 5.4 — viewport background lightened from dark gray vignette
-       (0.07→0.03) to sage gray (#8e9184 = 0.557/0.569/0.518).  Keeps a
-       subtle vignette gradient — slightly darker at the center, slightly
-       lighter at the edges — to give the surface a sense of depth, but
-       both endpoints are now in the sage family for visual consistency
-       with the stiffness viz viewport (also #8e9184). */
-    '  vec3 bgCol = mix(vec3(0.557,0.569,0.518), vec3(0.510,0.522,0.474), r*r);',
+    /* Push 5.4/5.5 — viewport background: darker sage base (#6b6e64) with
+       a center-light radial gradient.  bgCol math: r∈[0,1] is the radial
+       distance from canvas center; r*r gives a soft squared falloff.
+       mix(center, edges, r*r) gives lighter at r=0, darker at r=1.
+
+       Center (r=0):  rgb(119, 122, 112)  = #777a70  (sage, +12 each ch)
+       Edges (r=1):   rgb( 95,  98,  88)  = #5f6258  (sage, −12 each ch)
+
+       Subtle but visible — gives the viewport depth without competing
+       with the cividis surface for visual weight. */
+    '  vec3 bgCol = mix(vec3(0.467,0.478,0.439), vec3(0.373,0.384,0.345), r*r);',
 
     /* AABB intersect [-extent, +extent]³.  Extent is constant (π) in
        geom/stress modes; stretches per-axis with the macro strain in
