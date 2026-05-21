@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.3.0-rc2 · alpha · Phase 3 push 2 · GPU elastic FFT-CG live
+**Status:** v0.3.1 · alpha · Phase 3 push 3 of 3 · GPU elastic + visualization stack live
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -36,33 +36,38 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 10-minute ceiling for default tier. F13LD = FAST.
 
-## What's new in v0.3.0-rc2
+## What's new in v0.3.1
 
-Phase 3 push 2 lands the GPU elastic FFT-CG solver.
+Phase 3 push 3 closes Phase 3 with the physics correctness chain and the visualization stack on top of the elastic solver.
 
-- **FFTPlan extended** — added `forwardEncoded(encoder)` / `inverseEncoded(encoder)` and GPU-side `loadFromBuffer` / `storeToBuffer` so the elastic solver can batch 6 FFTs plus a dozen small kernels into a single command submit per CG iteration (`12-fft-plan.js`)
-- **Elastic solver** — full WGSL kernel set (localStress, tauCompute, packComplex, gammaAccum, deAccum, axpy, xbpy, fill, dotReduce) plus the `ElasticSolver` JS class that orchestrates conjugate-gradient iterations to convergence (`16-elastic-solver.js`)
-- **Self-test 3** — solves all three demos via the GPU CG, validates Schwarz P against a CPU reference (cubic isotropy + magnitude in the normal-only band), reports per-design Ex/Ey/Ez, iter counts, and timing breakdowns (`17-elastic-test.js`)
+### Physics correctness chain
 
-UI gains a new `▸ Run elastic · 3 demos` link below the existing two self-tests. Click it to run the full GPU CG pipeline on Schwarz P, Spinodoid, and Hyperuniform; Ex/Ey/Ez for each design will paint into the design column E11 stat.
+- **`buildGamma` textbook formula** — ported from F13LD.sweep v0.16.0, replacing the Voigt-biased version. Schwarz P at ρ=0.5 now lands at E11 = **33.16 GPa** (effective ρ exponent ~1.74, inside the skeletal-TPMS ρ¹·⁶⁻²·⁰ band). The rc2 value of 54.09 GPa was a known overestimate from a projector-sign bug; rc3 is correct (`14-rasterizer.js`).
+- **Per-LC field extraction** — solver now captures displacement u'(x) (RGBA8 3D texture) and von Mises stress σ_VM(x) (R8 3D texture) per load case via closed-form spectral inversion. Both feed the new visualization tabs (`16-elastic-solver.js`).
+- **CG convergence tuned to sweep rigorous** — `CG_TOL` tightened from 1e-5 (cap-hit) to 1e-4 (true convergence); `CG_MAXITER` raised 100 → 300. Schwarz P now converges in 230 iters/LC at ~1.7 s wall (was hitting the cap at 100). Same convergence as F13LD.sweep solver.
+- **Multi-axis loading** — all three physical load cases (x, y, z) captured by default. Per-design X/Y/Z toggle in the deformed/stress tabs re-uploads the matching axis without re-solving.
 
-### Known approximation: normal-strain-only FFT-CG
+### Visualization stack
 
-Push 2's elastic solver mirrors F13LD.sweep's `cgSolveNormal`: it solves three normal load cases (xx, yy, zz) and pins local shear strains to zero. Exact for the macro response of isotropic constituents under pure normal loading; for heterogeneous microstructures it OVERESTIMATES effective stiffness by roughly 10–20% compared to full 6-strain FFT-CG (because shear DOFs that would localize stress at material boundaries are constrained out).
+- **Deformed view** — backward-warp raymarcher applies `u(x) = ε̄·x + u'(x)` to the SDF lookup, showing both macroscopic stretch and microstructural fluctuation in one render. Amp slider live-scales (0–100%); pointer-drag rotates; wheel zooms. Auto-rotate disabled in this mode so the load direction stays unambiguous (`21-raymarcher.js`).
+- **Stress field view** — viridis colormap on σ_VM, with three layered honesty fixes: p95 percentile clipping for the long-tail distribution, one-voxel σ_VM dilation into adjacent void to eliminate interface contamination at thin walls, and per-design auto-gamma so median σ_VM maps to the colormap midpoint regardless of structure type. Diffuse-only shading; per-tile colorbar with `p95 · γ=X.XX` annotation; true σ_VM,max surfaced in the per-tile readout.
+- **per/shared normalization toggle** — view-strip segmented control (visible only in stress mode). `per` = auto per-design (default; best for spatial pattern discovery). `shared` = global p95 cap across all designs, linear viridis (best for cross-design absolute comparison — "yellow" everywhere maps to the same σ_VM).
 
-For Schwarz P solid at ρ=0.5 with Ti-6Al-4V (Es=110 GPa), the normal-only method gives E_eff ≈ 0.49·Es ≈ 54 GPa (CPU reference verified at N=8/16/32). Full 6-strain literature values land closer to 0.30–0.45·Es. The difference is the documented price of the approximation, and sweep ships this knowingly because it's adequate for design *ranking* across thousands of recipes.
+### Known approximation: still normal-strain-only FFT-CG
 
-Lab inherits the same approximation for Phase 3 and lifts to full 6-strain (with shear cases yz, xz, xy) in Phase 4 alongside the directional stiffness surface viz. Numbers from rc2 will shift downward in Phase 4 as a result — expected and documented.
+rc3 ships the same normal-only (xx/yy/zz) load case set as rc2. Effective stiffness is still ~10-20% high in shear-dominated regimes (sheet TPMS, hyperuniform networks at low ρ) relative to full 6-strain literature values. For Schwarz P, which is close to normal-dominated, rc3's 33.16 GPa is within ~5% of full-Voigt literature reports — well inside the rc2 → rc3 correction band of ~20 GPa. **Phase 4 lifts to full Voigt 6×6 (shear LCs yz, xz, xy)** alongside the directional stiffness surface viz; sheet TPMS numbers will shift downward another ~10% when Phase 4 lands.
+
+The visualization stack built in rc3 is designed to receive Phase 4's output unchanged — fields by axis just become fields by LC, with the existing X/Y/Z toggle extended to six positions.
 
 ## Roadmap
 
 - **Phase 1** · UI shell, hardware detection, design ingest scaffolding ✓
 - **Phase 2** · WebGPU foundation, WGSL 3D FFT kernel ✓
-- **Phase 3** ← *here · push 2 of 3* · SDF rasterizer, linear elastic FFT-CG, Stokes-Brinkman flow
-- **Phase 4** · Full Voigt 6×6 with shear cases, stiffness directional surface viz, connectivity gating
+- **Phase 3** · SDF rasterizer, linear elastic FFT-CG, field extraction, viz stack ✓
+- **Phase 4** ← *next* · Full Voigt 6×6 with shear cases, stiffness directional surface viz, connectivity gating
 - **Phase 5** · Linear buckling (LOBPCG)
 - **Phase 6** · Nonlinear (Newton + J2 plasticity)
-- **Phase 7** · Deformed-geometry domain warp, stress field overlay
+- **Phase 7** · ~~Deformed-geometry domain warp, stress field overlay~~ — landed early in Phase 3 push 3
 - **Phase 8** · Thermal κ tensor, remaining view modes
 - **Phase 9** · Multi-page PDF export
 - **Phase 10** · F13LD.vault integration (fetch, push as new property record)
