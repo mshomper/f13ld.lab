@@ -367,7 +367,14 @@ function StiffnessViz() {
 
 StiffnessViz.prototype._setupGL = function() {
   var gl = this.gl;
-  gl.clearColor(0, 0, 0, 1);
+  /* Push 5.4 — viewport background lightened from pure black to sage gray
+     (#8e9184).  Motivation: the cividis colormap's low end is deep navy,
+     which had near-zero contrast against black — directions of low E(n̂)
+     were nearly invisible.  Against sage the low-end pops dramatically.
+     Cividis mid-tone blends somewhat with sage by design — directions of
+     "average" stiffness feel like negative space, focusing the eye on
+     the stiff (yellow) and compliant (navy) extremes. */
+  gl.clearColor(142/255, 145/255, 132/255, 1);
   gl.enable(gl.DEPTH_TEST);
   /* Push 5.3 — DO NOT cull back faces.  Stiffness surfaces are non-convex
      (e.g. saddle-topology lobes in design B), and back-face culling
@@ -679,18 +686,21 @@ StiffnessViz.prototype._attachInteractionHandlers = function() {
   this.canvas.addEventListener('pointerup',     onPointerUp);
   this.canvas.addEventListener('pointercancel', onPointerUp);
 
-  /* Wheel zoom — clamp [0.8, 3.0] for the stiffness surface (different
-     range than the raymarcher because the surface fills less of the
-     viewport).  Step proportional to current zoom for smooth UX.  Push
-     5.3 — wheel also counts as user interaction, stopping auto-rotate. */
+  /* Wheel zoom — push 5.4 — broadened from [0.8, 3.0] to [0.15, 50.0]
+     to cover (a) zooming out on high-aniso surfaces that overflow the
+     viewport at the default 1.6 zoom, and (b) zooming way in on small
+     designs in shared mode (where a 45× weaker design renders at 2% of
+     viewport).  Step proportional to current zoom for smooth UX across
+     the wide range.  Push 5.3 — wheel also counts as user interaction,
+     stopping auto-rotate. */
   this.canvas.addEventListener('wheel', function(e) {
     e.preventDefault();
     self._userInteracted = true;
     var z = self._u.zoom;
     var step = z * 0.001 * e.deltaY;
     z = z * (1.0 - step);
-    if (z < 0.8) z = 0.8;
-    if (z > 3.0) z = 3.0;
+    if (z < 0.15) z = 0.15;
+    if (z > 50.0) z = 50.0;
     self._u.zoom = z;
     self._dirty = true;
   }, { passive: false });

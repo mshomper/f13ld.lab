@@ -327,7 +327,13 @@ function buildLabRaymarcherFS(stepCount) {
     '  vec3 ro = rot * vec3(0.0, 0.0, zoom);',
     '  vec3 rd = normalize(rot * vec3(uv.x, uv.y, -1.6));',
     '  float r = clamp(length(uv) * 1.1, 0.0, 1.0);',
-    '  vec3 bgCol = mix(vec3(0.07,0.07,0.07), vec3(0.03,0.03,0.03), r*r);',
+    /* Push 5.4 — viewport background lightened from dark gray vignette
+       (0.07→0.03) to sage gray (#8e9184 = 0.557/0.569/0.518).  Keeps a
+       subtle vignette gradient — slightly darker at the center, slightly
+       lighter at the edges — to give the surface a sense of depth, but
+       both endpoints are now in the sage family for visual consistency
+       with the stiffness viz viewport (also #8e9184). */
+    '  vec3 bgCol = mix(vec3(0.557,0.569,0.518), vec3(0.510,0.522,0.474), r*r);',
 
     /* AABB intersect [-extent, +extent]³.  Extent is constant (π) in
        geom/stress modes; stretches per-axis with the macro strain in
