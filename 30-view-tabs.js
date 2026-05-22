@@ -12,7 +12,7 @@ var VIEW_STATE = {
                                             //   "δ_max as fraction of cell half-extent",
                                             //   capped at 0..20% (slider×0.20).
                                             //   Default 0.25 → 5% cell stretch.
-  loadAxis:   { /* designId: 'x'|'y'|'z' */ },  // A.2.2 — per-design active load axis
+  loadAxis:   { /* designId: 'xx'|'yy'|'zz'|'yz'|'xz'|'xy' */ },  // A.2.2 / Piece B — per-design active load axis (Voigt)
   stressNormMode: 'per',                   // A.3.3 — 'per' (auto per-design) | 'shared' (global p95, linear)
   stressSat:  { /* designId: 0..2 */ }     // 4b — per-design saturation multiplier on auto p95 cap
 };
@@ -108,20 +108,57 @@ function onStressSatInput(designId, sat){
 }
 
 /* ----------------------------------------------------------
-   A.2.2 — Per-design active load axis.  The elastic solver
-   captures fields for all three physical axes; this state
-   tracks which one each design tile is currently visualizing.
-   Default is Z (vertical compression — physiological loading
-   on orthopedic implants).
+   A.2.2 / Piece B — Per-design active load axis.  The elastic
+   solver captures fields for all SIX Voigt axes (xx/yy/zz/yz/xz/xy):
+     · normal axes (xx/yy/zz) carry both u'(x) and σ_VM
+     · shear  axes (yz/xz/xy) carry σ_VM only — u'(x) reconstruction
+       requires the diagonal spectral inversion which is undefined
+       off-diagonal.
+
+   Default 'zz' (vertical compression — physiological loading on
+   orthopedic implants).
+
+   One-slot state: loadAxis[id] holds the user's most recent pick
+   across either tab.  getDeformAxis() coerces shear → 'zz' on read
+   without mutating state, so switching stress→deform→stress will
+   preserve the shear pick UNLESS the user actively clicks a deform
+   button in between.
+
+   Backward-compat: state values 'x'/'y'/'z' (from before Piece B)
+   are promoted to 'xx'/'yy'/'zz' on read.  Relevant for the
+   upcoming localStorage persistence.
    ---------------------------------------------------------- */
 function getLoadAxis(designId){
-  return VIEW_STATE.loadAxis[designId] || 'z';
+  var v = VIEW_STATE.loadAxis[designId];
+  if (!v) return 'zz';
+  /* Promote pre-Piece-B single-letter values. */
+  if (v === 'x') return 'xx';
+  if (v === 'y') return 'yy';
+  if (v === 'z') return 'zz';
+  return v;
+}
+
+/* getDeformAxis — for the Deform tab, which can only render u'(x)
+   for normal axes.  If state holds a shear axis, return 'zz' (read-
+   only coercion; does not mutate state). */
+function getDeformAxis(designId){
+  var v = getLoadAxis(designId);
+  if (v === 'xx' || v === 'yy' || v === 'zz') return v;
+  return 'zz';
+}
+
+/* getStressAxis — for the Stress tab, which can render all six. */
+function getStressAxis(designId){
+  return getLoadAxis(designId);
 }
 
 /* Pure state mutation — dispatch (re-upload fields to raymarcher,
    update toggle button visual state) lives in 40-design-grid.js's
-   load-axis click handler.  Same pattern as onDeformAmpInput. */
+   load-axis click handler.  Same pattern as onDeformAmpInput.
+   Silently rejects unknown axis strings. */
 function onLoadAxisClick(designId, axis){
+  if (axis !== 'xx' && axis !== 'yy' && axis !== 'zz' &&
+      axis !== 'yz' && axis !== 'xz' && axis !== 'xy') return;
   VIEW_STATE.loadAxis[designId] = axis;
 }
 

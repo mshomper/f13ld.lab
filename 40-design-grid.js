@@ -138,7 +138,12 @@ function renderDesignGrid(){
       if (!rcp) continue;
       if (needsFields) {
         if (!rd.results || !rd.results._fieldsByAxis) continue;
-        var rdAxis = (typeof getLoadAxis === 'function') ? getLoadAxis(rd.id) : 'z';
+        /* Piece B — mode-aware axis selection.  Deform tab uses
+           getDeformAxis (coerces shear → 'zz'); stress tab can
+           render any of the 6 Voigt axes. */
+        var rdAxis = (VIEW_STATE.mode === 'stress')
+          ? ((typeof getStressAxis === 'function') ? getStressAxis(rd.id) : 'zz')
+          : ((typeof getDeformAxis === 'function') ? getDeformAxis(rd.id) : 'zz');
         if (!rd.results._fieldsByAxis[rdAxis]) continue;
       }
       if (typeof getOrCreateRaymarcher === 'function') {
@@ -286,9 +291,10 @@ function renderDesignGrid(){
         (showControls
           ? (VIEW_STATE.mode === 'stress'
               ? buildStressControl(d.id,
-                                   (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0)
+                                   (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0,
+                                   (typeof getStressAxis === 'function') ? getStressAxis(d.id) : 'zz')
               : buildDeformControl(d.id, amp,
-                                   (typeof getLoadAxis === 'function') ? getLoadAxis(d.id) : 'z'))
+                                   (typeof getDeformAxis === 'function') ? getDeformAxis(d.id) : 'zz'))
           : '') +
       '</div>' +
       buildSummary(stats) +
@@ -317,7 +323,10 @@ function renderDesignGrid(){
     if (!rkrm || rkrm.failed) continue;
     var rdesign = LAB_STATE.designs[rmDesigns[rk].i];
     if (rdesign.results && rdesign.results._fieldsByAxis && rkrm.uploadFields) {
-      var rkAxis = (typeof getLoadAxis === 'function') ? getLoadAxis(rkid) : 'z';
+      /* Piece B — mode-aware axis selection (same logic as gating above). */
+      var rkAxis = (VIEW_STATE.mode === 'stress')
+        ? ((typeof getStressAxis === 'function') ? getStressAxis(rkid) : 'zz')
+        : ((typeof getDeformAxis === 'function') ? getDeformAxis(rkid) : 'zz');
       var fs = rdesign.results._fieldsByAxis[rkAxis];
       if (fs) {
         /* A.3.3 — resolve cap + gamma based on current normalization mode
@@ -409,7 +418,8 @@ function renderDesignGrid(){
       }
       var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
       if (rm && !rm.failed && rm.uploadFields && design && design.results && design.results._fieldsByAxis) {
-        var axis = (typeof getLoadAxis === 'function') ? getLoadAxis(id) : 'z';
+        /* Piece B — this handler runs only in stress mode, so use stress axis directly. */
+        var axis = (typeof getStressAxis === 'function') ? getStressAxis(id) : 'zz';
         var fs = design.results._fieldsByAxis[axis];
         if (fs) {
           var sd = resolveStressDisplay(design, LAB_STATE.designs);
@@ -487,11 +497,14 @@ function buildSummary(stats){
 }
 
 function buildDeformControl(designId, amp, axis){
-  /* A.2.2 — Load-axis toggle.  Three buttons (X/Y/Z) — clicking one
+  /* A.2.2 / Piece B — Load-axis toggle for the Deform tab.  Three
+     buttons (XX/YY/ZZ — normal Voigt axes only) — clicking one
      re-uploads the matching fieldset from d.results._fieldsByAxis
-     to the raymarcher.  Inline styles avoid touching lab.css for
-     this small addition; can be promoted to .load-axis-btn class
-     selectors during a later polish pass. */
+     to the raymarcher.  Shear axes (yz/xz/xy) are not shown here
+     because u'(x) is undefined for them; see buildStressControl
+     for the 6-button variant used on the Stress tab.  Inline styles
+     avoid touching lab.css for this small addition; can be promoted
+     to .load-axis-btn class selectors during a later polish pass. */
   function btn(ax) {
     var active = (axis === ax);
     var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
@@ -510,7 +523,7 @@ function buildDeformControl(designId, amp, axis){
      hardware.  See 21-raymarcher.js sampleDisp/sampleStress. */
   return '<div class="vp-deform-control show">' +
     '<div class="load-axis-toggle" style="'+toggleStyle+'">' +
-      btn('x') + btn('y') + btn('z') +
+      btn('xx') + btn('yy') + btn('zz') +
     '</div>' +
     '<label>amp</label>' +
     '<input type="range" min="0" max="1" step="0.01" value="'+amp+'" data-design-id="'+designId+'" class="amp-slider">' +
@@ -518,14 +531,33 @@ function buildDeformControl(designId, amp, axis){
     '</div>';
 }
 
-/* 4b — Stress mode saturation slider.  Per-design multiplier on the
-   auto p95 cap.  Range 0..2 with default 1.0 (= no change).  Value
-   reads as "× auto" so the user sees how far they're scaling from
-   the auto-tuned baseline.  Reuses the .amp-slider visual but tags
-   class .sat-slider for handler routing.  Sampling kernel hardcoded
-   to cubic — see buildDeformControl note. */
-function buildStressControl(designId, sat){
+/* 4b / Piece B — Stress mode controls.  Six-button axis toggle
+   (XX/YY/ZZ/YZ/XZ/XY — all Voigt axes — since σ_VM is well-defined
+   for every load case) + saturation slider.
+
+   The 6-button toggle uses the same .load-axis-btn class so the
+   existing click handler in attachDesignGridListeners routes to it
+   transparently — only the buttons inside .load-axis-toggle change.
+
+   Sat slider: per-design multiplier on the auto p95 cap.  Range 0..2
+   with default 1.0.  Reuses the .amp-slider visual but class-tagged
+   .sat-slider for handler routing.  Sampling kernel hardcoded to
+   cubic — see buildDeformControl note. */
+function buildStressControl(designId, sat, axis){
+  function btn(ax) {
+    var active = (axis === ax);
+    var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
+               'color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; ' +
+               'padding:2px 6px; cursor:pointer; letter-spacing:0.04em; line-height:1;';
+    var on   = 'background:#c8f542; border-color:#c8f542; color:#0a0a0a;';
+    return '<button class="load-axis-btn" data-design-id="'+designId+'" data-axis="'+ax+'" ' +
+           'style="'+base + (active ? on : '') +'">'+ax.toUpperCase()+'</button>';
+  }
+  var toggleStyle = 'display:inline-flex; gap:0; margin-right:8px;';
   return '<div class="vp-deform-control show">' +
+    '<div class="load-axis-toggle" style="'+toggleStyle+'">' +
+      btn('xx') + btn('yy') + btn('zz') + btn('yz') + btn('xz') + btn('xy') +
+    '</div>' +
     '<label>sat</label>' +
     '<input type="range" min="0" max="2" step="0.05" value="'+sat+'" data-design-id="'+designId+'" class="sat-slider">' +
     '<span class="v">×'+sat.toFixed(2)+' auto</span>' +
@@ -641,7 +673,9 @@ function removeDesign(designId){
 function computeStressMaxAcrossAxes(fieldsByAxis){
   if (!fieldsByAxis) return 0;
   var globalMax = 0;
-  var axes = ['x', 'y', 'z'];
+  /* Piece B — all six Voigt axes carry σ_VM; shear axes have null u_prime
+     but their sigma_vm is fully populated. */
+  var axes = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
   for (var i = 0; i < axes.length; i++){
     var f = fieldsByAxis[axes[i]];
     if (!f || !f.sigma_vm) continue;
@@ -686,7 +720,11 @@ function computeStressMaxAcrossAxes(fieldsByAxis){
 function computeStressStatsAcrossAxes(fieldsByAxis){
   var noData = { p95: 0, median: 0, max: 0, autoGamma: 1.0 };
   if (!fieldsByAxis) return noData;
-  var axes = ['x', 'y', 'z'];
+  /* Piece B — pools σ_VM across all six Voigt axes for per-design stats.
+     This makes p95/median sensitive to shear-LC stress concentrations,
+     which is correct: per-design auto-cap should reflect the full
+     loading envelope, not just the normal-axis subset. */
+  var axes = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
 
   /* Pass 1: global max */
   var globalMax = 0;
@@ -761,7 +799,12 @@ function computeStressStatsAcrossAxes(fieldsByAxis){
    ---------------------------------------------------------- */
 function computeGlobalStressP95(designs){
   if (!designs || designs.length === 0) return 0;
-  var axes = ['x', 'y', 'z'];
+  /* Piece B — shared-mode pool covers all six Voigt axes across all
+     designs.  Shear-LC σ_VM tends to concentrate at material interfaces;
+     the resulting global p95 is tighter than the pre-Piece-B normal-only
+     pool.  Users can dial up the sat slider to brighten low-stress
+     designs against this stricter cap. */
+  var axes = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
 
   /* Pass 1: global max across ALL designs */
   var globalMax = 0;

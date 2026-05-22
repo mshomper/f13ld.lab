@@ -827,79 +827,100 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
   var N  = fieldsObj.N;
   var N3 = N*N*N;
   var uP = fieldsObj.u_prime;
-  if (!uP || uP.length !== 3 || uP[0].length !== N3) {
-    console.warn('[LabRaymarcher] uploadFields: malformed fieldsObj');
+  /* Piece B (May 2026) — u_prime can legitimately be null for shear-LC
+     fieldsets (yz/xz/xy axes).  Only the malformed-but-present case
+     is an error.  When null we skip the displacement texture upload
+     entirely; the shader checks uDispUploaded and returns vec3(0) from
+     sampleDisp() so deform-mode rendering shows the undeformed cell. */
+  if (uP && (uP.length !== 3 || uP[0].length !== N3)) {
+    console.warn('[LabRaymarcher] uploadFields: malformed u_prime');
     return;
   }
 
-  /* ── u\' (RGBA8) ── */
-  /* Per-component min/max for scale/offset */
-  var minV = [ Infinity,  Infinity,  Infinity];
-  var maxV = [-Infinity, -Infinity, -Infinity];
-  for (var c = 0; c < 3; c++) {
-    var arr = uP[c];
-    var mn =  Infinity, mx = -Infinity;
-    for (var i = 0; i < N3; i++) {
-      var v = arr[i];
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
-    minV[c] = mn;
-    maxV[c] = mx;
-  }
-  /* Guard against degenerate range (constant field). */
-  var epsR = 1e-12;
-  var scl = [
-    Math.max(maxV[0] - minV[0], epsR),
-    Math.max(maxV[1] - minV[1], epsR),
-    Math.max(maxV[2] - minV[2], epsR)
-  ];
-
-  /* Encode u\' to RGBA8 — R=u\'_x, G=u\'_y, B=u\'_z, A=255 (unused). */
-  var bytes = new Uint8Array(N3 * 4);
-  for (var i2 = 0; i2 < N3; i2++) {
-    bytes[i2*4 + 0] = Math.round(Math.max(0, Math.min(1, (uP[0][i2] - minV[0]) / scl[0])) * 255);
-    bytes[i2*4 + 1] = Math.round(Math.max(0, Math.min(1, (uP[1][i2] - minV[1]) / scl[1])) * 255);
-    bytes[i2*4 + 2] = Math.round(Math.max(0, Math.min(1, (uP[2][i2] - minV[2]) / scl[2])) * 255);
-    bytes[i2*4 + 3] = 255;
-  }
-
-  if (!this._dispTex) this._dispTex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_3D, this._dispTex);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, N, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
-  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
-  gl.bindTexture(gl.TEXTURE_3D, null);
-
-  this._dispUploaded = true;
-  this._u.dispUploaded = 1.0;
-  this._u.dispOffset = [minV[0], minV[1], minV[2]];
-  this._u.dispScale  = [scl[0],  scl[1],  scl[2]];
-  /* 4b — texture resolution exposed to shader for cubic kernel offset math. */
+  /* 4b — texture resolution exposed to shader for cubic kernel offset math.
+     Set unconditionally — σ_VM sampling (cubic kernel) needs it even when
+     u'(x) is absent. */
   this._u.texN = N;
 
-  /* 4b — Compute the maximum |u'| component across all voxels and channels.
-     setDeformAmp() uses this to scale the slider value into a shader
-     multiplier such that the most-displaced voxel moves by (slider×20)%
-     of the cell half-extent. */
-  var uMaxAbs = 0;
-  for (var cu = 0; cu < 3; cu++) {
-    var src = uP[cu];
-    for (var iu = 0; iu < N3; iu++) {
-      var av = Math.abs(src[iu]);
-      if (av > uMaxAbs) uMaxAbs = av;
+  if (uP) {
+    /* ── u\' (RGBA8) ── */
+    /* Per-component min/max for scale/offset */
+    var minV = [ Infinity,  Infinity,  Infinity];
+    var maxV = [-Infinity, -Infinity, -Infinity];
+    for (var c = 0; c < 3; c++) {
+      var arr = uP[c];
+      var mn =  Infinity, mx = -Infinity;
+      for (var i = 0; i < N3; i++) {
+        var v = arr[i];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      minV[c] = mn;
+      maxV[c] = mx;
     }
-  }
-  this._uPrimeMaxNorm = uMaxAbs;
+    /* Guard against degenerate range (constant field). */
+    var epsR = 1e-12;
+    var scl = [
+      Math.max(maxV[0] - minV[0], epsR),
+      Math.max(maxV[1] - minV[1], epsR),
+      Math.max(maxV[2] - minV[2], epsR)
+    ];
 
-  if (fieldsObj.eps_bar && fieldsObj.eps_bar.length === 3) {
-    this._u.epsBar = [fieldsObj.eps_bar[0], fieldsObj.eps_bar[1], fieldsObj.eps_bar[2]];
+    /* Encode u\' to RGBA8 — R=u\'_x, G=u\'_y, B=u\'_z, A=255 (unused). */
+    var bytes = new Uint8Array(N3 * 4);
+    for (var i2 = 0; i2 < N3; i2++) {
+      bytes[i2*4 + 0] = Math.round(Math.max(0, Math.min(1, (uP[0][i2] - minV[0]) / scl[0])) * 255);
+      bytes[i2*4 + 1] = Math.round(Math.max(0, Math.min(1, (uP[1][i2] - minV[1]) / scl[1])) * 255);
+      bytes[i2*4 + 2] = Math.round(Math.max(0, Math.min(1, (uP[2][i2] - minV[2]) / scl[2])) * 255);
+      bytes[i2*4 + 3] = 255;
+    }
+
+    if (!this._dispTex) this._dispTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_3D, this._dispTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, N, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+    gl.bindTexture(gl.TEXTURE_3D, null);
+
+    this._dispUploaded = true;
+    this._u.dispUploaded = 1.0;
+    this._u.dispOffset = [minV[0], minV[1], minV[2]];
+    this._u.dispScale  = [scl[0],  scl[1],  scl[2]];
+
+    /* 4b — Compute the maximum |u'| component across all voxels and channels.
+       setDeformAmp() uses this to scale the slider value into a shader
+       multiplier such that the most-displaced voxel moves by (slider×20)%
+       of the cell half-extent. */
+    var uMaxAbs = 0;
+    for (var cu = 0; cu < 3; cu++) {
+      var src = uP[cu];
+      for (var iu = 0; iu < N3; iu++) {
+        var av = Math.abs(src[iu]);
+        if (av > uMaxAbs) uMaxAbs = av;
+      }
+    }
+    this._uPrimeMaxNorm = uMaxAbs;
+
+    if (fieldsObj.eps_bar && fieldsObj.eps_bar.length === 3) {
+      this._u.epsBar = [fieldsObj.eps_bar[0], fieldsObj.eps_bar[1], fieldsObj.eps_bar[2]];
+    } else {
+      this._u.epsBar = [0, 0, 0];
+    }
   } else {
-    this._u.epsBar = [0, 0, 0];
+    /* Piece B — shear-axis fieldset: no u'(x).  Mark displacement texture
+       as not-uploaded so sampleDisp() returns vec3(0) (no warp) and clear
+       any prior epsBar / maxNorm state so the deform tab shows undeformed
+       cell if the user toggles to it from a shear axis. */
+    this._dispUploaded = false;
+    this._u.dispUploaded = 0.0;
+    this._u.dispOffset   = [0, 0, 0];
+    this._u.dispScale    = [1, 1, 1];
+    this._u.epsBar       = [0, 0, 0];
+    this._uPrimeMaxNorm  = 0;
   }
 
   /* ── σ_VM (R8) ── */
