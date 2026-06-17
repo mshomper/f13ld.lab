@@ -62,7 +62,7 @@ html, body {
 .fh-icon {
   width:28px; height:28px; border-radius:7px;
   display:flex; align-items:center; justify-content:center; flex-shrink:0;
-  background:#EDECE8;
+  background:#F6E7E7;
 }
 .fh-action-btn {
   font-size:11px; padding:5px 13px; border-radius:20px;
