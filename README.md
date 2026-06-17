@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.4.0 · alpha · Phase 4 complete · Full-Voigt 6×6 + Stiffness surface live
+**Status:** v0.5.0 · alpha · Phase 5 complete · Linear buckling + animated mode-shape viz live
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -24,17 +24,36 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 - Discrete or modern integrated GPU recommended; WASM CPU fallback exists but is 10–20× slower
 - 4 GB+ VRAM for default tier (64³ grid · 3-design comparison · full pipeline)
 - 8 GB+ VRAM for high-fidelity tier (128³ grid)
+- Linear buckling runs on CPU workers (no GPU required for that tab) but the page must be served over **http(s)** — Blob-worker `importScripts` is blocked under `file://`
 
 ## Compute envelope
 
 | Mode                            | N=64 · 1 design | N=64 · 3 designs |
 | ------------------------------- | --------------- | ---------------- |
 | Linear elastic (full Voigt 6×6) | ~4 s †          | ~12 s †          |
-| + Linear buckling               | ~35 s           | ~1.7 min         |
 | + Nonlinear (J2 + geom)         | ~2.5 min        | ~7.5 min         |
 | + Stokes permeability           | ~3 min          | ~9–10 min        |
 
 † Full-Voigt runs ≈2× the Phase 3 normal-only figures (6 load cases vs 3); N=64 timing is predicted, not yet measured — validated at N=16 and N=32. 10-minute ceiling for default tier. F13LD = FAST.
+
+**Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above (it does not use the N=64 path). Measured on an 8-core desktop, Schwarz P: **N=8 three-axis ≈ 18 s per design** (vs ~62 s serial); N=16 is opt-in. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
+
+## What's new in v0.5.0
+
+Phase 5 adds **linear (eigenvalue) buckling** as a fifth view tab — the stability question that governs low-density scaffolds, where thin walls buckle long before the material yields.
+
+### Linear buckling solver
+
+- **A matrix-free buckling oracle** (`16c-buckling-cpu-ref.js`) solves the cell-periodic geometric-stiffness eigenproblem per normal axis, returning the critical load factor λ_cr, critical stress p_cr, and the mode shape. Cross-validated against a dense generalized eigensolve at N=4 to machine precision (relative error 2.7e-15).
+- **Runs in a Web Worker pool** (`16e-buckling-cpu-worker.js`) — one axis per worker, `min(cores−1, 8)` workers. N=8 three-axis ≈ 18 s per design on an 8-core desktop (N=16 opt-in via the Buckle pill). A Fourier preconditioner cuts the inner CG ≈3.6×.
+
+### Buckling visualization
+
+- **Animated mode-shape tab.** The mode swings full-cycle through the undeformed shape (2.5 s), colored by relative displacement on a turbo ramp — blue nodes, red antinodes — so you can see *where* and *how* the structure buckles. Amplitude is a qualitative exaggeration control (0–30 % of cell); a buckling eigenvector carries no absolute scale.
+- **Local-vs-global localization chip.** A single scalar (RMS waves per cell of the mode within the solid) classifies each mode Global / Mixed / Local as a stoplight chip in the viewport corner. Strut-like topologies read local; smooth TPMS shells read global — matching the physics.
+- **Provisional strength ratio.** `P_cr / P_y` (flagged `*`) compares p_cr against a fixed Ti-6Al-4V yield, pending the per-design yield from the nonlinear phase.
+
+Full detail in [`docs/BUCKLING.md`](./docs/BUCKLING.md) and [`docs/PHASE_5.md`](./docs/PHASE_5.md).
 
 ## What's new in v0.4.0
 
@@ -62,8 +81,8 @@ Phase 4 takes the solver from Phase 3's normal-only 3×3 to the full Voigt 6×6 
 - **Phase 2** · WebGPU foundation, WGSL 3D FFT kernel ✓
 - **Phase 3** · SDF rasterizer, linear elastic FFT-CG, field extraction, viz stack ✓
 - **Phase 4** · Full Voigt 6×6 with shear cases, stiffness directional surface viz, connectivity gating, six-axis toggle ✓
-- **Phase 5** ← *next* · Linear buckling (LOBPCG)
-- **Phase 6** · Nonlinear (Newton + J2 plasticity)
+- **Phase 5** · Linear buckling — CPU oracle + worker pool, animated mode-shape viz, local/global localization ✓ *(GPU LOBPCG solver deferred as a follow-on)*
+- **Phase 6** ← *next* · Nonlinear (Newton + J2 plasticity) — also supplies the per-design yield for P_cr/P_y
 - **Phase 7** · ~~Deformed-geometry domain warp, stress field overlay~~ — landed early in Phase 3
 - **Phase 8** · Thermal κ tensor, remaining view modes
 - **Phase 9** · Multi-page PDF export
@@ -71,7 +90,7 @@ Phase 4 takes the solver from Phase 3's normal-only 3×3 to the full Voigt 6×6 
 
 ## Architecture summary
 
-Static HTML/CSS/JS. No backend. No build step. WebGPU compute off the main thread, WebGL2 raymarching for visualization. Geometry generated from vault parameters at lab-open time using ported family code from F13LD.sweep — no rasters stored anywhere in the suite.
+Static HTML/CSS/JS. No backend. No build step. WebGPU compute off the main thread, WebGL2 raymarching for visualization, and a CPU Web Worker pool for linear buckling (one axis per worker). Geometry generated from vault parameters at lab-open time using ported family code from F13LD.sweep — no rasters stored anywhere in the suite.
 
 ## Development
 
