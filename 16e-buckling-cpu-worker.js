@@ -218,7 +218,22 @@ function computeBucklingCPU(recipe, N, opts, onProgress){
       var m = msgs[i];
       rho = m.rho;
       perAxis.push(m.perAxis);
-      if (m.mode) modes[m.perAxis.axis] = m.mode;
+      if (m.mode){
+        /* |phi| per voxel drives the relative-displacement colormap (reuses
+           the stress R8 path).  Magnitude is qualitative; the tile caps at
+           max|phi| so the contour normalizes to 0..1. */
+        var mm = m.mode;
+        if (mm.u_prime && mm.u_prime.length === 3){
+          var nv = mm.N * mm.N * mm.N, mag = new Float32Array(nv);
+          var px = mm.u_prime[0], py = mm.u_prime[1], pz = mm.u_prime[2];
+          for (var iv = 0; iv < nv; iv++){
+            var vax = px[iv], vay = py[iv], vaz = pz[iv];
+            mag[iv] = Math.sqrt(vax*vax + vay*vay + vaz*vaz);
+          }
+          mm.sigma_vm = mag;
+        }
+        modes[m.perAxis.axis] = mm;
+      }
       if (isFinite(m.perAxis.lambda) && m.perAxis.lambda < lambdaCr){
         lambdaCr = m.perAxis.lambda; critAxis = m.perAxis.axis; critSbar = m.perAxis.sBar;
       }

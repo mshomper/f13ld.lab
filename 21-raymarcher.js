@@ -81,6 +81,7 @@ function buildLabRaymarcherFS(stepCount) {
     'uniform highp sampler3D uDisp;',
     'uniform vec3 uDispOffset; uniform vec3 uDispScale;',
     'uniform vec3 uEpsBar;',
+    'uniform float uWarpExpand;',
     'uniform float uStressUploaded;',
     'uniform highp sampler3D uStress;',
     'uniform float uStressMin; uniform float uStressMax;',
@@ -254,7 +255,7 @@ function buildLabRaymarcherFS(stepCount) {
        colormap reads on the deformed shape (FEA viz convention). */
     'vec3 getExtent() {',
     '  if (uViewMode > 0.5 && uViewMode < 2.5) {',
-    '    return vec3(H,H,H) * (vec3(1.0) + uDeformAmp * abs(uEpsBar));',
+    '    return vec3(H,H,H) * (vec3(1.0) + uDeformAmp * abs(uEpsBar) + vec3(uWarpExpand));',
     '  }',
     '  return vec3(H,H,H);',
     '}',
@@ -539,6 +540,10 @@ function LabRaymarcher() {
        Populated by uploadFields from fieldsObj.eps_bar.  Defaults to zero
        so the macro-stretch term has no effect until fields are uploaded. */
     epsBar: [0, 0, 0],
+    warpExpand: 0.0,               /* buckling tab: isotropic fit margin so the
+                                      oscillating mode shape never clips the box */
+    pulse: false,                  /* buckling tab: full-cycle amplitude animation */
+    pulseAmpMax: 0.0,              /* peak shader amp the pulse oscillates within */
     /* A.3 — stress field for cividis colormap in stress view mode.
        stressUploaded float-mirror gates the shader's colormap branch.
        stressMin pinned to 0 (colormap convention).  stressMax is in MPa;
@@ -618,7 +623,7 @@ LabRaymarcher.prototype._compileShader = function() {
    /* A.2 — Deformed/Stress view uniforms */
    'uViewMode','uDispUploaded','uDeformAmp','uDisp','uDispOffset','uDispScale',
    /* A.2.1 — macroscopic strain direction */
-   'uEpsBar',
+   'uEpsBar','uWarpExpand',
    /* A.3 — Stress colormap uniforms */
    'uStress','uStressMin','uStressMax','uStressUploaded',
    /* A.3.3 — Gamma correction for non-linear σ_VM colormap remapping */
@@ -1023,6 +1028,36 @@ LabRaymarcher.prototype.setDeformAmp = function(v) {
   this._dirty = true;
 };
 
+/* Buckling tab — isotropic fit margin so the oscillating mode doesn't clip. */
+LabRaymarcher.prototype.setWarpExpand = function(f) {
+  if (this.failed) return;
+  this._u.warpExpand = Math.max(0, f || 0);
+  this._dirty = true;
+};
+
+/* Buckling tab — toggle the full-cycle amplitude animation. */
+LabRaymarcher.prototype.setPulse = function(on) {
+  if (this.failed) return;
+  this._u.pulse = !!on;
+  if (!on) this._u.deformAmp = this._u.pulseAmpMax;   /* settle to peak when paused */
+  this._dirty = true;
+};
+
+/* Buckling tab — mode-shape exaggeration as % of cell half-extent (0..30).
+   Drives both the warp peak (pulse oscillates within +/-peak) and the fit
+   envelope.  Independent of the eigenvector's arbitrary scale: the peak is
+   normalized by u'_maxNorm so peak |displacement| = pct% of H. */
+LabRaymarcher.prototype.setBuckleAmp = function(pctCell) {
+  if (this.failed) return;
+  var f = Math.max(0, Math.min(30, pctCell || 0)) / 100;
+  var H = Math.PI;
+  var peak = (this._uPrimeMaxNorm > 1e-12) ? (f * H) / this._uPrimeMaxNorm : f * 200;
+  this._u.pulseAmpMax = peak;
+  this._u.warpExpand  = f;
+  if (!this._u.pulse) this._u.deformAmp = peak;
+  this._dirty = true;
+};
+
 /* 4b — getter for effective δ_max as fraction of cell half-extent at
    the current slider value.  Used by design-grid readout to display
    the physically meaningful "δ_max = X% of cell" label.
@@ -1126,6 +1161,13 @@ LabRaymarcher.prototype._render = function(t) {
   if (this._viewMode === 'geom') {
     this._rotY += dt * 0.30;
   }
+  /* Buckling tab: full-cycle amplitude pulse (A*sin), 2.5 s period.  Swings
+     the mode through the undeformed shape and back; the fitted envelope
+     (uWarpExpand) is fixed so the box stays steady while the mode oscillates. */
+  if (this._u.pulse) {
+    var pulsePhase = (t % 2500) / 2500;
+    this._u.deformAmp = this._u.pulseAmpMax * Math.sin(pulsePhase * 6.2831853);
+  }
 
   /* Build rotation matrix (Y then X) */
   var cy = Math.cos(this._rotY), sy = Math.sin(this._rotY);
@@ -1174,6 +1216,7 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform3f(u.uDispScale,   S.dispScale[0],  S.dispScale[1],  S.dispScale[2]);
   /* A.2.1 — macroscopic strain direction (for cube stretch in deform mode) */
   gl.uniform3f(u.uEpsBar,      S.epsBar[0],     S.epsBar[1],     S.epsBar[2]);
+  gl.uniform1f(u.uWarpExpand,  S.warpExpand);
   /* A.3 — stress colormap uniforms.  uStress sampler bound on TEXTURE2
      below; the shader gates on uStressUploaded so an unbound sampler is
      harmless when no stress data has been provided. */

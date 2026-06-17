@@ -14,7 +14,8 @@ var VIEW_STATE = {
                                             //   Default 0.25 → 5% cell stretch.
   loadAxis:   { /* designId: 'xx'|'yy'|'zz'|'yz'|'xz'|'xy' */ },  // A.2.2 / Piece B — per-design active load axis (Voigt)
   stressNormMode: 'per',                   // A.3.3 — 'per' (auto per-design) | 'shared' (global p95, linear)
-  stressSat:  { /* designId: 0..2 */ }     // 4b — per-design saturation multiplier on auto p95 cap
+  stressSat:  { /* designId: 0..2 */ },    // 4b — per-design saturation multiplier on auto p95 cap
+  buckleExag: { /* designId: 0..30 */ }    // buckling tab mode-shape exaggeration (% of cell), default 10
 };
 
 /* ----------------------------------------------------------
@@ -69,6 +70,14 @@ function onViewModeClick(mode){
    ---------------------------------------------------------- */
 function onDeformAmpInput(designId, amp){
   VIEW_STATE.deformAmps[designId] = amp;
+}
+
+function getBuckleExag(designId){
+  if (VIEW_STATE.buckleExag[designId] === undefined) return 10;
+  return VIEW_STATE.buckleExag[designId];
+}
+function setBuckleExag(designId, pct){
+  VIEW_STATE.buckleExag[designId] = pct;
 }
 
 /* ----------------------------------------------------------
