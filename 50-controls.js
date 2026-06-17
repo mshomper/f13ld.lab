@@ -16,6 +16,13 @@ var GRID_STATE = {
   N: 64             // resolved value (32, 64, 128)
 };
 
+/* Buckling runs on the CPU reference oracle (16c) at a much smaller grid
+   than the GPU elastic/thermal path — ~per-axis seconds at N=8.  Its
+   resolution is configured separately from the main Grid pill. */
+var BUCKLE_STATE = {
+  N: 8              // 8 (fast) | 16 (accurate)
+};
+
 var RUN_STATE = {
   running: false,
   currentIndex: 0,  // which design is currently being solved (mock)
@@ -62,6 +69,21 @@ function paintGridPill(){
   } else {
     val.textContent = GRID_STATE.N + '³';
   }
+}
+
+/* ============================================================
+   BUCKLE GRID PILL — cycles the CPU buckling resolution 8 ⇄ 16.
+   ============================================================ */
+function onBucklePillClick(){
+  BUCKLE_STATE.N = (BUCKLE_STATE.N === 8) ? 16 : 8;
+  paintBucklePill();
+  recomputeEstimate();
+}
+
+function paintBucklePill(){
+  var val = document.getElementById('bucklePillVal');
+  if (!val) return;
+  val.textContent = BUCKLE_STATE.N + '³';
 }
 
 /* ============================================================

@@ -17,6 +17,7 @@
 
   // 2. Initial pill paint (placeholder until detection completes)
   paintGridPill();
+  paintBucklePill();
   paintHardwarePill('detecting…', '');
   paintSolverPill('starting…', '');
   updateLoadedPill();

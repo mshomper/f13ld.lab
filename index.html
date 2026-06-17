@@ -109,6 +109,9 @@
         <div class="spec-pill lab" id="gridPill" onclick="onGridPillClick()" title="Auto-pick grid resolution">
           <span class="key">Grid</span> <span class="v" id="gridPillVal">Auto</span> <span class="caret">▾</span>
         </div>
+        <div class="spec-pill lab" id="bucklePill" onclick="onBucklePillClick()" title="Buckling grid resolution (CPU reference oracle)">
+          <span class="key">Buckle</span> <span class="v" id="bucklePillVal">8³</span> <span class="caret">▾</span>
+        </div>
         <div class="spec-pill" id="hardwarePill"><span class="key">Hardware</span> <span class="v" id="hardwarePillVal">detecting…</span></div>
         <div class="spec-pill"><span class="key">Designs</span> <span class="v" id="designCountVal">3</span></div>
         <div class="spec-pill"><span class="key">Est.</span> <span class="v" id="estTimeVal">~7.5 min</span></div>
@@ -117,13 +120,6 @@
 
     <div class="run-block">
       <button class="run-btn" id="runBtn" onclick="onRunClick()">▶ Run All</button>
-      <a class="selftest-link" id="selftestLink" onclick="runSelfTest()">▸ Self-test FFT</a>
-      <a class="selftest-link" id="rasterTestLink" onclick="runRasterizeTest()">▸ Rasterize 3 demos</a>
-      <a class="selftest-link" id="elasticTestLink" onclick="runElasticTest()">▸ Run elastic · 3 demos</a>
-      <a class="selftest-link" id="fullVoigtTestLink" onclick="runFullVoigtCPUTest()">▸ Full Voigt CPU · Schwarz P (N=16)</a>
-      <a class="selftest-link" id="fullVoigtGPUTestLink" onclick="runFullVoigtGPUTest()">▸ Full Voigt GPU · Schwarz P (N=16)</a>
-      <a class="selftest-link" id="cpuStokesTestLink" onclick="runCPUStokesSmokeTest()">▸ CPU Stokes ref · Schwarz P (N=16)</a>
-      <a class="selftest-link" id="gpuStokesTestLink" onclick="runGPUStokesSmokeTest()">▸ GPU Stokes · Schwarz P (N=16)</a>
     </div>
   </div>
 
