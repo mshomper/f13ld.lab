@@ -840,6 +840,73 @@ function bk_cgSolveK(applyKflat, bflat, n, N3, tol, maxiter) {
   return { x: x, iters: iters, relres: relres, converged: converged };
 }
 
+/* Scalar reference-Laplacian Fourier preconditioner M⁻¹ ≈ (μ₀·|κ|²)⁻¹,
+   applied per displacement component.  Removes the |κ|² spectral spread
+   that dominates K's conditioning, cutting CG iterations ~10×.  It does
+   NOT change the converged solution — only the path — so the dense
+   cross-check stays exact.  DC and per-axis Nyquist modes (which K's
+   zeroed derivatives leave unresolved) map to zero, matching range(K).
+   Uses its own FFT scratch to avoid aliasing the operator's workspace
+   during a PCG iteration. */
+function bk_makePrecondScalar(N, mu0) {
+  var N3 = N * N * N, nyq = N >> 1;
+  var cb = new Float64Array(2 * N3), lb = new Float64Array(2 * N);
+  var invk = new Float64Array(N3);
+  for (var a = 0; a < N; a++) {
+    var ka = (a === nyq) ? 0 : ((a <= N / 2) ? a : a - N);
+    for (var b = 0; b < N; b++) {
+      var kb = (b === nyq) ? 0 : ((b <= N / 2) ? b : b - N);
+      for (var c = 0; c < N; c++) {
+        var kc = (c === nyq) ? 0 : ((c <= N / 2) ? c : c - N);
+        var kk = ka * ka + kb * kb + kc * kc;
+        invk[a * N * N + b * N + c] = (kk > 0) ? 1 / (mu0 * kk) : 0;
+      }
+    }
+  }
+  return function (flatIn, flatOut) {
+    for (var comp = 0; comp < 3; comp++) {
+      var base = comp * N3;
+      for (var i = 0; i < N3; i++) { cb[2 * i] = flatIn[base + i]; cb[2 * i + 1] = 0; }
+      fft3dCpu(cb, N, false, lb);
+      for (var m2 = 0; m2 < N3; m2++) { var fct = invk[m2]; cb[2 * m2] *= fct; cb[2 * m2 + 1] *= fct; }
+      fft3dCpu(cb, N, true, lb);
+      for (var i2 = 0; i2 < N3; i2++) flatOut[base + i2] = cb[2 * i2];
+    }
+  };
+}
+
+/* Preconditioned CG: K·x = b on the zero-mean subspace with the Fourier
+   preconditioner applyMinv.  Same output contract as bk_cgSolveK (which
+   remains the un-preconditioned reference path). */
+function bk_pcgSolveK(applyKflat, applyMinv, bflat, n, N3, tol, maxiter) {
+  tol = tol || 1e-9; maxiter = maxiter || 2000;
+  var x = new Float64Array(n);
+  var r = Float64Array.from(bflat); bk_zeroMeanFlat(r, N3);
+  var z = new Float64Array(n); applyMinv(r, z); bk_zeroMeanFlat(z, N3);
+  var p = Float64Array.from(z);
+  var Ap = new Float64Array(n);
+  var rz = bk_dot(r, z, n);
+  var bn = Math.sqrt(bk_dot(r, r, n)) + 1e-30;
+  var iters = 0, converged = false, relres = 1;
+  for (var it = 0; it < maxiter; it++) {
+    iters = it + 1;
+    applyKflat(p, Ap); bk_zeroMeanFlat(Ap, N3);
+    var pAp = bk_dot(p, Ap, n);
+    if (Math.abs(pAp) < 1e-300) break;
+    var alpha = rz / pAp;
+    for (var i = 0; i < n; i++) { x[i] += alpha * p[i]; r[i] -= alpha * Ap[i]; }
+    relres = Math.sqrt(bk_dot(r, r, n)) / bn;
+    if (relres < tol) { converged = true; break; }
+    applyMinv(r, z); bk_zeroMeanFlat(z, N3);
+    var rzNew = bk_dot(r, z, n);
+    var beta = rzNew / rz;
+    for (var i2 = 0; i2 < n; i2++) p[i2] = z[i2] + beta * p[i2];
+    rz = rzNew;
+  }
+  bk_zeroMeanFlat(x, N3);
+  return { x: x, iters: iters, relres: relres, converged: converged };
+}
+
 /* ============================================================
    extractPrestressCPU — microscopic pre-stress σ⁰(x) under a unit
    COMPRESSIVE macroscopic strain ε̄ = −e_axis (so σ⁰ is compressive
@@ -883,7 +950,8 @@ function extractPrestressCPU(solid, C_s, C_v, N, axisVoigt, ws, opts) {
   var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   function applyKflat(xx, out) { bk_flatToField(xx, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); }
-  var sol = bk_cgSolveK(applyKflat, rhs, n, N3, opts.cgTol || 1e-10, opts.cgMaxiter || 3000);
+  var applyMinv = bk_makePrecondScalar(N, C_s[21]);   /* μ₀ = solid shear modulus */
+  var sol = bk_pcgSolveK(applyKflat, applyMinv, rhs, n, N3, opts.cgTol || 1e-10, opts.cgMaxiter || 3000);
 
   /* total strain ε = ε̄ + ε(u′); σ⁰ = C(x):ε */
   var up = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
@@ -924,6 +992,7 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
 
   var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  var applyMinv = bk_makePrecondScalar(N, C_s[21]);   /* μ₀ = solid shear modulus */
 
   var perAxis = [], lambdaCr = Infinity, critAxis = -1, critMode = null, critSbar = 0;
 
@@ -934,7 +1003,7 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
 
     var applyA = function (x, out) { bk_flatToField(x, N3, uf); applyKgcpu(uf, of, sig0, N, ws); bk_fieldToFlatNeg(of, N3, out); };
     var applyB = function (x, out) { bk_flatToField(x, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); };
-    var solveB = function (b, out) { var r = bk_cgSolveK(applyB, b, n, N3, opts.cgTol || 1e-9, opts.cgMaxiter || 2000); out.set(r.x); };
+    var solveB = function (b, out) { var r = bk_pcgSolveK(applyB, applyMinv, b, n, N3, opts.cgTol || 1e-9, opts.cgMaxiter || 2000); out.set(r.x); };
 
     var pairs = bk_subspaceGen(applyA, applyB, solveB, n, m, {
       project: function (v) { bk_zeroMeanFlat(v, N3); },
@@ -946,7 +1015,7 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
     for (var pi = 0; pi < pairs.length; pi++) {
       if (pairs[pi].theta > 1e-9) { var lam = 1 / pairs[pi].theta; if (lam < lamAxis) { lamAxis = lam; modeAxis = pairs[pi].vec; } }
     }
-    perAxis.push({ axis: axisName[axis], lambda: lamAxis, sBar: sBarAxis, cgIters: pre.cgIters });
+    perAxis.push({ axis: axisName[axis], lambda: lamAxis, sBar: sBarAxis, cgIters: pre.cgIters, mode: modeAxis });
     if (lamAxis < lambdaCr) { lambdaCr = lamAxis; critAxis = axis; critMode = modeAxis; critSbar = sBarAxis; }
   }
 
