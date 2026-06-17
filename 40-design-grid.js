@@ -52,13 +52,27 @@ function statsForDesign(d, mode){
       { lbl:'Zener',  val:r.zener.toFixed(2),                      delta:[zenerDescriptor(r.zener), 'neut'] }
     ];
   }
-  // Buckling mode prioritizes λ_cr
+  // Buckling mode — reads BUCKLE_BY_DESIGN (Run All buckling phase), not d.results.
   if (mode === 'buckle'){
+    var e11 = (isFinite(r.E11) ? r.E11.toFixed(2) : '—') + ' GPa';
+    var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
+    if (bk && !bk.error && isFinite(bk.lambda_cr)){
+      var limited = isFinite(bk.pcr_py) && bk.pcr_py < 1;
+      var safeTxt = isFinite(bk.pcr_py) ? (limited ? 'buckling-limited' : 'yield-limited') : '—';
+      var provLbl = bk.provisional ? 'P_cr/P_y*' : 'P_cr/P_y';
+      return [
+        { lbl:'λ_cr',  val:bk.lambda_cr.toExponential(2),                      delta:['crit '+(bk.critAxis||'—'), 'neut'] },
+        { lbl:'p_cr',  val:(isFinite(bk.pcr) ? bk.pcr.toFixed(1) : '—')+' MPa', delta:['N='+(bk.N||'—'), 'neut'] },
+        { lbl:provLbl, val:(isFinite(bk.pcr_py) ? bk.pcr_py.toFixed(2) : '—'),  delta:[safeTxt, limited ? 'down' : 'neut'] },
+        { lbl:'E11',   val:e11,                                                delta:deltaVsBaseline(r.E11, 'E11', d.id) }
+      ];
+    }
+    var note = (bk && bk.error) ? bk.error : (LAB_STATE.runHasCompleted ? 'enable Buckling + Run' : 'not run');
     return [
-      { lbl:'λ_cr (mode 1)', val:fmtComputed(r.lambda_cr, '', 2),  delta:[failureModeText(r), pcrPyDeltaClass(r)] },
-      { lbl:'σ_y (z)',       val:fmtComputed(r.sigma_y_z, ' MPa', 1), delta:[failureModeText(r), 'neut'] },
-      { lbl:'P_cr / P_y',    val:fmtComputed(r.pcr_py, '', 2),      delta:[failureModeText(r), pcrPyDeltaClass(r)] },
-      { lbl:'E11',           val:r.E11.toFixed(2)+' GPa',           delta:deltaVsBaseline(r.E11, 'E11', d.id) }
+      { lbl:'λ_cr',     val:'—',   delta:[note, 'neut'] },
+      { lbl:'p_cr',     val:'—',   delta:['—', 'neut'] },
+      { lbl:'P_cr/P_y', val:'—',   delta:['—', 'neut'] },
+      { lbl:'E11',      val:e11,   delta:deltaVsBaseline(r.E11, 'E11', d.id) }
     ];
   }
   return [];
@@ -81,6 +95,42 @@ function familyKey(d){
   if (d.family === 'tpms') return 'tpms';
   if (d.family === 'grain') return 'grain';
   return 'tpms';
+}
+
+/* ----------------------------------------------------------
+   Buckling tab field access.  Buckling mode shapes (phi) live in
+   BUCKLE_BY_DESIGN (populated by the Run All buckling phase), not in
+   d.results._fieldsByAxis.  These helpers let the Deformed-tab raymarcher
+   machinery serve the Buckling tab unchanged by routing the active
+   fieldset / axis / availability through the current view mode.
+   ---------------------------------------------------------- */
+function buckleDataFor(id){
+  return (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[id] : null;
+}
+function hasActiveFields(design, mode){
+  if (mode === 'buckle'){
+    var bk = buckleDataFor(design.id);
+    return !!(bk && bk.modes && (bk.modes.xx || bk.modes.yy || bk.modes.zz));
+  }
+  return !!(design.results && design.results._fieldsByAxis);
+}
+function activeFieldsFor(design, axis, mode){
+  if (mode === 'buckle'){
+    var bk = buckleDataFor(design.id);
+    return (bk && bk.modes && bk.modes[axis]) ? bk.modes[axis] : null;
+  }
+  return (design.results && design.results._fieldsByAxis) ? design.results._fieldsByAxis[axis] : null;
+}
+function getBuckleAxis(id){
+  var set = (typeof VIEW_STATE !== 'undefined' && VIEW_STATE.loadAxis) ? VIEW_STATE.loadAxis[id] : undefined;
+  if (set === 'xx' || set === 'yy' || set === 'zz') return set;
+  var bk = buckleDataFor(id);
+  return (bk && (bk.critAxis === 'xx' || bk.critAxis === 'yy' || bk.critAxis === 'zz')) ? bk.critAxis : 'zz';
+}
+function activeAxisFor(design, mode){
+  if (mode === 'stress') return (typeof getStressAxis === 'function') ? getStressAxis(design.id) : 'zz';
+  if (mode === 'buckle') return getBuckleAxis(design.id);
+  return (typeof getDeformAxis === 'function') ? getDeformAxis(design.id) : 'zz';
 }
 
 /* ----------------------------------------------------------
@@ -133,22 +183,17 @@ function renderDesignGrid(){
                   no recipe needed since the surface is purely tensor-driven
      A.2.2 — gating now considers the active load axis from VIEW_STATE. */
   var rmDesigns = [];   /* [{i, id}, …] */
-  var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
-  var needsFields = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
+  var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle');
+  var needsFields = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle');
   if (rmModes) {
     for (var ri = 0; ri < LAB_STATE.designs.length && ri < 3; ri++) {
       var rd = LAB_STATE.designs[ri];
       var rcp = (typeof recipeForDesign === 'function') ? recipeForDesign(rd) : null;
       if (!rcp) continue;
       if (needsFields) {
-        if (!rd.results || !rd.results._fieldsByAxis) continue;
-        /* Piece B — mode-aware axis selection.  Deform tab uses
-           getDeformAxis (coerces shear → 'zz'); stress tab can
-           render any of the 6 Voigt axes. */
-        var rdAxis = (VIEW_STATE.mode === 'stress')
-          ? ((typeof getStressAxis === 'function') ? getStressAxis(rd.id) : 'zz')
-          : ((typeof getDeformAxis === 'function') ? getDeformAxis(rd.id) : 'zz');
-        if (!rd.results._fieldsByAxis[rdAxis]) continue;
+        if (!hasActiveFields(rd, VIEW_STATE.mode)) continue;
+        var rdAxis = activeAxisFor(rd, VIEW_STATE.mode);
+        if (!activeFieldsFor(rd, rdAxis, VIEW_STATE.mode)) continue;
       }
       if (typeof getOrCreateRaymarcher === 'function') {
         getOrCreateRaymarcher(rd.id, rcp);
@@ -223,8 +268,11 @@ function renderDesignGrid(){
       else svgInner = svgThermal(d.results.zener, i);
     }
     else if (VIEW_STATE.mode === 'buckle'){
-      if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see buckling modes');
-      else svgInner = svgBuckle(d.results.lambda_cr, d.color);
+      if (!useRM) {
+        var bkv = buckleDataFor(d.id);
+        if (bkv && bkv.error) svgInner = svgEmptyViewport('Buckling: ' + bkv.error);
+        else svgInner = svgEmptyViewport('Enable Buckling · Run to see modes');
+      }
     }
 
     var readout = readoutForDesign(d, VIEW_STATE.mode);
@@ -232,7 +280,7 @@ function renderDesignGrid(){
     /* A.3 — both deform and stress modes expose the load-axis toggle + amp
        slider (stress mode uses the same warp; colormap reads on the
        deformed shape — standard FEA viz). */
-    var showControls = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress');
+    var showControls = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle');
     /* A.3.1 / A.3.3 — colorbar overlay only when stress raymarcher is
        mounted and fields are available.  resolveStressDisplay picks
        per-design or shared cap + gamma based on stressNormMode. */
@@ -297,8 +345,7 @@ function renderDesignGrid(){
               ? buildStressControl(d.id,
                                    (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0,
                                    (typeof getStressAxis === 'function') ? getStressAxis(d.id) : 'zz')
-              : buildDeformControl(d.id, amp,
-                                   (typeof getDeformAxis === 'function') ? getDeformAxis(d.id) : 'zz'))
+              : buildDeformControl(d.id, amp, activeAxisFor(d, VIEW_STATE.mode)))
           : '') +
       '</div>' +
       buildSummary(stats) +
@@ -326,21 +373,21 @@ function renderDesignGrid(){
     var rkrm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[rkid] : null;
     if (!rkrm || rkrm.failed) continue;
     var rdesign = LAB_STATE.designs[rmDesigns[rk].i];
-    if (rdesign.results && rdesign.results._fieldsByAxis && rkrm.uploadFields) {
-      /* Piece B — mode-aware axis selection (same logic as gating above). */
-      var rkAxis = (VIEW_STATE.mode === 'stress')
-        ? ((typeof getStressAxis === 'function') ? getStressAxis(rkid) : 'zz')
-        : ((typeof getDeformAxis === 'function') ? getDeformAxis(rkid) : 'zz');
-      var fs = rdesign.results._fieldsByAxis[rkAxis];
+    if (rkrm.uploadFields) {
+      var rkAxis = activeAxisFor(rdesign, VIEW_STATE.mode);
+      var fs = activeFieldsFor(rdesign, rkAxis, VIEW_STATE.mode);
       if (fs) {
-        /* A.3.3 — resolve cap + gamma based on current normalization mode
-           (per-design auto or shared across designs). */
-        var sd = resolveStressDisplay(rdesign, LAB_STATE.designs);
-        rkrm.uploadFields(fs, sd.cap);
-        if (rkrm.setStressGamma) rkrm.setStressGamma(sd.gamma);
+        if (VIEW_STATE.mode === 'buckle') {
+          rkrm.uploadFields(fs, 0);   /* mode shape: warp only, no stress colormap */
+        } else {
+          var sd = resolveStressDisplay(rdesign, LAB_STATE.designs);
+          rkrm.uploadFields(fs, sd.cap);
+          if (rkrm.setStressGamma) rkrm.setStressGamma(sd.gamma);
+        }
       }
     }
-    if (rkrm.setViewMode) rkrm.setViewMode(VIEW_STATE.mode);
+    /* Buckle reuses the deform warp shader path (effective viewMode 1). */
+    if (rkrm.setViewMode) rkrm.setViewMode(VIEW_STATE.mode === 'buckle' ? 'deform' : VIEW_STATE.mode);
     if (rkrm.setDeformAmp) rkrm.setDeformAmp(getDeformAmp(rkid));
   }
 
@@ -456,12 +503,15 @@ function renderDesignGrid(){
         if (LAB_STATE.designs[di].id === id){ design = LAB_STATE.designs[di]; break; }
       }
       var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
-      if (rm && !rm.failed && rm.uploadFields && design && design.results &&
-          design.results._fieldsByAxis && design.results._fieldsByAxis[axis]) {
-        /* A.3.3 — resolve cap + gamma based on current normalization mode. */
-        var sd2 = resolveStressDisplay(design, LAB_STATE.designs);
-        rm.uploadFields(design.results._fieldsByAxis[axis], sd2.cap);
-        if (rm.setStressGamma) rm.setStressGamma(sd2.gamma);
+      var fsTog = (design && typeof activeFieldsFor === 'function') ? activeFieldsFor(design, axis, VIEW_STATE.mode) : null;
+      if (rm && !rm.failed && rm.uploadFields && fsTog) {
+        if (VIEW_STATE.mode === 'buckle') {
+          rm.uploadFields(fsTog, 0);
+        } else {
+          var sd2 = resolveStressDisplay(design, LAB_STATE.designs);
+          rm.uploadFields(fsTog, sd2.cap);
+          if (rm.setStressGamma) rm.setStressGamma(sd2.gamma);
+        }
       } else if (rm && !rm.failed && rm.uploadFields) {
         /* No fields for selected axis → re-render so the empty-viewport
            fallback shows.  Same path as the no-fields-yet pre-run case. */
@@ -560,6 +610,17 @@ function readoutForDesign(d, mode){
   var r = d.results || {};
   var amp = getDeformAmp(d.id);
   if (mode === 'geom')   return d.title + ' · ρ=' + d.rho_rel.toFixed(2);
+  if (mode === 'buckle'){
+    var bkr = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
+    if (bkr && !bkr.error && isFinite(bkr.lambda_cr)){
+      var axb = (typeof activeAxisFor === 'function') ? activeAxisFor(d, 'buckle') : 'zz';
+      var lim = isFinite(bkr.pcr_py) && bkr.pcr_py < 1;
+      return 'mode ' + axb + ' · λ_cr=' + bkr.lambda_cr.toExponential(2) +
+             (isFinite(bkr.pcr_py) ? (' · ' + (lim ? 'BUCKLING-limited' : 'yield-limited')) : '') +
+             (bkr.provisional ? ' · P_cr/P_y provisional' : '');
+    }
+    return 'Enable Buckling · Run';
+  }
   /* 4b — slider value × 0.20 = δ_max as fraction of cell half-extent.
      Independent of design's natural u'_max; cross-design comparable. */
   if (mode === 'deform') return 'δ_max = ' + (amp*20).toFixed(1) + '% of cell';

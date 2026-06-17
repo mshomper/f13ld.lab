@@ -1401,7 +1401,7 @@ function mountRaymarcherTiles() {
 
 /* Pause all when grid loses geom/deform/stress view (e.g. user clicks Buckle tab) */
 function pauseRaymarcherTilesForViewMode(mode) {
-  if (mode !== 'geom' && mode !== 'deform' && mode !== 'stress') {
+  if (mode !== 'geom' && mode !== 'deform' && mode !== 'stress' && mode !== 'buckle') {
     pauseAllRaymarchers();
   }
 }

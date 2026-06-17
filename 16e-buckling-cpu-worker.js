@@ -70,7 +70,7 @@ var BUCKLE_WORKER_ONMESSAGE =
   '      var N3 = N*N*N, ux = new Float32Array(N3), uy = new Float32Array(N3), uz = new Float32Array(N3);\n' +
   '      for (var i = 0; i < N3; i++){ ux[i] = pa.mode[i]; uy[i] = pa.mode[N3+i]; uz[i] = pa.mode[2*N3+i]; }\n' +
   '      var axisNames = ["xx","yy","zz"], ev = [0,0,0], ai = axisNames.indexOf(pa.axis); if (ai >= 0) ev[ai] = 1;\n' +
-  '      mode = { u_prime:[ux,uy,uz], sigma_vm:null, N:N, eps_bar:ev };\n' +
+  '      mode = { u_prime:[ux,uy,uz], sigma_vm:null, N:N, eps_bar:[0,0,0] };\n' +
   '      transfer.push(ux.buffer, uy.buffer, uz.buffer);\n' +
   '    }\n' +
   '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, cgIters:pa.cgIters }, mode: mode, rho: one.rho }, transfer);\n' +
