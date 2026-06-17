@@ -405,7 +405,349 @@ function runBucklingOperatorSelfTest(N) {
 
 
 /* ════════════════════════════════════════════════════════════
-   PUSH 2 (next session) — extractPrestressCPU, lobpcgGenCPU,
-   homogenizeBucklingCPU, runBucklingCPUTest.  The operators
-   above are the validated foundation those build on.
+   PUSH 2a — generalized eigensolver engine.
+
+   The buckling pencil (−K_g)·φ = θ·K·φ (θ = 1/λ, K SPD on the
+   zero-mean subspace) is solved matrix-free at N=16 by block
+   subspace iteration with Rayleigh-Ritz.  The Rayleigh-Ritz step
+   reduces to a small dense symmetric-definite generalized eigen-
+   problem SA·z = θ·SB·z, handled here by Cholesky + cyclic Jacobi.
+
+   These kernels are validated in isolation (runBucklingEigSelfTest)
+   against a dense reference before being wired to the K / K_g
+   operators and the pre-stress field in Push 2b.
+   ════════════════════════════════════════════════════════════ */
+
+/* Dense row-major helpers.  Matrices are Float64Array(n·n), A[r·n+c].
+   Sizes are small: Rayleigh-Ritz blocks ≤ ~16; the dense N=4 ground
+   truth in Push 2b is ≤ 192. */
+
+function bk_dot(a, b, n) { var s = 0; for (var i = 0; i < n; i++) s += a[i] * b[i]; return s; }
+
+/* Cholesky A = L·Lᵀ (L lower).  Returns L (flat) or null if A is not
+   numerically SPD. */
+function bk_cholesky(A, n) {
+  var L = new Float64Array(n * n);
+  for (var i = 0; i < n; i++) {
+    for (var j = 0; j <= i; j++) {
+      var sum = A[i * n + j];
+      for (var k = 0; k < j; k++) sum -= L[i * n + k] * L[j * n + k];
+      if (i === j) { if (sum <= 0) return null; L[i * n + j] = Math.sqrt(sum); }
+      else L[i * n + j] = sum / L[j * n + j];
+    }
+  }
+  return L;
+}
+
+function bk_forwardSolve(L, b, n, out) {       /* solve L·y = b */
+  for (var i = 0; i < n; i++) {
+    var s = b[i];
+    for (var k = 0; k < i; k++) s -= L[i * n + k] * out[k];
+    out[i] = s / L[i * n + i];
+  }
+}
+
+function bk_backSolveLt(L, b, n, out) {        /* solve Lᵀ·x = b */
+  for (var i = n - 1; i >= 0; i--) {
+    var s = b[i];
+    for (var k = i + 1; k < n; k++) s -= L[k * n + i] * out[k];
+    out[i] = s / L[i * n + i];
+  }
+}
+
+/* Cyclic Jacobi eigensolver for symmetric A (Numerical-Recipes-style
+   rotation that zeros the off-diagonal).  Returns
+   { values: Float64Array(n), vectors: Float64Array(n·n) } with
+   eigenvector j in column j: V[r·n + j]. */
+function bk_jacobiSym(Ain, n, maxSweeps, tol) {
+  maxSweeps = maxSweeps || 100; tol = tol || 1e-15;
+  var A = Float64Array.from(Ain);
+  var V = new Float64Array(n * n);
+  for (var d = 0; d < n; d++) V[d * n + d] = 1;
+  for (var sweep = 0; sweep < maxSweeps; sweep++) {
+    var off = 0;
+    for (var p = 0; p < n; p++) for (var q = p + 1; q < n; q++) off += A[p * n + q] * A[p * n + q];
+    if (off < tol * tol) break;
+    for (var p2 = 0; p2 < n; p2++) {
+      for (var q2 = p2 + 1; q2 < n; q2++) {
+        var apq = A[p2 * n + q2];
+        if (apq === 0) continue;
+        var app = A[p2 * n + p2], aqq = A[q2 * n + q2];
+        var theta = (aqq - app) / (2 * apq);
+        var tn = (theta >= 0 ? 1 : -1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+        var c = 1 / Math.sqrt(tn * tn + 1), s = tn * c;
+        for (var k = 0; k < n; k++) {                 /* A ← Jᵀ A J: columns p,q */
+          var akp = A[k * n + p2], akq = A[k * n + q2];
+          A[k * n + p2] = c * akp - s * akq;
+          A[k * n + q2] = s * akp + c * akq;
+        }
+        for (var k2 = 0; k2 < n; k2++) {              /* rows p,q */
+          var apk = A[p2 * n + k2], aqk = A[q2 * n + k2];
+          A[p2 * n + k2] = c * apk - s * aqk;
+          A[q2 * n + k2] = s * apk + c * aqk;
+        }
+        for (var k3 = 0; k3 < n; k3++) {              /* accumulate V */
+          var vkp = V[k3 * n + p2], vkq = V[k3 * n + q2];
+          V[k3 * n + p2] = c * vkp - s * vkq;
+          V[k3 * n + q2] = s * vkp + c * vkq;
+        }
+      }
+    }
+  }
+  var values = new Float64Array(n);
+  for (var i = 0; i < n; i++) values[i] = A[i * n + i];
+  return { values: values, vectors: V };
+}
+
+/* Symmetric-definite generalized eigenproblem SA·z = θ·SB·z with SB SPD.
+   SA may be indefinite (the buckling A = −K_g is).  Reduces via
+   SB = L·Lᵀ to the standard symmetric problem C = L⁻¹·SA·L⁻ᵀ, Jacobi
+   on C, then z = L⁻ᵀ·q.  Returns { values, vectors } (vectors in
+   columns) or null if SB is not SPD. */
+function bk_genEigSPD(SA, SB, n) {
+  var L = bk_cholesky(SB, n);
+  if (!L) return null;
+  var col = new Float64Array(n), sol = new Float64Array(n);
+  var U = new Float64Array(n * n);                 /* U = L⁻¹·SA */
+  for (var c = 0; c < n; c++) {
+    for (var r = 0; r < n; r++) col[r] = SA[r * n + c];
+    bk_forwardSolve(L, col, n, sol);
+    for (var r2 = 0; r2 < n; r2++) U[r2 * n + c] = sol[r2];
+  }
+  var C = new Float64Array(n * n);                 /* C = L⁻¹·Uᵀ = L⁻¹·SA·L⁻ᵀ */
+  for (var c2 = 0; c2 < n; c2++) {
+    for (var r3 = 0; r3 < n; r3++) col[r3] = U[c2 * n + r3];   /* (Uᵀ)[r3][c2] */
+    bk_forwardSolve(L, col, n, sol);
+    for (var r4 = 0; r4 < n; r4++) C[r4 * n + c2] = sol[r4];
+  }
+  for (var a = 0; a < n; a++) for (var b = a + 1; b < n; b++) {
+    var mm = 0.5 * (C[a * n + b] + C[b * n + a]); C[a * n + b] = mm; C[b * n + a] = mm;
+  }
+  var eig = bk_jacobiSym(C, n, 200, 1e-15);
+  var vectors = new Float64Array(n * n);
+  var q = new Float64Array(n), z = new Float64Array(n);
+  for (var j = 0; j < n; j++) {
+    for (var r5 = 0; r5 < n; r5++) q[r5] = eig.vectors[r5 * n + j];
+    bk_backSolveLt(L, q, n, z);
+    for (var r6 = 0; r6 < n; r6++) vectors[r6 * n + j] = z[r6];
+  }
+  return { values: eig.values, vectors: vectors };
+}
+
+/* Modified Gram-Schmidt L2 orthonormalization of a set of length-n
+   vectors; drops linearly-dependent directions. */
+function bk_orthonormalize(vecs, n) {
+  var out = [];
+  for (var i = 0; i < vecs.length; i++) {
+    var v = Float64Array.from(vecs[i]);
+    for (var j = 0; j < out.length; j++) {
+      var dd = bk_dot(out[j], v, n), oj = out[j];
+      for (var k = 0; k < n; k++) v[k] -= dd * oj[k];
+    }
+    var nrm = Math.sqrt(bk_dot(v, v, n));
+    if (nrm > 1e-10) { for (var k2 = 0; k2 < n; k2++) v[k2] /= nrm; out.push(v); }
+  }
+  return out;
+}
+
+/* ============================================================
+   bk_subspaceGen — matrix-free block subspace iteration with
+   Rayleigh-Ritz for the dominant (largest |θ|) eigenpairs of the
+   generalized pencil A·x = θ·B·x, B SPD.
+
+   applyA(x, out)  — out ← A·x        (length-n field/vector)
+   applyB(x, out)  — out ← B·x
+   solveB(b, out)  — out ← B⁻¹·b      (inner solve; e.g. CG on K)
+   n               — vector length
+   m               — block size (number of eigenpairs tracked)
+   opts.iters      — max outer iterations (default 80)
+   opts.tol        — relative convergence on the tracked θ (1e-8)
+   opts.project    — optional in-place projector applied to every
+                     iterate (e.g. zero-mean, to stay in K's
+                     non-singular subspace)
+
+   Returns [{ theta, vec }, ...] sorted by θ descending, where θ is
+   the Rayleigh quotient (xᵀA x)/(xᵀB x) of the converged Ritz vector.
+   The buckling driver (Push 2b) selects the smallest positive
+   λ = 1/θ across the returned pairs.
+   ============================================================ */
+function bk_subspaceGen(applyA, applyB, solveB, n, m, opts) {
+  opts = opts || {};
+  var iters = opts.iters || 80;
+  var tol   = opts.tol != null ? opts.tol : 1e-8;
+  var proj  = opts.project || null;
+
+  var X = [];
+  for (var c = 0; c < m; c++) {
+    var v = new Float64Array(n);
+    for (var i = 0; i < n; i++) v[i] = Math.random() * 2 - 1;
+    if (proj) proj(v);
+    X.push(v);
+  }
+
+  var tmp = new Float64Array(n);
+  var prevTheta = null;
+  var converged = false;
+  var lastIters = 0;
+
+  for (var it = 0; it < iters; it++) {
+    lastIters = it + 1;
+    /* power step Z = B⁻¹·A·X */
+    var Z = [];
+    for (var cc = 0; cc < m; cc++) {
+      applyA(X[cc], tmp);
+      var z = new Float64Array(n);
+      solveB(tmp, z);
+      if (proj) proj(z);
+      Z.push(z);
+    }
+    /* trial subspace = span(X ∪ Z), orthonormalized (keeps history,
+       LOBPCG-flavoured — accelerates and stabilizes convergence) */
+    var V = bk_orthonormalize(X.concat(Z), n);
+    var s = V.length;
+    var AV = [], BV = [];
+    for (var j = 0; j < s; j++) { var av = new Float64Array(n), bv = new Float64Array(n); applyA(V[j], av); applyB(V[j], bv); AV.push(av); BV.push(bv); }
+    var SA = new Float64Array(s * s), SB = new Float64Array(s * s);
+    for (var ii = 0; ii < s; ii++) for (var jj = 0; jj < s; jj++) {
+      SA[ii * s + jj] = bk_dot(V[ii], AV[jj], n);
+      SB[ii * s + jj] = bk_dot(V[ii], BV[jj], n);
+    }
+    for (var a2 = 0; a2 < s; a2++) for (var b2 = a2 + 1; b2 < s; b2++) {
+      var sma = 0.5 * (SA[a2 * s + b2] + SA[b2 * s + a2]); SA[a2 * s + b2] = sma; SA[b2 * s + a2] = sma;
+      var smb = 0.5 * (SB[a2 * s + b2] + SB[b2 * s + a2]); SB[a2 * s + b2] = smb; SB[b2 * s + a2] = smb;
+    }
+    var ge = bk_genEigSPD(SA, SB, s);
+    if (!ge) break;
+    var order = []; for (var o = 0; o < s; o++) order.push(o);
+    order.sort(function (p, q) { return ge.values[q] - ge.values[p]; });
+
+    var take = Math.min(m, s);
+    var newX = [], topThetas = [];
+    for (var c2 = 0; c2 < take; c2++) {
+      var oc = order[c2];
+      topThetas.push(ge.values[oc]);
+      var xc = new Float64Array(n);
+      for (var jv = 0; jv < s; jv++) { var coef = ge.vectors[jv * s + oc], Vj = V[jv]; for (var iv = 0; iv < n; iv++) xc[iv] += coef * Vj[iv]; }
+      if (proj) proj(xc);
+      newX.push(xc);
+    }
+    X = newX;
+
+    if (prevTheta && prevTheta.length === topThetas.length) {
+      var maxd = 0;
+      for (var kk = 0; kk < topThetas.length; kk++) {
+        var rel = Math.abs(topThetas[kk] - prevTheta[kk]) / Math.max(Math.abs(topThetas[kk]), 1e-30);
+        if (rel > maxd) maxd = rel;
+      }
+      if (maxd < tol) { converged = true; break; }
+    }
+    prevTheta = topThetas;
+  }
+
+  var out = [];
+  var tb = new Float64Array(n);
+  for (var cf = 0; cf < X.length; cf++) {
+    applyA(X[cf], tmp); applyB(X[cf], tb);
+    var num = bk_dot(X[cf], tmp, n), den = bk_dot(X[cf], tb, n);
+    out.push({ theta: num / den, vec: X[cf] });
+  }
+  out.sort(function (p, q) { return q.theta - p.theta; });
+  out._iters = lastIters; out._converged = converged;
+  return out;
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   runBucklingEigSelfTest — Push 2a validation (no physics yet).
+
+     E1. Cholesky: ‖L·Lᵀ − A‖∞ on a random SPD A           (< 1e-10)
+     E2. Jacobi: ‖A·v − λ·v‖ per pair on random symmetric A (< 1e-9)
+     E3. genEigSPD: ‖SA·z − θ·SB·z‖/‖SA·z‖ per pair,
+         SA indefinite, SB SPD                              (< 1e-9)
+     E4. subspaceGen recovers the top-m θ of an SPD pencil,
+         matching the dense genEigSPD reference             (rel < 1e-6)
+
+   Returns { passed, gates }.
+   ════════════════════════════════════════════════════════════ */
+function runBucklingEigSelfTest() {
+  var gates = {};
+  function randMat(n) { var A = new Float64Array(n * n); for (var i = 0; i < n * n; i++) A[i] = Math.random() * 2 - 1; return A; }
+  function symFrom(R, n) { var A = new Float64Array(n * n); for (var i = 0; i < n; i++) for (var j = 0; j < n; j++) A[i * n + j] = 0.5 * (R[i * n + j] + R[j * n + i]); return A; }
+  function spdFrom(R, n) { var A = new Float64Array(n * n); for (var i = 0; i < n; i++) for (var j = 0; j < n; j++) { var s = 0; for (var k = 0; k < n; k++) s += R[k * n + i] * R[k * n + j]; A[i * n + j] = s + (i === j ? n : 0); } return A; }
+  function matvec(M, x, n, out) { for (var i = 0; i < n; i++) { var s = 0; for (var j = 0; j < n; j++) s += M[i * n + j] * x[j]; out[i] = s; } }
+
+  var n = 30;
+  var R = randMat(n);
+  var B = spdFrom(R, n);
+  var Asym = symFrom(randMat(n), n);           /* indefinite symmetric */
+  var Aspd = spdFrom(randMat(n), n);           /* SPD (dominant θ = largest θ) */
+
+  /* E1 — Cholesky */
+  var L = bk_cholesky(B, n);
+  var e1 = 0;
+  for (var i = 0; i < n; i++) for (var j = 0; j < n; j++) {
+    var s = 0; for (var k = 0; k <= Math.min(i, j); k++) s += L[i * n + k] * L[j * n + k];
+    var d = Math.abs(s - B[i * n + j]); if (d > e1) e1 = d;
+  }
+  gates.E1_cholesky = { maxAbs: e1, pass: e1 < 1e-10 };
+
+  /* E2 — Jacobi residual */
+  var je = bk_jacobiSym(Asym, n, 200, 1e-15);
+  var e2 = 0, av = new Float64Array(n);
+  for (var p = 0; p < n; p++) {
+    var vv = new Float64Array(n); for (var r = 0; r < n; r++) vv[r] = je.vectors[r * n + p];
+    matvec(Asym, vv, n, av);
+    var res = 0; for (var r2 = 0; r2 < n; r2++) { var dlt = av[r2] - je.values[p] * vv[r2]; res += dlt * dlt; }
+    res = Math.sqrt(res); if (res > e2) e2 = res;
+  }
+  gates.E2_jacobi = { maxResid: e2, pass: e2 < 1e-9 };
+
+  /* E3 — generalized eig residual (indefinite SA, SPD SB) */
+  var ge = bk_genEigSPD(Asym, B, n);
+  var e3 = 0, Az = new Float64Array(n), Bz = new Float64Array(n);
+  for (var pp = 0; pp < n; pp++) {
+    var z = new Float64Array(n); for (var r3 = 0; r3 < n; r3++) z[r3] = ge.vectors[r3 * n + pp];
+    matvec(Asym, z, n, Az); matvec(B, z, n, Bz);
+    var num = 0, den = 0;
+    for (var r4 = 0; r4 < n; r4++) { var dl = Az[r4] - ge.values[pp] * Bz[r4]; num += dl * dl; den += Az[r4] * Az[r4]; }
+    var rel = Math.sqrt(num) / Math.max(Math.sqrt(den), 1e-30); if (rel > e3) e3 = rel;
+  }
+  gates.E3_genEigSPD = { maxRelResid: e3, pass: e3 < 1e-9 };
+
+  /* E4 — subspaceGen vs dense reference (SPD A: dominant θ = largest θ) */
+  var refAll = bk_genEigSPD(Aspd, B, n);
+  var refVals = Array.prototype.slice.call(refAll.values).sort(function (a, b) { return b - a; });
+  var Lb = bk_cholesky(B, n);
+  var fwd = new Float64Array(n);
+  var pairs = bk_subspaceGen(
+    function (x, out) { matvec(Aspd, x, n, out); },
+    function (x, out) { matvec(B, x, n, out); },
+    function (b, out) { bk_forwardSolve(Lb, b, n, fwd); bk_backSolveLt(Lb, fwd, n, out); },
+    n, 5, { iters: 120, tol: 1e-10 }
+  );
+  var e4 = 0;
+  for (var t = 0; t < 5; t++) {
+    var rel = Math.abs(pairs[t].theta - refVals[t]) / Math.max(Math.abs(refVals[t]), 1e-30);
+    if (rel > e4) e4 = rel;
+  }
+  gates.E4_subspaceGen = { topRef: refVals.slice(0, 5), topGot: pairs.slice(0, 5).map(function (p) { return p.theta; }), iters: pairs._iters, converged: pairs._converged, maxRel: e4, pass: e4 < 1e-6 };
+
+  var passed = true, names = Object.keys(gates);
+  for (var gi = 0; gi < names.length; gi++) if (!gates[names[gi]].pass) passed = false;
+  if (typeof console !== 'undefined') {
+    console.log('[16c eigensolver engine · self-test]');
+    for (var gj = 0; gj < names.length; gj++) console.log('  ' + (gates[names[gj]].pass ? '\u2713' : '\u2717') + ' ' + names[gj] + '  ' + JSON.stringify(gates[names[gj]]));
+    console.log('  verdict: ' + (passed ? '\u2713 PASS' : '\u2717 FAIL'));
+  }
+  return { passed: passed, gates: gates };
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   PUSH 2b (next) — extractPrestressCPU (σ⁰ from the displacement-
+   form elastic cell solve via applyKcpu), bucklingFromSolid /
+   homogenizeBucklingCPU (wire K, K_g, bk_subspaceGen; λ_cr = min
+   positive λ over xx/yy/zz), and runBucklingCPUTest cross-checking
+   the matrix-free result against a dense generalized eigensolve at
+   N=4 plus a Schwarz P sanity at N=16.
    ════════════════════════════════════════════════════════════ */
