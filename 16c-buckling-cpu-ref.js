@@ -616,18 +616,35 @@ function bk_subspaceGen(applyA, applyB, solveB, n, m, opts) {
       var sma = 0.5 * (SA[a2 * s + b2] + SA[b2 * s + a2]); SA[a2 * s + b2] = sma; SA[b2 * s + a2] = sma;
       var smb = 0.5 * (SB[a2 * s + b2] + SB[b2 * s + a2]); SB[a2 * s + b2] = smb; SB[b2 * s + a2] = smb;
     }
-    var ge = bk_genEigSPD(SA, SB, s);
-    if (!ge) break;
-    var order = []; for (var o = 0; o < s; o++) order.push(o);
-    order.sort(function (p, q) { return ge.values[q] - ge.values[p]; });
+    /* B-orthonormalize the trial space and drop K-null / near-null
+       directions (the Nyquist-zeroed spectral operators give K a
+       nullspace beyond the constant modes), then solve the reduced
+       standard eigenproblem SA_red·z = θ·z. */
+    var eigB = bk_jacobiSym(SB, s, 200, 1e-15);
+    var maxB = 0; for (var db = 0; db < s; db++) if (eigB.values[db] > maxB) maxB = eigB.values[db];
+    var keep = []; for (var dk = 0; dk < s; dk++) if (eigB.values[dk] > 1e-9 * maxB) keep.push(dk);
+    var sk = keep.length;
+    if (sk === 0) break;
+    var T = new Float64Array(s * sk);                 /* B-orthonormal reduced coords */
+    for (var ti = 0; ti < s; ti++) for (var tp = 0; tp < sk; tp++) T[ti * sk + tp] = eigB.vectors[ti * s + keep[tp]] / Math.sqrt(eigB.values[keep[tp]]);
+    var SAT = new Float64Array(s * sk);               /* SA·T */
+    for (var ri = 0; ri < s; ri++) for (var rp = 0; rp < sk; rp++) { var acc = 0; for (var rj = 0; rj < s; rj++) acc += SA[ri * s + rj] * T[rj * sk + rp]; SAT[ri * sk + rp] = acc; }
+    var SAr = new Float64Array(sk * sk);              /* Tᵀ·SA·T */
+    for (var pp = 0; pp < sk; pp++) for (var qq = 0; qq < sk; qq++) { var acc2 = 0; for (var pi2 = 0; pi2 < s; pi2++) acc2 += T[pi2 * sk + pp] * SAT[pi2 * sk + qq]; SAr[pp * sk + qq] = acc2; }
+    for (var sa = 0; sa < sk; sa++) for (var sb2 = sa + 1; sb2 < sk; sb2++) { var sm = 0.5 * (SAr[sa * sk + sb2] + SAr[sb2 * sk + sa]); SAr[sa * sk + sb2] = sm; SAr[sb2 * sk + sa] = sm; }
+    var eigA = bk_jacobiSym(SAr, sk, 200, 1e-15);
+    var order = []; for (var o = 0; o < sk; o++) order.push(o);
+    order.sort(function (p, q) { return eigA.values[q] - eigA.values[p]; });
 
-    var take = Math.min(m, s);
+    var take = Math.min(m, sk);
     var newX = [], topThetas = [];
     for (var c2 = 0; c2 < take; c2++) {
       var oc = order[c2];
-      topThetas.push(ge.values[oc]);
+      topThetas.push(eigA.values[oc]);
+      var yv = new Float64Array(s);                   /* Ritz coords in V: y = T·z */
+      for (var yi = 0; yi < s; yi++) { var acc3 = 0; for (var yp = 0; yp < sk; yp++) acc3 += T[yi * sk + yp] * eigA.vectors[yp * sk + oc]; yv[yi] = acc3; }
       var xc = new Float64Array(n);
-      for (var jv = 0; jv < s; jv++) { var coef = ge.vectors[jv * s + oc], Vj = V[jv]; for (var iv = 0; iv < n; iv++) xc[iv] += coef * Vj[iv]; }
+      for (var jv = 0; jv < s; jv++) { var coef = yv[jv], Vj = V[jv]; for (var iv = 0; iv < n; iv++) xc[iv] += coef * Vj[iv]; }
       if (proj) proj(xc);
       newX.push(xc);
     }
@@ -744,10 +761,340 @@ function runBucklingEigSelfTest() {
 
 
 /* ════════════════════════════════════════════════════════════
-   PUSH 2b (next) — extractPrestressCPU (σ⁰ from the displacement-
-   form elastic cell solve via applyKcpu), bucklingFromSolid /
-   homogenizeBucklingCPU (wire K, K_g, bk_subspaceGen; λ_cr = min
-   positive λ over xx/yy/zz), and runBucklingCPUTest cross-checking
-   the matrix-free result against a dense generalized eigensolve at
-   N=4 plus a Schwarz P sanity at N=16.
+   PUSH 2b — pre-stress, buckling driver, dense-validated test.
+   Wires the Push-1 operators and the Push-2a eigensolver into the
+   q=0 cell-periodic buckling oracle.
    ════════════════════════════════════════════════════════════ */
+
+/* flat (length 3·N³) ⟷ field (3 × N³) helpers, and zero-mean
+   projection (per displacement component) used to stay in K's
+   non-singular subspace (K's nullspace = the 3 constant modes). */
+function bk_fieldToFlat(u3, N3, out) { out.set(u3[0], 0); out.set(u3[1], N3); out.set(u3[2], 2 * N3); }
+function bk_fieldToFlatNeg(u3, N3, out) {
+  for (var i = 0; i < N3; i++) { out[i] = -u3[0][i]; out[N3 + i] = -u3[1][i]; out[2 * N3 + i] = -u3[2][i]; }
+}
+function bk_flatToField(x, N3, out3) {
+  for (var i = 0; i < N3; i++) { out3[0][i] = x[i]; out3[1][i] = x[N3 + i]; out3[2][i] = x[2 * N3 + i]; }
+}
+function bk_zeroMeanFlat(x, N3) {
+  for (var c = 0; c < 3; c++) {
+    var b = c * N3, s = 0;
+    for (var i = 0; i < N3; i++) s += x[b + i];
+    s /= N3;
+    for (var i2 = 0; i2 < N3; i2++) x[b + i2] -= s;
+  }
+}
+
+/* engineering Voigt strain ε(u) from a displacement field (the strain
+   stage of applyKcpu, exposed standalone for the pre-stress solve). */
+function bk_strainFromU(u, N, ws, epsOut) {
+  var N3 = N * N * N, d = ws.d;
+  specDeriv(u[0], 0, N, epsOut[0], ws);
+  specDeriv(u[1], 1, N, epsOut[1], ws);
+  specDeriv(u[2], 2, N, epsOut[2], ws);
+  specDeriv(u[2], 1, N, epsOut[3], ws); specDeriv(u[1], 2, N, d, ws); for (var i = 0; i < N3; i++) epsOut[3][i] += d[i];
+  specDeriv(u[2], 0, N, epsOut[4], ws); specDeriv(u[0], 2, N, d, ws); for (var i2 = 0; i2 < N3; i2++) epsOut[4][i2] += d[i2];
+  specDeriv(u[1], 0, N, epsOut[5], ws); specDeriv(u[0], 1, N, d, ws); for (var i3 = 0; i3 < N3; i3++) epsOut[5][i3] += d[i3];
+}
+
+/* per-voxel σ = C(x):ε */
+function bk_localStress(eps, solid, C_s, C_v, N3, sigOut) {
+  for (var idx = 0; idx < N3; idx++) {
+    var C = solid[idx] ? C_s : C_v;
+    var e0 = eps[0][idx], e1 = eps[1][idx], e2 = eps[2][idx], e3 = eps[3][idx], e4 = eps[4][idx], e5 = eps[5][idx];
+    sigOut[0][idx] = C[0]*e0 + C[1]*e1 + C[2]*e2 + C[3]*e3 + C[4]*e4 + C[5]*e5;
+    sigOut[1][idx] = C[6]*e0 + C[7]*e1 + C[8]*e2 + C[9]*e3 + C[10]*e4 + C[11]*e5;
+    sigOut[2][idx] = C[12]*e0 + C[13]*e1 + C[14]*e2 + C[15]*e3 + C[16]*e4 + C[17]*e5;
+    sigOut[3][idx] = C[18]*e0 + C[19]*e1 + C[20]*e2 + C[21]*e3 + C[22]*e4 + C[23]*e5;
+    sigOut[4][idx] = C[24]*e0 + C[25]*e1 + C[26]*e2 + C[27]*e3 + C[28]*e4 + C[29]*e5;
+    sigOut[5][idx] = C[30]*e0 + C[31]*e1 + C[32]*e2 + C[33]*e3 + C[34]*e4 + C[35]*e5;
+  }
+}
+
+/* CG solve of K·x = b on the zero-mean subspace (K SPD there).
+   applyKflat(x,out): out ← K·x.  Returns { x, iters, relres, converged }. */
+function bk_cgSolveK(applyKflat, bflat, n, N3, tol, maxiter) {
+  tol = tol || 1e-9; maxiter = maxiter || 2000;
+  var x = new Float64Array(n);
+  var r = Float64Array.from(bflat); bk_zeroMeanFlat(r, N3);
+  var p = Float64Array.from(r);
+  var Ap = new Float64Array(n);
+  var rr = bk_dot(r, r, n);
+  var bn = Math.sqrt(rr) + 1e-30;
+  var iters = 0, converged = false, relres = 1;
+  for (var it = 0; it < maxiter; it++) {
+    iters = it + 1;
+    applyKflat(p, Ap); bk_zeroMeanFlat(Ap, N3);
+    var pAp = bk_dot(p, Ap, n);
+    if (Math.abs(pAp) < 1e-300) break;
+    var alpha = rr / pAp;
+    for (var i = 0; i < n; i++) { x[i] += alpha * p[i]; r[i] -= alpha * Ap[i]; }
+    var rrNew = bk_dot(r, r, n);
+    relres = Math.sqrt(rrNew) / bn;
+    if (relres < tol) { converged = true; rr = rrNew; break; }
+    var beta = rrNew / rr;
+    for (var i2 = 0; i2 < n; i2++) p[i2] = r[i2] + beta * p[i2];
+    rr = rrNew;
+  }
+  bk_zeroMeanFlat(x, N3);
+  return { x: x, iters: iters, relres: relres, converged: converged };
+}
+
+/* ============================================================
+   extractPrestressCPU — microscopic pre-stress σ⁰(x) under a unit
+   COMPRESSIVE macroscopic strain ε̄ = −e_axis (so σ⁰ is compressive
+   and the buckling factor λ_cr comes out positive).
+
+   Solves the displacement-form cell problem  K·u′ = −div(C(x):ε̄)
+   on the validated applyKcpu operator, then σ⁰ = C(x):(ε̄ + ε(u′)).
+
+   Returns { sigma0: [6 × Float64Array(N³)], sBar: [6] mean stress,
+             cgIters, cgConverged }.
+   ============================================================ */
+function extractPrestressCPU(solid, C_s, C_v, N, axisVoigt, ws, opts) {
+  opts = opts || {};
+  var N3 = N * N * N, n = 3 * N3;
+  var epsBarVal = -1.0;                       /* unit compression */
+  var d = ws.d;
+
+  /* constant-strain stress field sb[P](x) = C(x)[P][axis]·ε̄ */
+  var sb = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3),
+            new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  for (var idx = 0; idx < N3; idx++) {
+    var C = solid[idx] ? C_s : C_v;
+    for (var P = 0; P < 6; P++) sb[P][idx] = C[P * 6 + axisVoigt] * epsBarVal;
+  }
+
+  /* RHS_i = −∂_j sb_ij   (sb tensor = [[0,5,4],[5,1,3],[4,3,2]]) */
+  var rhsF = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  specDeriv(sb[0], 0, N, rhsF[0], ws);
+  specDeriv(sb[5], 1, N, d, ws); for (var a = 0; a < N3; a++) rhsF[0][a] += d[a];
+  specDeriv(sb[4], 2, N, d, ws); for (var a2 = 0; a2 < N3; a2++) { rhsF[0][a2] += d[a2]; rhsF[0][a2] = -rhsF[0][a2]; }
+  specDeriv(sb[5], 0, N, rhsF[1], ws);
+  specDeriv(sb[1], 1, N, d, ws); for (var b = 0; b < N3; b++) rhsF[1][b] += d[b];
+  specDeriv(sb[3], 2, N, d, ws); for (var b2 = 0; b2 < N3; b2++) { rhsF[1][b2] += d[b2]; rhsF[1][b2] = -rhsF[1][b2]; }
+  specDeriv(sb[4], 0, N, rhsF[2], ws);
+  specDeriv(sb[3], 1, N, d, ws); for (var c = 0; c < N3; c++) rhsF[2][c] += d[c];
+  specDeriv(sb[2], 2, N, d, ws); for (var c2 = 0; c2 < N3; c2++) { rhsF[2][c2] += d[c2]; rhsF[2][c2] = -rhsF[2][c2]; }
+
+  var rhs = new Float64Array(n); bk_fieldToFlat(rhsF, N3, rhs); bk_zeroMeanFlat(rhs, N3);
+
+  /* solve K·u′ = RHS */
+  var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  function applyKflat(xx, out) { bk_flatToField(xx, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); }
+  var sol = bk_cgSolveK(applyKflat, rhs, n, N3, opts.cgTol || 1e-10, opts.cgMaxiter || 3000);
+
+  /* total strain ε = ε̄ + ε(u′); σ⁰ = C(x):ε */
+  var up = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  bk_flatToField(sol.x, N3, up);
+  var eps = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3),
+             new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  bk_strainFromU(up, N, ws, eps);
+  for (var q = 0; q < N3; q++) eps[axisVoigt][q] += epsBarVal;   /* add macroscopic ε̄ */
+
+  var sigma0 = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3),
+                new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  bk_localStress(eps, solid, C_s, C_v, N3, sigma0);
+
+  var sBar = [0, 0, 0, 0, 0, 0];
+  for (var P2 = 0; P2 < 6; P2++) { var s = 0, sp = sigma0[P2]; for (var i = 0; i < N3; i++) s += sp[i]; sBar[P2] = s / N3; }
+
+  return { sigma0: sigma0, sBar: sBar, cgIters: sol.iters, cgConverged: sol.converged };
+}
+
+/* ============================================================
+   bucklingFromSolid — q=0 cell-periodic buckling on a rasterized
+   solid.  For each compression axis: pre-stress → matrix-free
+   generalized eigensolve of (−K_g)·φ = θ·K·φ → smallest positive
+   λ = 1/θ_max.  λ_cr = min over the requested axes.
+
+   opts: { block (default 8), axes (default [0,1,2]),
+           eigIters, eigTol, cgTol, cgMaxiter }
+   Returns { lambda_cr, pcr, critAxis, perAxis:[{axis,lambda,sBar}],
+             mode (flat critical eigenvector), N }.
+   ============================================================ */
+function bucklingFromSolid(solid, C_s, C_v, N, opts) {
+  opts = opts || {};
+  var m = opts.block || 8;
+  var axes = opts.axes || [0, 1, 2];
+  var axisName = ['xx', 'yy', 'zz'];
+  var ws = getBucklingWorkspaceCPU(N);
+  var N3 = N * N * N, n = 3 * N3;
+
+  var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+
+  var perAxis = [], lambdaCr = Infinity, critAxis = -1, critMode = null, critSbar = 0;
+
+  for (var ai = 0; ai < axes.length; ai++) {
+    var axis = axes[ai];
+    var pre = extractPrestressCPU(solid, C_s, C_v, N, axis, ws, opts);
+    var sig0 = pre.sigma0, sBarAxis = pre.sBar[axis];
+
+    var applyA = function (x, out) { bk_flatToField(x, N3, uf); applyKgcpu(uf, of, sig0, N, ws); bk_fieldToFlatNeg(of, N3, out); };
+    var applyB = function (x, out) { bk_flatToField(x, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); };
+    var solveB = function (b, out) { var r = bk_cgSolveK(applyB, b, n, N3, opts.cgTol || 1e-9, opts.cgMaxiter || 2000); out.set(r.x); };
+
+    var pairs = bk_subspaceGen(applyA, applyB, solveB, n, m, {
+      project: function (v) { bk_zeroMeanFlat(v, N3); },
+      iters: opts.eigIters || 80, tol: opts.eigTol || 1e-8
+    });
+
+    /* smallest positive λ = 1/(largest positive θ) */
+    var lamAxis = Infinity, modeAxis = null;
+    for (var pi = 0; pi < pairs.length; pi++) {
+      if (pairs[pi].theta > 1e-9) { var lam = 1 / pairs[pi].theta; if (lam < lamAxis) { lamAxis = lam; modeAxis = pairs[pi].vec; } }
+    }
+    perAxis.push({ axis: axisName[axis], lambda: lamAxis, sBar: sBarAxis, cgIters: pre.cgIters });
+    if (lamAxis < lambdaCr) { lambdaCr = lamAxis; critAxis = axis; critMode = modeAxis; critSbar = sBarAxis; }
+  }
+
+  var pcr = isFinite(lambdaCr) ? lambdaCr * Math.abs(critSbar) : Infinity;
+  return { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis >= 0 ? axisName[critAxis] : null, perAxis: perAxis, mode: critMode, N: N };
+}
+
+/* ============================================================
+   homogenizeBucklingCPU — recipe → buckling, mirroring
+   homogenizeFullCPU's rasterization front-end (Push 2b in-browser
+   path; the Node validation drives bucklingFromSolid on synthetic
+   solids directly so it needs no geometry pipeline).
+   ============================================================ */
+function homogenizeBucklingCPU(recipe, N, opts) {
+  var family = recipe.family;
+  var params = KERNELS[family].parseRecipe(recipe);
+  var args = resolveBuildArgs(recipe);
+  var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+  var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
+  var C_s = isoC(mat.Es_MPa, mat.nu);
+  var C_v = isoC(mat.Es_MPa * 1e-4, mat.nu);
+  var res = bucklingFromSolid(solid, C_s, C_v, N, opts);
+  var N3 = N * N * N, inside = 0; for (var v = 0; v < N3; v++) inside += solid[v];
+  res.rho = inside / N3;
+  return res;
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   runBucklingCPUTest — Push 2b validation.
+
+     B1. extractPrestressCPU on a UNIFORM solid: u′ ≈ 0 and σ⁰ is
+         uniform = C_s·ε̄  (no interfaces → no perturbation).
+     B2. DENSE N=4 cross-check (the correctness gate): assemble K and
+         (−K_g) densely from the SAME operators + σ⁰, restrict to the
+         zero-mean subspace, solve the dense generalized eigenproblem,
+         and confirm the matrix-free λ matches it.
+     B3. Synthetic porous structure at N=8: λ_cr finite & positive.
+
+   Returns { passed, gates }.
+   ════════════════════════════════════════════════════════════ */
+function runBucklingCPUTest() {
+  var gates = {};
+  var Es = 110000, nu = 0.30;
+  var C_s = isoC(Es, nu), C_v = isoC(Es * 1e-4, nu);
+
+  /* B1 — uniform-medium pre-stress */
+  (function () {
+    var N = 4, N3 = N * N * N, ws = getBucklingWorkspaceCPU(N);
+    var solid = new Uint8Array(N3); solid.fill(1);
+    var pre = extractPrestressCPU(solid, C_s, C_v, N, 2, ws, {});   /* zz */
+    /* σ⁰ should be uniform = C_s·(−e_zz): the C_s column 2 negated */
+    var maxDev = 0, wantP;
+    for (var P = 0; P < 6; P++) {
+      wantP = -C_s[P * 6 + 2];
+      var sp = pre.sigma0[P];
+      for (var i = 0; i < N3; i++) { var dv = Math.abs(sp[i] - wantP); if (dv > maxDev) maxDev = dv; }
+    }
+    var sBarErr = 0; for (var P2 = 0; P2 < 6; P2++) sBarErr = Math.max(sBarErr, Math.abs(pre.sBar[P2] - (-C_s[P2 * 6 + 2])));
+    gates.B1_uniform_prestress = { maxFieldDev: maxDev, sBarErr: sBarErr, pass: maxDev < 1e-6 && sBarErr < 1e-6 };
+  })();
+
+  /* B2 — dense N=4 cross-check */
+  (function () {
+    var N = 4, N3 = N * N * N, dof = 3 * N3;
+    var ws = getBucklingWorkspaceCPU(N);
+    /* synthetic two-phase solid (varying σ⁰): solid where a coarse field > 0 */
+    var solid = new Uint8Array(N3);
+    for (var i = 0; i < N; i++) for (var j = 0; j < N; j++) for (var k = 0; k < N; k++) {
+      var s = Math.cos(2 * Math.PI * i / N) + Math.cos(2 * Math.PI * j / N) + Math.cos(2 * Math.PI * k / N);
+      solid[i * N * N + j * N + k] = (s > -0.3) ? 1 : 0;
+    }
+    var axis = 2;
+    var pre = extractPrestressCPU(solid, C_s, C_v, N, axis, ws, { cgTol: 1e-12, cgMaxiter: 5000 });
+    var sig0 = pre.sigma0;
+
+    /* dense assembly of K and (−K_g) using the SAME operators */
+    var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+    var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+    function assemble(applyFieldFn, neg) {
+      var cols = new Array(dof);
+      var e = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+      for (var col = 0; col < dof; col++) {
+        e[0].fill(0); e[1].fill(0); e[2].fill(0);
+        e[(col / N3) | 0][col % N3] = 1;
+        applyFieldFn(e, of);
+        var c = new Float64Array(dof);
+        for (var comp = 0; comp < 3; comp++) for (var p = 0; p < N3; p++) c[comp * N3 + p] = (neg ? -of[comp][p] : of[comp][p]);
+        cols[col] = c;
+      }
+      return cols;
+    }
+    var Kc  = assemble(function (e, o) { applyKcpu(e, o, solid, C_s, C_v, N, ws); }, false);
+    var Ac  = assemble(function (e, o) { applyKgcpu(e, o, sig0, N, ws); }, true);   /* A = −K_g */
+
+    /* range(K) basis from K's eigendecomposition — robustly excludes
+       the constant + Nyquist nullspace of the spectral operators, so
+       the reduced K is SPD and the dense reference matches the
+       subspace the matrix-free solver works in. */
+    var Kdense = new Float64Array(dof * dof);
+    for (var cI = 0; cI < dof; cI++) { var kcl = Kc[cI]; for (var rI = 0; rI < dof; rI++) Kdense[rI * dof + cI] = kcl[rI]; }
+    var keig = bk_jacobiSym(Kdense, dof, 300, 1e-14);
+    var maxK = 0; for (var mk = 0; mk < dof; mk++) if (keig.values[mk] > maxK) maxK = keig.values[mk];
+    var Q = [];
+    for (var ek = 0; ek < dof; ek++) {
+      if (keig.values[ek] > 1e-6 * maxK) { var col = new Float64Array(dof); for (var rq = 0; rq < dof; rq++) col[rq] = keig.vectors[rq * dof + ek]; Q.push(col); }
+    }
+    var s = Q.length;
+    function denseApply(cols, x) { var out = new Float64Array(dof); for (var col = 0; col < dof; col++) { var xc = x[col]; if (xc !== 0) { var mc = cols[col]; for (var r = 0; r < dof; r++) out[r] += xc * mc[r]; } } return out; }
+    /* reduced Kr = QᵀKQ, Ar = QᵀAQ  (s × s) */
+    var Kr = new Float64Array(s * s), Ar = new Float64Array(s * s);
+    for (var b = 0; b < s; b++) {
+      var KQb = denseApply(Kc, Q[b]), AQb = denseApply(Ac, Q[b]);
+      for (var aa = 0; aa < s; aa++) { Kr[aa * s + b] = bk_dot(Q[aa], KQb, dof); Ar[aa * s + b] = bk_dot(Q[aa], AQb, dof); }
+    }
+    var ge = bk_genEigSPD(Ar, Kr, s);     /* Ar z = θ Kr z */
+    var lamDense = Infinity;
+    for (var t2 = 0; t2 < s; t2++) { if (ge.values[t2] > 1e-9) { var lam = 1 / ge.values[t2]; if (lam < lamDense) lamDense = lam; } }
+
+    /* matrix-free on the same axis */
+    var mf = bucklingFromSolid(solid, C_s, C_v, N, { axes: [axis], block: 10, eigIters: 200, eigTol: 1e-11, cgTol: 1e-12, cgMaxiter: 5000 });
+    var lamMF = mf.lambda_cr;
+    var rel = Math.abs(lamMF - lamDense) / Math.max(Math.abs(lamDense), 1e-30);
+    gates.B2_dense_crosscheck = { subspaceDof: s, lambda_dense: lamDense, lambda_matrixfree: lamMF, rel: rel, pass: isFinite(lamDense) && isFinite(lamMF) && rel < 1e-4 };
+  })();
+
+  /* B3 — synthetic porous structure at N=8: λ_cr finite & positive */
+  (function () {
+    var N = 8, N3 = N * N * N;
+    var solid = new Uint8Array(N3);
+    for (var i = 0; i < N; i++) for (var j = 0; j < N; j++) for (var k = 0; k < N; k++) {
+      /* coarse P-surface-like sheet: |gyroid-ish| threshold */
+      var gx = Math.sin(2 * Math.PI * i / N) * Math.cos(2 * Math.PI * j / N)
+             + Math.sin(2 * Math.PI * j / N) * Math.cos(2 * Math.PI * k / N)
+             + Math.sin(2 * Math.PI * k / N) * Math.cos(2 * Math.PI * i / N);
+      solid[i * N * N + j * N + k] = (Math.abs(gx) < 0.9) ? 1 : 0;
+    }
+    var inside = 0; for (var v = 0; v < N3; v++) inside += solid[v];
+    var res = bucklingFromSolid(solid, C_s, C_v, N, { block: 4, eigIters: 40, eigTol: 1e-7, cgTol: 1e-6, cgMaxiter: 600 });
+    gates.B3_synthetic_N8 = { rho: inside / N3, lambda_cr: res.lambda_cr, critAxis: res.critAxis, pcr: res.pcr, pass: isFinite(res.lambda_cr) && res.lambda_cr > 0 };
+  })();
+
+  var passed = true, names = Object.keys(gates);
+  for (var gi = 0; gi < names.length; gi++) if (!gates[names[gi]].pass) passed = false;
+  if (typeof console !== 'undefined') {
+    console.log('[16c buckling oracle · self-test]');
+    for (var gj = 0; gj < names.length; gj++) console.log('  ' + (gates[names[gj]].pass ? '\u2713' : '\u2717') + ' ' + names[gj] + '  ' + JSON.stringify(gates[names[gj]]));
+    console.log('  verdict: ' + (passed ? '\u2713 PASS' : '\u2717 FAIL'));
+  }
+  return { passed: passed, gates: gates };
+}
