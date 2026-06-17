@@ -23,6 +23,17 @@ var BUCKLE_STATE = {
   N: 8              // 8 (fast) | 16 (accurate)
 };
 
+/* Transient per-design buckling results (id -> { lambda_cr, pcr, pcr_py,
+   critAxis, perAxis, modes, N, failure_mode, provisional } | { error }).
+   Kept OUT of d.results (a Run All elastic pass rebuilds d.results and
+   would wipe buckling) and OUT of the design objects (the heavy mode-field
+   arrays must not hit localStorage).  The Buckling view tab reads here. */
+var BUCKLE_BY_DESIGN = {};
+
+/* Provisional yield stress for P_cr/P_y until the nonlinear solver supplies
+   a real macroscopic sigma_y.  Solid Ti-6Al-4V, MPa. */
+var SIGMA_Y_TI64_MPA = 880;
+
 var RUN_STATE = {
   running: false,
   currentIndex: 0,  // which design is currently being solved (mock)
@@ -218,11 +229,15 @@ function startRun(){
                        lands for the 6-LC full-Voigt path
    ============================================================ */
 async function runRealSweep(N){
-  var nDesigns = LAB_STATE.designs.length;
+  var designs  = LAB_STATE.designs;
+  var nDesigns = designs.length;
   var t0 = performance.now();
 
-  /* Make sure WebGPU is alive — solveDesignElasticFull requires it */
-  if (typeof ensureDevice === 'function'){
+  var doElastic = !!PHYS_STATE.elastic;
+  var doBuckle  = !!PHYS_STATE.buckle;
+
+  /* WebGPU is required only for the elastic / GPU path. */
+  if (doElastic && typeof ensureDevice === 'function'){
     var ok = false;
     try { ok = await ensureDevice(); } catch (e) { ok = false; }
     if (!ok){
@@ -233,76 +248,115 @@ async function runRealSweep(N){
     }
   }
 
-  for (var i = 0; i < nDesigns; i++){
-    if (RUN_STATE.cancelled) return;     /* cancel between designs */
-    RUN_STATE.currentIndex = i;
-    var d = LAB_STATE.designs[i];
+  /* Resolve recipes once; designs without a recipe can't run real physics. */
+  var recipes = [];
+  for (var ri = 0; ri < nDesigns; ri++){
+    recipes.push((typeof recipeForDesign === 'function') ? recipeForDesign(designs[ri]) : null);
+  }
+  var nBuckleDesigns = 0;
+  if (doBuckle){ for (var bi = 0; bi < nDesigns; bi++){ if (recipes[bi]) nBuckleDesigns++; } }
 
-    /* Inner progress: rough fractional progress assuming each design takes
-       roughly equal time.  Update before solve starts so the bar moves
-       smoothly even for the first design. */
-    var pStart = i / nDesigns;
-    RUN_STATE.progress = pStart;
-    paintRunProgress(pStart);
-    paintRunStatus('<span class="v">Elastic</span> · Design ' + letterFor(i) +
-                   ' · N=' + N + ' · solving…');
-    renderDesignGrid();
+  /* Progress in work-units: 1 per elastic design + 3 per buckled design. */
+  var totalUnits = (doElastic ? nDesigns : 0) + (doBuckle ? nBuckleDesigns * 3 : 0);
+  if (totalUnits < 1) totalUnits = 1;
+  var doneUnits = 0;
+  function bumpProgress(){ RUN_STATE.progress = doneUnits / totalUnits; paintRunProgress(RUN_STATE.progress); }
 
-    /* Resolve recipe */
-    var recipe = (typeof recipeForDesign === 'function') ? recipeForDesign(d) : null;
+  /* ---------- Phase 1 · Elastic (GPU) ---------- */
+  if (doElastic){
+    for (var i = 0; i < nDesigns; i++){
+      if (RUN_STATE.cancelled) return;
+      RUN_STATE.currentIndex = i;
+      var d = designs[i];
+      bumpProgress();
+      paintRunStatus('<span class="v">Elastic</span> · Design ' + letterFor(i) + ' · N=' + N + ' · solving…');
+      renderDesignGrid();
 
-    if (!recipe){
-      /* No real recipe (e.g. RD design with no lab kernel).  Keep any
-         pre-populated mock results, or fill sentinel values so the UI
-         doesn't crash. */
-      if (!d.results) d.results = stubResults();
-      d.results._runSource = 'stub (no kernel)';
-      continue;
-    }
-
-    /* Real solve */
-    var elasticResult = null;
-    var solveErr = null;
-    try {
-      elasticResult = await solveDesignElasticFull(recipe, N);
-    } catch (err){
-      solveErr = err;
-      console.error('[run] design ' + d.id + ' elastic solve failed:', err);
-    }
-
-    if (RUN_STATE.cancelled) return;
-
-    if (solveErr || !elasticResult || !elasticResult.valid){
-      d.results = stubResults();
-      /* Surface the rejection reason in the run-source pill so the user
-         knows why the design didn't solve.  Connectivity rejections also
-         carry the orphan / island counts forward to d.results so the
-         design grid can render a more informative readout if desired. */
-      var sourceMsg;
-      if (solveErr) {
-        sourceMsg = 'error: ' + solveErr.message;
-      } else if (elasticResult && elasticResult.reject_reason === 'disconnected') {
-        var conn = elasticResult.connectivity;
-        sourceMsg = 'disconnected · ' + (conn ? (conn.orphans + ' orphan voxels in ' +
-                    (conn.numComponents - 1) + ' island(s) · largest ' +
-                    (conn.largestFraction * 100).toFixed(1) + '%') : 'islands detected');
-        d.results.connectivity = conn || null;
-      } else {
-        sourceMsg = 'invalid (singular C)';
+      var recipe = recipes[i];
+      if (!recipe){
+        if (!d.results) d.results = stubResults();
+        d.results._runSource = 'stub (no kernel)';
+        doneUnits++; bumpProgress();
+        continue;
       }
-      d.results._runSource = sourceMsg;
-      d.results._error = true;
-    } else {
-      d.results = mapElasticToResults(elasticResult);
-      d.results._runSource = 'real elastic · N=' + N + ' · ' + (elasticResult.tCG_ms|0) + ' ms';
+
+      var elasticResult = null, solveErr = null;
+      try { elasticResult = await solveDesignElasticFull(recipe, N); }
+      catch (err){ solveErr = err; console.error('[run] design ' + d.id + ' elastic solve failed:', err); }
+      if (RUN_STATE.cancelled) return;
+
+      if (solveErr || !elasticResult || !elasticResult.valid){
+        d.results = stubResults();
+        var sourceMsg;
+        if (solveErr) {
+          sourceMsg = 'error: ' + solveErr.message;
+        } else if (elasticResult && elasticResult.reject_reason === 'disconnected') {
+          var conn = elasticResult.connectivity;
+          sourceMsg = 'disconnected · ' + (conn ? (conn.orphans + ' orphan voxels in ' +
+                      (conn.numComponents - 1) + ' island(s) · largest ' +
+                      (conn.largestFraction * 100).toFixed(1) + '%') : 'islands detected');
+          d.results.connectivity = conn || null;
+        } else {
+          sourceMsg = 'invalid (singular C)';
+        }
+        d.results._runSource = sourceMsg;
+        d.results._error = true;
+      } else {
+        d.results = mapElasticToResults(elasticResult);
+        d.results._runSource = 'real elastic · N=' + N + ' · ' + (elasticResult.tCG_ms|0) + ' ms';
+      }
+      doneUnits++; bumpProgress();
     }
   }
 
   if (RUN_STATE.cancelled) return;
 
+  /* ---------- Phase 2 · Buckling (CPU worker pool) ---------- */
+  if (doBuckle && nBuckleDesigns > 0 && typeof computeBucklingCPU === 'function'){
+    var bN = (typeof BUCKLE_STATE !== 'undefined') ? BUCKLE_STATE.N : 8;
+    paintRunStatus('<span class="v">Buckling</span> · N=' + bN + ' · ' + nBuckleDesigns + ' design(s) · pool solving…');
+    renderDesignGrid();
+
+    var jobs = [];
+    for (var k = 0; k < nDesigns; k++){
+      if (!recipes[k]) continue;
+      (function(design, recipe){
+        jobs.push(
+          computeBucklingCPU(recipe, bN, {}, function(p){
+            doneUnits++; bumpProgress();
+            paintRunStatus('<span class="v">Buckling</span> · ' + (design.label || design.id) +
+                           ' · ' + p.axis + ' (' + p.done + '/' + p.total + ') · N=' + bN);
+          }).then(function(res){
+            res.pcr_py = isFinite(res.pcr) ? res.pcr / SIGMA_Y_TI64_MPA : Infinity;
+            res.failure_mode = (res.pcr_py >= 1) ? 'Yield-limited' : 'Buckling-limited';
+            res.sigma_y_ref = SIGMA_Y_TI64_MPA;
+            res.provisional = true;
+            res.N = bN;
+            BUCKLE_BY_DESIGN[design.id] = res;
+          }).catch(function(e){
+            BUCKLE_BY_DESIGN[design.id] = { error: (e && e.message) || String(e), N: bN };
+            console.error('[run] buckling failed for ' + design.id + ':', e);
+          })
+        );
+      })(designs[k], recipes[k]);
+    }
+    await Promise.all(jobs);
+    if (RUN_STATE.cancelled) return;
+    renderDesignGrid();
+  }
+
+  /* ---------- Unimplemented modes: honest status, no fake numbers ---------- */
+  var notWired = [];
+  if (PHYS_STATE.nonlin)  notWired.push('Nonlinear');
+  if (PHYS_STATE.thermal) notWired.push('Thermal');
+  if (PHYS_STATE.fluid)   notWired.push('Stokes');
+
   RUN_STATE.progress = 1;
   paintRunProgress(1);
-  paintRunStatus('<span class="v">Run complete</span> · ' + ((performance.now()-t0)/1000).toFixed(1) + ' s');
+  var elapsed = ((performance.now()-t0)/1000).toFixed(1);
+  var msg = '<span class="v">Run complete</span> · ' + elapsed + ' s';
+  if (notWired.length) msg += ' · <span class="warn">' + notWired.join(' / ') + ' not yet wired</span>';
+  paintRunStatus(msg);
   finishRun();
 }
 
@@ -437,12 +491,17 @@ function finishRun(){
   RUN_STATE.running = false;
   LAB_STATE.runHasCompleted = true;
 
-  // Pick winner: highest E11 with P_cr/P_y >= 1
+  // Pick winner: highest E11 that is not buckling-limited.  Buckling data
+  // (when present) comes from BUCKLE_BY_DESIGN; designs without buckling data
+  // are not penalised.
   var winner = null;
   var bestE = -Infinity;
   for (var i = 0; i < LAB_STATE.designs.length; i++){
     var d = LAB_STATE.designs[i];
-    if (d.results && d.results.pcr_py >= 1 && d.results.E11 > bestE){
+    if (!d.results) continue;
+    var bk = BUCKLE_BY_DESIGN[d.id];
+    var buckleOk = !bk || bk.error || !isFinite(bk.pcr_py) || bk.pcr_py >= 1;
+    if (buckleOk && d.results.E11 > bestE){
       winner = d.id;
       bestE = d.results.E11;
     }
