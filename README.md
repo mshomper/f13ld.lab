@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.3.1 · alpha · Phase 3 push 3 of 3 · GPU elastic + visualization stack live
+**Status:** v0.4.0 · alpha · Phase 4 complete · Full-Voigt 6×6 + Stiffness surface live
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -27,47 +27,44 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 ## Compute envelope
 
-| Mode                          | N=64 · 1 design | N=64 · 3 designs |
-| ----------------------------- | --------------- | ---------------- |
-| Linear elastic (normal-only)  | ~2 s            | ~6 s             |
-| + Linear buckling             | ~35 s           | ~1.7 min         |
-| + Nonlinear (J2 + geom)       | ~2.5 min        | ~7.5 min         |
-| + Stokes permeability         | ~3 min          | ~9–10 min        |
+| Mode                            | N=64 · 1 design | N=64 · 3 designs |
+| ------------------------------- | --------------- | ---------------- |
+| Linear elastic (full Voigt 6×6) | ~4 s †          | ~12 s †          |
+| + Linear buckling               | ~35 s           | ~1.7 min         |
+| + Nonlinear (J2 + geom)         | ~2.5 min        | ~7.5 min         |
+| + Stokes permeability           | ~3 min          | ~9–10 min        |
 
-10-minute ceiling for default tier. F13LD = FAST.
+† Full-Voigt runs ≈2× the Phase 3 normal-only figures (6 load cases vs 3); N=64 timing is predicted, not yet measured — validated at N=16 and N=32. 10-minute ceiling for default tier. F13LD = FAST.
 
-## What's new in v0.3.1
+## What's new in v0.4.0
 
-Phase 3 push 3 closes Phase 3 with the physics correctness chain and the visualization stack on top of the elastic solver.
+Phase 4 takes the solver from Phase 3's normal-only 3×3 to the full Voigt 6×6 tensor and builds the visualization layer the new tensor unlocks. All four core view tabs — Geometry, Deformed, Stress field, Stiffness ⊕ — are operational, and shear physics is fully visible.
 
-### Physics correctness chain
+### Full Voigt 6×6 elastic homogenization
 
-- **`buildGamma` textbook formula** — ported from F13LD.sweep v0.16.0, replacing the Voigt-biased version. Schwarz P at ρ=0.5 now lands at E11 = **33.16 GPa** (effective ρ exponent ~1.74, inside the skeletal-TPMS ρ¹·⁶⁻²·⁰ band). The rc2 value of 54.09 GPa was a known overestimate from a projector-sign bug; rc3 is correct (`14-rasterizer.js`).
-- **Per-LC field extraction** — solver now captures displacement u'(x) (RGBA8 3D texture) and von Mises stress σ_VM(x) (R8 3D texture) per load case via closed-form spectral inversion. Both feed the new visualization tabs (`16-elastic-solver.js`).
-- **CG convergence tuned to sweep rigorous** — `CG_TOL` tightened from 1e-5 (cap-hit) to 1e-4 (true convergence); `CG_MAXITER` raised 100 → 300. Schwarz P now converges in 230 iters/LC at ~1.7 s wall (was hitting the cap at 100). Same convergence as F13LD.sweep solver.
-- **Multi-axis loading** — all three physical load cases (x, y, z) captured by default. Per-design X/Y/Z toggle in the deformed/stress tabs re-uploads the matching axis without re-solving.
+- **The production solver is now full-tensor** (`16b-elastic-solver-full.js`). Six load cases per design — three normal (xx/yy/zz) plus three shear (yz/xz/xy) — return the full 6×6 effective stiffness C_eff, the 6×6 compliance S, the three shear moduli Gxy/Gxz/Gyz, three Poisson ratios, and a real Zener anisotropy ratio. The Phase 3 normal-only solver (`16-elastic-solver.js`) is retained as an unused fast-triage path.
+- **Cross-validated against a CPU oracle** (`16a-elastic-cpu-ref-full.js`) at N=16 on Schwarz P: 0.001–0.004 % drift on Ex/Ey/Ez, Gxy/Gxz/Gyz, and the Zener ratio.
+- **Full von Mises σ_VM with shear contributions.** Stress on anisotropic structures (spinodoid, hyperuniform) reads 5–15 % higher than the Phase 3 normal-only path — correct, not a regression. Schwarz P is unchanged because shear decouples from normal loading under cubic symmetry.
 
-### Visualization stack
+### Visualization
 
-- **Deformed view** — backward-warp raymarcher applies `u(x) = ε̄·x + u'(x)` to the SDF lookup, showing both macroscopic stretch and microstructural fluctuation in one render. Amp slider live-scales (0–100%); pointer-drag rotates; wheel zooms. Auto-rotate disabled in this mode so the load direction stays unambiguous (`21-raymarcher.js`).
-- **Stress field view** — viridis colormap on σ_VM, with three layered honesty fixes: p95 percentile clipping for the long-tail distribution, one-voxel σ_VM dilation into adjacent void to eliminate interface contamination at thin walls, and per-design auto-gamma so median σ_VM maps to the colormap midpoint regardless of structure type. Diffuse-only shading; per-tile colorbar with `p95 · γ=X.XX` annotation; true σ_VM,max surfaced in the per-tile readout.
-- **per/shared normalization toggle** — view-strip segmented control (visible only in stress mode). `per` = auto per-design (default; best for spatial pattern discovery). `shared` = global p95 cap across all designs, linear viridis (best for cross-design absolute comparison — "yellow" everywhere maps to the same σ_VM).
+- **Stiffness ⊕ tab** (`22-stiffness-viz.js`) — a per-design WebGL surface of the directional Young's modulus E(n̂) over an icosphere, colored by E(n̂)/E_max, with a per-tile readout of E_max, E_min, and anisotropy ratio. Verified against Schwarz P's cubic [111] limit (E_max/E_min = 1.70).
+- **Six-position load-axis toggle** (xx/yy/zz/yz/xz/xy) exposes σ_VM under shear loading in the Stress tab without re-solving. The Deformed tab renders three of six axes — u'(x) reconstruction is defined only for normal strains.
+- **Cividis colormap + sage viewport.** Both the stress raymarcher and the stiffness surface render against a sage (`#6b6e64`) radial-vignette background with the cividis colormap (colorblind-safe, print-friendly): matte navy → khaki → soft amber, tuned to the F13LD palette.
 
-### Known approximation: still normal-strain-only FFT-CG
+### Connectivity gating
 
-rc3 ships the same normal-only (xx/yy/zz) load case set as rc2. Effective stiffness is still ~10-20% high in shear-dominated regimes (sheet TPMS, hyperuniform networks at low ρ) relative to full 6-strain literature values. For Schwarz P, which is close to normal-dominated, rc3's 33.16 GPa is within ~5% of full-Voigt literature reports — well inside the rc2 → rc3 correction band of ~20 GPa. **Phase 4 lifts to full Voigt 6×6 (shear LCs yz, xz, xy)** alongside the directional stiffness surface viz; sheet TPMS numbers will shift downward another ~10% when Phase 4 lands.
-
-The visualization stack built in rc3 is designed to receive Phase 4's output unchanged — fields by axis just become fields by LC, with the existing X/Y/Z toggle extended to six positions.
+- **Periodic 6-connectivity flood-fill** (`14a-connectivity.js`) runs between rasterization and the CG solve. Warn-only by default; opt-in rejection via `opts.connectivity.minLargestFraction`. Every result now carries a `connectivity` report for future UI surfacing.
 
 ## Roadmap
 
 - **Phase 1** · UI shell, hardware detection, design ingest scaffolding ✓
 - **Phase 2** · WebGPU foundation, WGSL 3D FFT kernel ✓
 - **Phase 3** · SDF rasterizer, linear elastic FFT-CG, field extraction, viz stack ✓
-- **Phase 4** ← *next* · Full Voigt 6×6 with shear cases, stiffness directional surface viz, connectivity gating
-- **Phase 5** · Linear buckling (LOBPCG)
+- **Phase 4** · Full Voigt 6×6 with shear cases, stiffness directional surface viz, connectivity gating, six-axis toggle ✓
+- **Phase 5** ← *next* · Linear buckling (LOBPCG)
 - **Phase 6** · Nonlinear (Newton + J2 plasticity)
-- **Phase 7** · ~~Deformed-geometry domain warp, stress field overlay~~ — landed early in Phase 3 push 3
+- **Phase 7** · ~~Deformed-geometry domain warp, stress field overlay~~ — landed early in Phase 3
 - **Phase 8** · Thermal κ tensor, remaining view modes
 - **Phase 9** · Multi-page PDF export
 - **Phase 10** · F13LD.vault integration (fetch, push as new property record)
