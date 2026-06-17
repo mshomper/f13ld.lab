@@ -116,6 +116,20 @@ function familyKey(d){
 function buckleDataFor(id){
   return (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[id] : null;
 }
+/* Localization read for the displayed buckling axis: m-bar (waves/cell) + band
+   label.  Global < 1.5 <= Mixed < 3.0 <= Local. */
+function getBuckleLoc(d, axis){
+  var bk = buckleDataFor(d.id);
+  if (!bk || !bk.perAxis) return null;
+  var mw = null;
+  for (var i = 0; i < bk.perAxis.length; i++){ if (bk.perAxis[i].axis === axis){ mw = bk.perAxis[i].mWave; break; } }
+  if (mw == null || !isFinite(mw)) return null;
+  var label, cls;
+  if (mw < 1.5){ label = 'Global'; cls = 'global'; }
+  else if (mw < 3.0){ label = 'Mixed'; cls = 'mixed'; }
+  else { label = 'Local'; cls = 'local'; }
+  return { mWave: mw, label: label, cls: cls };
+}
 function hasActiveFields(design, mode){
   if (mode === 'buckle'){
     var bk = buckleDataFor(design.id);
@@ -310,6 +324,17 @@ function renderDesignGrid(){
                         d.results && d.results._fieldsByAxis);
     /* Buckling tab shows a qualitative relative-displacement bar (no units). */
     var showBuckleBar = (VIEW_STATE.mode === 'buckle' && useRM);
+    /* Localization chip (top-left) — only when buckling data is mounted. */
+    var buckleChip = '';
+    if (VIEW_STATE.mode === 'buckle' && useRM){
+      var bloc = getBuckleLoc(d, activeAxisFor(d, 'buckle'));
+      if (bloc){
+        buckleChip = '<div class="vp-buckle-chip '+bloc.cls+'">' +
+          '<span class="lbl">'+bloc.label+'</span>' +
+          '<span class="val">m\u0304 '+bloc.mWave.toFixed(1)+'</span>' +
+          '</div>';
+      }
+    }
     var stressDisplay = showColorbar
                         ? resolveStressDisplay(d, LAB_STATE.designs)
                         : null;
@@ -361,6 +386,7 @@ function renderDesignGrid(){
       '</div>' +
       '<div class="dc-viewport">' +
         viewportInner +
+        buckleChip +
         '<div class="vp-axis">+Z<br>↑ +Y<br>→ +X</div>' +
         (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
         (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +

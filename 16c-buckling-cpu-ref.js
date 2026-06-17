@@ -982,6 +982,45 @@ function extractPrestressCPU(solid, C_s, C_v, N, axisVoigt, ws, opts) {
    Returns { lambda_cr, pcr, critAxis, perAxis:[{axis,lambda,sBar}],
              mode (flat critical eigenvector), N }.
    ============================================================ */
+/* bk_modeLocalization — RMS spatial frequency of a buckling mode within the
+   solid, in waves per cell:  m = (N/2pi)*sqrt( SUM_solid|grad phi|^2 / SUM_solid|phi|^2 ),
+   the gradient Rayleigh quotient (= sqrt of the energy-weighted mean-square
+   wavenumber), masked to material voxels so the soft-void displacement doesn't
+   skew it.  ~1 = global (whole-cell mode); >=3 = local (wall/strut buckling).
+   FD centered differences slightly compress high frequencies, which is fine
+   for the local/global banding (monotonic). */
+function bk_modeLocalization(modeFlat, solid, N) {
+  if (!modeFlat) return 0;
+  var N3 = N * N * N, NN = N * N;
+  var num = 0, den = 0;
+  for (var i = 0; i < N; i++) {
+    var ip = ((i + 1) % N) * NN, im = ((i - 1 + N) % N) * NN, i0 = i * NN;
+    for (var j = 0; j < N; j++) {
+      var jp = ((j + 1) % N) * N, jm = ((j - 1 + N) % N) * N, j0 = j * N;
+      for (var k = 0; k < N; k++) {
+        var idx = i0 + j0 + k;
+        if (!solid[idx]) continue;
+        var kp = (k + 1) % N, km = (k - 1 + N) % N;
+        for (var c = 0; c < 3; c++) {
+          var off = c * N3;
+          var v = modeFlat[off + idx];
+          den += v * v;
+          var gx = (modeFlat[off + ip + j0 + k] - modeFlat[off + im + j0 + k]) * 0.5;
+          var gy = (modeFlat[off + i0 + jp + k] - modeFlat[off + i0 + jm + k]) * 0.5;
+          var gz = (modeFlat[off + i0 + j0 + kp] - modeFlat[off + i0 + j0 + km]) * 0.5;
+          num += gx * gx + gy * gy + gz * gz;
+        }
+      }
+    }
+  }
+  if (den <= 0) return 0;
+  /* num/den = <sin^2(omega)> for centered FD; asin recovers the true wavenumber
+     (exact for a single frequency, valid up to the grid's resolved limit ~N/4).
+     Without it the raw FD gradient saturates near N/4 and the Local band can't fire. */
+  var s = Math.min(1, Math.sqrt(num / den));
+  return (N / (2 * Math.PI)) * Math.asin(s);
+}
+
 function bucklingFromSolid(solid, C_s, C_v, N, opts) {
   opts = opts || {};
   var m = opts.block || 8;
@@ -1015,7 +1054,7 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
     for (var pi = 0; pi < pairs.length; pi++) {
       if (pairs[pi].theta > 1e-9) { var lam = 1 / pairs[pi].theta; if (lam < lamAxis) { lamAxis = lam; modeAxis = pairs[pi].vec; } }
     }
-    perAxis.push({ axis: axisName[axis], lambda: lamAxis, sBar: sBarAxis, cgIters: pre.cgIters, mode: modeAxis });
+    perAxis.push({ axis: axisName[axis], lambda: lamAxis, sBar: sBarAxis, cgIters: pre.cgIters, mode: modeAxis, mWave: bk_modeLocalization(modeAxis, solid, N) });
     if (lamAxis < lambdaCr) { lambdaCr = lamAxis; critAxis = axis; critMode = modeAxis; critSbar = sBarAxis; }
   }
 

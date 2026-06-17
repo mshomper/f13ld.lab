@@ -73,7 +73,7 @@ var BUCKLE_WORKER_ONMESSAGE =
   '      mode = { u_prime:[ux,uy,uz], sigma_vm:null, N:N, eps_bar:[0,0,0] };\n' +
   '      transfer.push(ux.buffer, uy.buffer, uz.buffer);\n' +
   '    }\n' +
-  '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, cgIters:pa.cgIters }, mode: mode, rho: one.rho }, transfer);\n' +
+  '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, cgIters:pa.cgIters, mWave:pa.mWave }, mode: mode, rho: one.rho }, transfer);\n' +
   '  } catch (err){ postMessage({ id: job.id, type:"error", message: (err && err.message) || String(err) }); }\n' +
   '};\n';
 
