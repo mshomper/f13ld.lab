@@ -306,8 +306,8 @@ var LAB_SV_FS = [
      - uploadDesign(S_mpa, rho) loads the 6×6 compliance, computes
        per-design E_max via 642-vertex CPU sample, computes
        E_min and anisotropy ratio for the readout.
-     - setEmaxGlobal(E) overrides the per-design Emax (used in
-       shared-normalization mode).
+     - setVizParams(REmax, Cmin, Cmax) sets radius normalization and
+       color stretch (per-design or shared-normalization mode).
      - setActive(b) gates the animation loop (IntersectionObserver).
      - destroy() releases GL resources.
    ════════════════════════════════════════════════════════════ */
@@ -549,13 +549,6 @@ StiffnessViz.prototype.setVizParams = function(REmax, Cmin, Cmax) {
   if (Cmax != null && isFinite(Cmax) && Cmax > 0)    this._Cmax = Cmax;
   else this._Cmax = this._stats.E_max || 1;
   this._dirty = true;
-};
-
-/* setEmaxGlobal(E) — DEPRECATED in push 5.3; kept as a thin wrapper for
-   any caller that hasn't migrated to setVizParams.  Sets only the radius
-   normalization, leaving color stretch at per-design defaults. */
-StiffnessViz.prototype.setEmaxGlobal = function(E) {
-  this.setVizParams(E, this._stats.E_min, this._stats.E_max);
 };
 
 StiffnessViz.prototype.getStats = function() {

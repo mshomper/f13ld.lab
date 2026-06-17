@@ -95,6 +95,55 @@ var LAB_STATE = {
 };
 
 /* ----------------------------------------------------------
+   Design persistence (scheme f13ld.lab.designs.v1).
+
+   Persists the loaded design DEFINITIONS (including each design's
+   recipe) so an imported comparison survives a page reload.  Solver
+   RESULTS are intentionally dropped on save — including the large
+   per-voxel field arrays from a run — and are recomputed by re-running.
+   All access is wrapped because localStorage can throw (quota, privacy
+   mode, storage disabled); persistence is strictly best-effort.
+   ---------------------------------------------------------- */
+var LAB_DESIGNS_KEY = 'f13ld.lab.designs.v1';
+
+function saveDesigns(){
+  try {
+    var slim = LAB_STATE.designs.map(function(d){
+      var c = {};
+      for (var k in d){ if (d.hasOwnProperty(k) && k !== 'results') c[k] = d[k]; }
+      return c;
+    });
+    localStorage.setItem(LAB_DESIGNS_KEY, JSON.stringify({
+      v: 1, baselineId: LAB_STATE.baselineId, designs: slim
+    }));
+  } catch (e){ /* storage unavailable — silent, best-effort */ }
+}
+
+function loadDesigns(){
+  try {
+    var raw = localStorage.getItem(LAB_DESIGNS_KEY);
+    if (!raw) return null;
+    var p = JSON.parse(raw);
+    if (!p || p.v !== 1 || !Array.isArray(p.designs)) return null;
+    for (var i = 0; i < p.designs.length; i++){
+      if (!p.designs[i] || !p.designs[i].id) return null;   // shape guard
+    }
+    return p;
+  } catch (e){ return null; }
+}
+
+/* Restore on load.  Empty or invalid saved state falls back to the demo
+   seed, so a first visit (or a cleared+reloaded session) still shows the
+   built-in comparison rather than an empty grid. */
+(function restoreSavedDesigns(){
+  var saved = loadDesigns();
+  if (saved && saved.designs.length){
+    LAB_STATE.designs = saved.designs;
+    if (saved.baselineId) LAB_STATE.baselineId = saved.baselineId;
+  }
+})();
+
+/* ----------------------------------------------------------
    Compute deltas vs the baseline design for the property card.
    Returns a string like "+18% vs B" or "baseline".
    ---------------------------------------------------------- */

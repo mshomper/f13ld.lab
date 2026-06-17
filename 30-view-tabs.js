@@ -41,7 +41,7 @@ function onViewModeClick(mode){
      state variable (stressNormMode) drives both. */
   var normGroup = document.getElementById('stressNormToggle');
   if (normGroup) {
-    normGroup.style.display = (mode === 'stress' || mode === 'stiff') ? '' : 'none';
+    normGroup.classList.toggle('show', (mode === 'stress' || mode === 'stiff'));
     updateStressNormToggleVisual();
     /* Push 5 — swap the label text so the user knows what the toggle
        affects in the current mode.  The visible label is the first
@@ -197,12 +197,7 @@ function updateStressNormToggleVisual(){
     var isActive = (btns[i].dataset.norm === active);
     if (isActive) btns[i].classList.add('active');
     else          btns[i].classList.remove('active');
-    /* Inline style swap — matches the X/Y/Z toggle and stress-tile patterns
-       that opted to keep A.2.2/A.3 changes out of lab.css.  Can be promoted
-       to .stress-norm-btn / .stress-norm-btn.active selectors in a later
-       polish pass alongside the other inline-styled toggle UIs. */
-    btns[i].style.background  = isActive ? '#c8f542' : 'transparent';
-    btns[i].style.borderColor = isActive ? '#c8f542' : 'rgba(255,255,255,0.18)';
-    btns[i].style.color       = isActive ? '#0a0a0a' : 'rgba(255,255,255,0.55)';
+    /* Active state is driven by the .stress-norm-btn.active selector in
+       lab.css (promoted from inline styles in the Phase 5 polish pass). */
   }
 }

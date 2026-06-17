@@ -88,6 +88,10 @@ function familyKey(d){
    load events, run progress, and amp-slider changes.
    ---------------------------------------------------------- */
 function renderDesignGrid(){
+  /* Phase 5 polish — persist the current design set (definitions only)
+     so an imported comparison survives a reload.  renderDesignGrid is the
+     common sink for every state mutation (add / remove / baseline / load). */
+  if (typeof saveDesigns === 'function') saveDesigns();
   var grid    = document.getElementById('compareGrid');
   var merged  = document.getElementById('mergedView');
   var mPlot   = document.getElementById('mergedPlot');
@@ -507,14 +511,8 @@ function buildDeformControl(designId, amp, axis){
      to .load-axis-btn class selectors during a later polish pass. */
   function btn(ax) {
     var active = (axis === ax);
-    var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
-               'color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; ' +
-               'padding:2px 7px; cursor:pointer; letter-spacing:0.05em; line-height:1;';
-    var on   = 'background:#c8f542; border-color:#c8f542; color:#0a0a0a;';
-    return '<button class="load-axis-btn" data-design-id="'+designId+'" data-axis="'+ax+'" ' +
-           'style="'+base + (active ? on : '') +'">'+ax.toUpperCase()+'</button>';
+    return '<button class="load-axis-btn'+(active ? ' active' : '')+'" data-design-id="'+designId+'" data-axis="'+ax+'">'+ax.toUpperCase()+'</button>';
   }
-  var toggleStyle = 'display:inline-flex; gap:0; margin-right:8px;';
   /* 4b — slider value 0..1 now maps to "δ_max as % of cell".  Default 0.25
      → 5% cell stretch.  Step 0.01 preserves smooth slider feel.
      Sampling kernel is fixed at 8-tap cubic B-spline (Sigg-Hadwiger) —
@@ -522,7 +520,7 @@ function buildDeformControl(designId, amp, axis){
      better at lab grid sizes and the cost is imperceptible on target
      hardware.  See 21-raymarcher.js sampleDisp/sampleStress. */
   return '<div class="vp-deform-control show">' +
-    '<div class="load-axis-toggle" style="'+toggleStyle+'">' +
+    '<div class="load-axis-toggle">' +
       btn('xx') + btn('yy') + btn('zz') +
     '</div>' +
     '<label>amp</label>' +
@@ -546,16 +544,10 @@ function buildDeformControl(designId, amp, axis){
 function buildStressControl(designId, sat, axis){
   function btn(ax) {
     var active = (axis === ax);
-    var base = 'background:transparent; border:1px solid rgba(255,255,255,0.18); ' +
-               'color:rgba(255,255,255,0.55); font:11px JetBrains Mono,ui-monospace,monospace; ' +
-               'padding:2px 6px; cursor:pointer; letter-spacing:0.04em; line-height:1;';
-    var on   = 'background:#c8f542; border-color:#c8f542; color:#0a0a0a;';
-    return '<button class="load-axis-btn" data-design-id="'+designId+'" data-axis="'+ax+'" ' +
-           'style="'+base + (active ? on : '') +'">'+ax.toUpperCase()+'</button>';
+    return '<button class="load-axis-btn'+(active ? ' active' : '')+'" data-design-id="'+designId+'" data-axis="'+ax+'">'+ax.toUpperCase()+'</button>';
   }
-  var toggleStyle = 'display:inline-flex; gap:0; margin-right:8px;';
   return '<div class="vp-deform-control show">' +
-    '<div class="load-axis-toggle" style="'+toggleStyle+'">' +
+    '<div class="load-axis-toggle six">' +
       btn('xx') + btn('yy') + btn('zz') + btn('yz') + btn('xz') + btn('xy') +
     '</div>' +
     '<label>sat</label>' +
@@ -919,24 +911,6 @@ function buildStressColorbar(capMPa, gamma, mode){
   /* 4b — Cividis stops sampled at t = i/7 from matplotlib cividis (same
      8 anchors used by the shader cividis() function).  CSS percentages
      match: i/7 × 100% for i = 0..7. */
-  var grad = 'linear-gradient(to top, ' +
-             'rgb(0,32,77) 0%, rgb(28,62,101) 14.3%, rgb(60,88,120) 28.6%, ' +
-             'rgb(91,114,124) 42.9%, rgb(127,137,117) 57.1%, rgb(170,162,99) 71.4%, ' +
-             'rgb(216,193,76) 85.7%, rgb(255,234,70) 100%)';
-  var barStyle = 'position:absolute; right:14px; top:46px; bottom:68px; ' +
-                 'width:8px; border-radius:1px; background:' + grad + '; ' +
-                 'border:1px solid rgba(255,255,255,0.18);';
-  var labelTopStyle = 'position:absolute; right:28px; top:42px; ' +
-                      'font:9px JetBrains Mono,ui-monospace,monospace; ' +
-                      'color:rgba(255,255,255,0.85); letter-spacing:0.05em; ' +
-                      'white-space:nowrap; text-align:right;';
-  var labelBotStyle = 'position:absolute; right:28px; bottom:64px; ' +
-                      'font:9px JetBrains Mono,ui-monospace,monospace; ' +
-                      'color:rgba(255,255,255,0.5); letter-spacing:0.05em;';
-  var headerStyle  = 'position:absolute; right:14px; top:30px; ' +
-                     'font:9px JetBrains Mono,ui-monospace,monospace; ' +
-                     'color:rgba(255,255,255,0.55); letter-spacing:0.08em; ' +
-                     'text-transform:uppercase;';
   /* Format the cap in sensible units */
   var capStr;
   if (capMPa >= 1000) capStr = (capMPa/1000).toFixed(2) + ' GPa';
@@ -952,12 +926,9 @@ function buildStressColorbar(capMPa, gamma, mode){
   if (mode === 'shared') suffixText = 'global p95';
   else if (gamma < 0.99) suffixText = 'p95 · γ=' + gamma.toFixed(2);
   else                   suffixText = 'p95';
-  var suffixStyle = 'display:block; font-size:8px; color:rgba(255,255,255,0.45); ' +
-                    'letter-spacing:0.08em; margin-top:1px;';
-
-  return '<div class="stress-colorbar-header" style="'+headerStyle+'">σ_VM</div>' +
-         '<div class="stress-colorbar" style="'+barStyle+'"></div>' +
-         '<div class="stress-colorbar-label-top" style="'+labelTopStyle+'">'+capStr +
-           '<span style="'+suffixStyle+'">'+suffixText+'</span></div>' +
-         '<div class="stress-colorbar-label-bot" style="'+labelBotStyle+'">0</div>';
+  return '<div class="stress-colorbar-header">σ_VM</div>' +
+         '<div class="stress-colorbar"></div>' +
+         '<div class="stress-colorbar-label-top">'+capStr +
+           '<span class="stress-colorbar-suffix">'+suffixText+'</span></div>' +
+         '<div class="stress-colorbar-label-bot">0</div>';
 }
