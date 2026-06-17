@@ -38,10 +38,7 @@
     }, 150);
   });
 
-  console.log('%c F13LD.lab · v0.4.0 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
-  console.log('Phase 3 · push 2 of 3 · GPU elastic FFT-CG live (normal-strain only · shear cases land in Phase 4)');
-  console.log('  ▸ Self-test FFT       · GPU FFT round-trip + cosine spike + timing');
-  console.log('  ▸ Rasterize 3 demos   · CPU geometry pipeline · VF + timing');
-  console.log('  ▸ Run elastic · 3 demos · GPU CG homogenization · Ex/Ey/Ez + iters + checks');
+  console.log('%c F13LD.lab · v0.5.0 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
+  console.log('Phase 5 · linear buckling live · full-Voigt elastic + stiffness surface + buckling mode-shape viz');
   console.log('Loaded demo recipes: ' + Object.keys(DEMO_RECIPES).join(', '));
 })();

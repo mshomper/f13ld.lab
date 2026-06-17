@@ -349,7 +349,6 @@ async function runRealSweep(N){
   var notWired = [];
   if (PHYS_STATE.nonlin)  notWired.push('Nonlinear');
   if (PHYS_STATE.thermal) notWired.push('Thermal');
-  if (PHYS_STATE.fluid)   notWired.push('Stokes');
 
   RUN_STATE.progress = 1;
   paintRunProgress(1);
