@@ -141,14 +141,17 @@ function activeAxisFor(design, mode){
   if (mode === 'buckle') return getBuckleAxis(design.id);
   return (typeof getDeformAxis === 'function') ? getDeformAxis(design.id) : 'zz';
 }
-/* Peak |phi| across a mode fieldset — caps the relative-displacement colormap.
-   Cached on the fieldset so it isn't recomputed every render. */
+/* p90 of |phi| across a mode fieldset — caps the relative-displacement
+   colormap so the buckling zones saturate at the hot end, rather than a single
+   peak voxel pinning the scale (which washed the surface blue).  Cached. */
 function buckleMagCap(fs){
   if (!fs || !fs.sigma_vm) return 1;
   if (fs._magCap !== undefined) return fs._magCap;
-  var a = fs.sigma_vm, mx = 0;
-  for (var i = 0; i < a.length; i++){ if (a[i] > mx) mx = a[i]; }
-  fs._magCap = (mx > 0) ? mx : 1;
+  var a = fs.sigma_vm, n = a.length;
+  var copy = new Float32Array(a);   /* typed-array sort is numeric ascending */
+  copy.sort();
+  var cap = copy[Math.floor(0.90 * (n - 1))];
+  fs._magCap = (cap > 0) ? cap : 1;
   return fs._magCap;
 }
 
@@ -418,10 +421,12 @@ function renderDesignGrid(){
     if (VIEW_STATE.mode === 'buckle') {
       /* warp + |phi| colormap both live in the stress view mode (effective 2) */
       if (rkrm.setViewMode)   rkrm.setViewMode('stress');
+      if (rkrm.setBuckleMap)  rkrm.setBuckleMap(true);
       if (rkrm.setBuckleAmp)  rkrm.setBuckleAmp((typeof getBuckleExag === 'function') ? getBuckleExag(rkid) : 10);
       if (rkrm.setPulse)      rkrm.setPulse(true);
     } else {
       if (rkrm.setViewMode)   rkrm.setViewMode(VIEW_STATE.mode);
+      if (rkrm.setBuckleMap)  rkrm.setBuckleMap(false);
       if (rkrm.setPulse)      rkrm.setPulse(false);
       if (rkrm.setWarpExpand) rkrm.setWarpExpand(0);
       if (rkrm.setDeformAmp)  rkrm.setDeformAmp(getDeformAmp(rkid));
@@ -651,8 +656,14 @@ function buildBuckleControl(designId, exagPct, axis){
 /* Buckling tab colorbar — relative displacement only (node -> antinode), no
    units, since eigenmode magnitude is qualitative.  Reuses the stress-bar CSS. */
 function buildBuckleColorbar(){
+  /* Turbo gradient (blue node at bottom -> red antinode at top) matching the
+     shader's turbo() stops; inline so it overrides the cividis stress-bar CSS. */
+  var turbo = 'linear-gradient(to top,' +
+    'rgb(36,38,128) 0%,rgb(38,102,242) 14%,rgb(26,179,230) 29%,' +
+    'rgb(38,230,140) 43%,rgb(140,250,64) 57%,rgb(242,217,38) 71%,' +
+    'rgb(247,128,38) 86%,rgb(224,33,20) 100%)';
   return '<div class="stress-colorbar-header">rel. disp</div>' +
-         '<div class="stress-colorbar"></div>' +
+         '<div class="stress-colorbar" style="background:'+turbo+';"></div>' +
          '<div class="stress-colorbar-label-top">antinode' +
            '<span class="stress-colorbar-suffix">qualitative</span></div>' +
          '<div class="stress-colorbar-label-bot">node</div>';

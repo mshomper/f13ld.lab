@@ -90,6 +90,7 @@ function buildLabRaymarcherFS(stepCount) {
        midpoint (brightens long-tail / low-bulk distributions).
        In shared mode, fixed at 1.0 (linear colormap for cross-comparison). */
     'uniform float uStressGamma;',
+    'uniform float uBuckleMap;',
     /* 4b — texture resolution for cubic kernel offset math.  Set at upload time. */
     'uniform float uTexN;',
 
@@ -236,6 +237,33 @@ function buildLabRaymarcherFS(stepCount) {
     '  vec3 c7 = vec3(1.0000, 0.9176, 0.2745);',
     /* Select segment via cascaded mix.  Branchless: each mix picks (a,b)
        when seg matches its index, otherwise inherits from later mixes. */
+    '  vec3 a = c0; vec3 b = c1;',
+    '  if (seg >= 6.5)      { a = c6; b = c7; }',
+    '  else if (seg >= 5.5) { a = c5; b = c6; }',
+    '  else if (seg >= 4.5) { a = c4; b = c5; }',
+    '  else if (seg >= 3.5) { a = c3; b = c4; }',
+    '  else if (seg >= 2.5) { a = c2; b = c3; }',
+    '  else if (seg >= 1.5) { a = c1; b = c2; }',
+    '  else if (seg >= 0.5) { a = c0; b = c1; }',
+    '  return mix(a, b, t);',
+    '}',
+
+    /* Turbo-style ramp for the buckling tab (blue node -> red antinode).
+       Vivid by design — buckling viz is qualitative, so we trade cividis'
+       perceptual restraint for contrast that makes the buckling zones pop. */
+    'vec3 turbo(float x) {',
+    '  x = clamp(x, 0.0, 1.0);',
+    '  float xs = x * 7.0;',
+    '  float seg = floor(xs);',
+    '  float t   = xs - seg;',
+    '  vec3 c0 = vec3(0.140, 0.150, 0.500);',
+    '  vec3 c1 = vec3(0.150, 0.400, 0.950);',
+    '  vec3 c2 = vec3(0.100, 0.700, 0.900);',
+    '  vec3 c3 = vec3(0.150, 0.900, 0.550);',
+    '  vec3 c4 = vec3(0.550, 0.980, 0.250);',
+    '  vec3 c5 = vec3(0.950, 0.850, 0.150);',
+    '  vec3 c6 = vec3(0.970, 0.500, 0.150);',
+    '  vec3 c7 = vec3(0.880, 0.130, 0.080);',
     '  vec3 a = c0; vec3 b = c1;',
     '  if (seg >= 6.5)      { a = c6; b = c7; }',
     '  else if (seg >= 5.5) { a = c5; b = c6; }',
@@ -400,7 +428,11 @@ function buildLabRaymarcherFS(stepCount) {
     /* A.3.3 — gamma correction: t -> t^γ.  γ<1 brightens the low end of the
        colormap, γ=1 is linear (used in shared mode for cross-comparison). */
     '    sv = pow(clamp(sv, 0.0, 1.0), uStressGamma);',
-    '    col = cividis(sv) * diff;',
+    '    if (uBuckleMap > 0.5) {',
+    '      col = turbo(sv) * (0.4 + 0.6 * diff);',
+    '    } else {',
+    '      col = cividis(sv) * diff;',
+    '    }',
     '  } else {',
     '    float dy = dot(n, vec3(0.0,1.0,0.0));',
     '    float dz = dot(n, vec3(0.0,0.0,1.0));',
@@ -544,6 +576,7 @@ function LabRaymarcher() {
                                       oscillating mode shape never clips the box */
     pulse: false,                  /* buckling tab: full-cycle amplitude animation */
     pulseAmpMax: 0.0,              /* peak shader amp the pulse oscillates within */
+    buckleMap: 0.0,                /* buckling tab: 1 = turbo colormap, 0 = cividis */
     /* A.3 — stress field for cividis colormap in stress view mode.
        stressUploaded float-mirror gates the shader's colormap branch.
        stressMin pinned to 0 (colormap convention).  stressMax is in MPa;
@@ -627,7 +660,7 @@ LabRaymarcher.prototype._compileShader = function() {
    /* A.3 — Stress colormap uniforms */
    'uStress','uStressMin','uStressMax','uStressUploaded',
    /* A.3.3 — Gamma correction for non-linear σ_VM colormap remapping */
-   'uStressGamma',
+   'uStressGamma','uBuckleMap',
    /* 4b — texture resolution for cubic kernel offsets */
    'uTexN'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
@@ -1035,6 +1068,13 @@ LabRaymarcher.prototype.setWarpExpand = function(f) {
   this._dirty = true;
 };
 
+/* Buckling tab — 1 = vivid turbo colormap, 0 = cividis (stress). */
+LabRaymarcher.prototype.setBuckleMap = function(on) {
+  if (this.failed) return;
+  this._u.buckleMap = on ? 1.0 : 0.0;
+  this._dirty = true;
+};
+
 /* Buckling tab — toggle the full-cycle amplitude animation. */
 LabRaymarcher.prototype.setPulse = function(on) {
   if (this.failed) return;
@@ -1225,6 +1265,7 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uStressMax,      S.stressMax);
   /* A.3.3 — non-linear remap of σ_VM before cividis lookup. */
   gl.uniform1f(u.uStressGamma,    S.stressGamma);
+  gl.uniform1f(u.uBuckleMap,      S.buckleMap);
   /* 4b — texture resolution for cubic kernel offsets */
   gl.uniform1f(u.uTexN,           S.texN);
 
