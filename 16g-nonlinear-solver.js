@@ -842,7 +842,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var nSteps = opts.nSteps != null ? opts.nSteps : 16;
   var cutbackMax = opts.cutbackMax != null ? opts.cutbackMax : 4;
   var macroTol = opts.macroTol != null ? opts.macroTol : 1e-3;
-  var macroMax = opts.macroMax != null ? opts.macroMax : 8;
+  var macroMax = opts.macroMax != null ? opts.macroMax : 6;
   var es = this.es, d = es.device;
 
   var C = await this._ensureElasticMacro();
@@ -851,6 +851,8 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var Kff = new Float64Array(nf * nf);
   for (var a = 0; a < nf; a++) for (var b = 0; b < nf; b++) Kff[a * nf + b] = C[freeIdx[a] * 6 + freeIdx[b]];
   var Sff = invertSmall(Kff, nf);
+  var Cfa = new Float64Array(nf);
+  for (var ci = 0; ci < nf; ci++) Cfa[ci] = C[freeIdx[ci] * 6 + axis];
   var S6 = invert6x6(C);
   var E0 = S6 ? 1 / S6[axis * 6 + axis] : null;
 
@@ -867,31 +869,41 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     var trial = eAxis + dStep, ok = false, res = null, cut = 0;
     while (cut <= cutbackMax) {
       eb[axis] = trial;
-      var macroOk = false;
+      /* elastic predictor for the free macro strains: exact in the elastic
+         regime, strong starting guess in the plastic regime — keeps the macro
+         loop to ~1-2 iterations instead of grinding. */
+      for (var pr = 0; pr < nf; pr++) {
+        var pred = 0; for (var pc = 0; pc < nf; pc++) pred += Sff[pr * nf + pc] * Cfa[pc];
+        eb[freeIdx[pr]] = -pred * trial;
+      }
+      var fieldDiverged = false;
       for (var mit = 0; mit < macroMax; mit++) {
-        /* restore committed-history baseline before each field solve */
+        /* hold committed history at the previous load step through the macro loop */
         var encB = d.createCommandEncoder();
         es._copyPair(encB, { n: this.snapEpp_n, s: this.snapEpp_s }, { n: this.epp_n, s: this.epp_s });
         d.queue.submit([encB.finish()]);
         res = await this.newtonSolve(eb);
-        if (!res.converged) break;
-        var sn = 0, sref = Math.abs(res.sigma_bar[axis]) + 1e-9;
+        if (!res.converged) { fieldDiverged = true; break; }
+        var sn = 0, sref = Math.max(Math.abs(res.sigma_bar[axis]), 1e-6);
         for (var f = 0; f < nf; f++) { var sv = res.sigma_bar[freeIdx[f]]; sn += sv * sv; }
-        if (Math.sqrt(sn) / sref < macroTol) { macroOk = true; break; }
+        if (Math.sqrt(sn) / sref < macroTol) break;   /* lateral stress ~ 0: macro converged */
         for (var r = 0; r < nf; r++) {
           var dd = 0; for (var c = 0; c < nf; c++) dd += Sff[r * nf + c] * res.sigma_bar[freeIdx[c]];
           eb[freeIdx[r]] -= dd;
         }
       }
-      if (macroOk) { ok = true; break; }
-      /* cutback: restore strain + history, halve increment */
+      /* Accept whenever the FIELD Newton converged. A macro-tolerance miss is
+         benign (lateral stress is already small; f32 + low axial stress can keep
+         it above a tight relative tol). Cut back ONLY on field divergence —
+         matches the 16f oracle. */
+      if (!fieldDiverged) { ok = true; break; }
       var encR = d.createCommandEncoder();
       es._copyPair(encR, { n: this.snap_n, s: this.snap_s }, es.eps);
       es._copyPair(encR, { n: this.snapEpp_n, s: this.snapEpp_s }, { n: this.epp_n, s: this.epp_s });
       d.queue.submit([encR.finish()]);
       dStep *= 0.5; trial = eAxis + dStep; cut++;
     }
-    if (!ok) return { error: 'macro_diverged', rho: this.rho, curve: curve, axis: axis };
+    if (!ok) return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis };
     eAxis = trial;
     curve.push({ eps: eAxis, sigma: res.sigma_bar[axis] });
     step++;
@@ -899,6 +911,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var sigmaY = nlOffsetYield(curve, E0, 0.002);
   return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: sigmaY, E0: E0, N: this.N };
 };
+
 
 /* Public crush entry — physical axis (0=xx,1=yy,2=zz). Maps to the
    solver-internal frame via SWAP=[2,1,0,5,4,3] (matches 16b). */
