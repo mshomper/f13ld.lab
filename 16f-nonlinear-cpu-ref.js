@@ -403,7 +403,7 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
   var m   = nlMakeMaterial(matSpec);
   var Es  = m.E, nu = m.nu;
   var C_s = isoC(Es, nu);
-  var C_v = isoC(Es * 1e-4, nu);
+  var C_v = isoC(Es * 1e-3, nu);   /* void contrast 1e-3 (matches 16g NL_VOID_CONTRAST) */
   var C0  = isoC(Es, nu);
   var Gamma = buildGammaFull(N, C0[21], C0[1]);
 

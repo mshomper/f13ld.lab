@@ -270,8 +270,8 @@ function NonlinearKernels(count) {
 }
 
 NonlinearKernels.prototype.setParams = function (m) {
-  /* m from nlMakeMaterial; void moduli from Es*1e-4 like 16a */
-  var Ev = m.E * 1e-4;
+  /* m from nlMakeMaterial; void moduli from Es*NL_VOID_CONTRAST */
+  var Ev = m.E * NL_VOID_CONTRAST;
   var mu_v = Ev / (2 * (1 + m.nu));
   var lam_v = Ev * m.nu / ((1 + m.nu) * (1 - 2 * m.nu));
   var K_v = lam_v + 2 * mu_v / 3;
@@ -414,7 +414,7 @@ async function runNonlinearKernelTest(mat) {
       r = nlReturnMap(V[v].eps, eppTen, V[v].al, m, c36);
     } else {
       /* void: linear elastic Cv */
-      var Cv = isoC(m.E * 1e-4, m.nu);
+      var Cv = isoC(m.E * NL_VOID_CONTRAST, m.nu);
       var sV = [0,0,0,0,0,0];
       for (var P = 0; P < 6; P++){ var s=0; for (var Q=0;Q<6;Q++) s += Cv[P*6+Q]*V[v].eps[Q]; sV[P]=s; }
       r = { sV: sV }; c36 = Cv;
@@ -488,9 +488,10 @@ async function runNonlinearKernelTest(mat) {
        (b) plastic       : strain-mode crush vs 16f at N=8
    ════════════════════════════════════════════════════════════ */
 
+var NL_VOID_CONTRAST = 1e-3;   /* void stiffness = this * solid; ~+2% modulus for ~5x faster CG */
 var NL_NEWTON_TOL    = 1e-3;   /* f32-appropriate outer tol (inner CG floor ~1e-4) */
 var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-floor guard) */
-var NL_NEWTON_MAX    = 30;
+var NL_NEWTON_MAX    = 12;   /* cap failed-attempt cost; successful solves use ~3 */
 var NL_CG_TOL        = 1e-3;   /* matched to the Newton target — inexact-Newton inner tol */
 var NL_CG_MAX        = 1000;
 
@@ -523,7 +524,7 @@ function NonlinearSolverFull(N, fftPlan) {
 }
 
 NonlinearSolverFull.prototype.setMaterial = function (m) {
-  var Ev = m.E * 1e-4;
+  var Ev = m.E * NL_VOID_CONTRAST;
   var mu_v = Ev / (2 * (1 + m.nu));
   var lam_v = Ev * m.nu / ((1 + m.nu) * (1 - 2 * m.nu));
   var K_v = lam_v + 2 * mu_v / 3;
@@ -547,7 +548,7 @@ NonlinearSolverFull.prototype.upload = function (recipe) {
   var mat = recipe.material || NL_MAT_DEFAULT;
   var m = nlMakeMaterial(mat);
   this.material = m;
-  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * 1e-4, m.nu), C_0 = isoC(m.E, m.nu);
+  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * NL_VOID_CONTRAST, m.nu), C_0 = isoC(m.E, m.nu);
   var Gamma = buildGammaFull(this.N, C_0[21], C_0[1]);
   this.es.uploadDesign(solid, Gamma, C_s, C_v, C_0);
   this.setMaterial(m);
@@ -845,8 +846,8 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var epsTarget = opts.epsTarget != null ? opts.epsTarget : 0.02;
   var nSteps = opts.nSteps != null ? opts.nSteps : 16;
   var cutbackMax = opts.cutbackMax != null ? opts.cutbackMax : 4;
-  var macroTol = opts.macroTol != null ? opts.macroTol : 1e-3;
-  var macroMax = opts.macroMax != null ? opts.macroMax : 6;
+  var macroTol = opts.macroTol != null ? opts.macroTol : 5e-3;
+  var macroMax = opts.macroMax != null ? opts.macroMax : 4;
   var verbose = !!opts.verbose;
   var relax = opts.macroRelax != null ? opts.macroRelax : 0.85;
   var es = this.es, d = es.device;
