@@ -491,7 +491,7 @@ async function runNonlinearKernelTest(mat) {
 var NL_NEWTON_TOL    = 1e-3;   /* f32-appropriate outer tol (inner CG floor ~1e-4) */
 var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-floor guard) */
 var NL_NEWTON_MAX    = 30;
-var NL_CG_TOL        = 1e-4;
+var NL_CG_TOL        = 1e-3;   /* matched to the Newton target — inexact-Newton inner tol */
 var NL_CG_MAX        = 1000;
 
 function NonlinearSolverFull(N, fftPlan) {
