@@ -866,6 +866,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
 
   var curve = [], dStep = epsTarget / nSteps, eAxis = 0, step = 0;
   var eb = [0, 0, 0, 0, 0, 0];
+  var ebFreePrev = null, eAxisPrev = 0;
 
   while (step < nSteps) {
     /* snapshot strain + committed history for cutback and macro-loop baseline */
@@ -877,10 +878,21 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     var trial = eAxis + dStep, ok = false, res = null, cut = 0;
     while (cut <= cutbackMax) {
       eb[axis] = trial;
-      /* warm-start: keep the previous step's converged free lateral strains
-         (carried in eb across steps and cutbacks) — mirrors the 16f oracle.
-         No elastic reseed: in deep plasticity the elastic guess is wrong
-         (near-incompressible flow) and destabilizes the field Newton. */
+      /* Seed the free lateral strains. First step (cold): elastic predictor, so
+         mit=0 already starts near the free-surface answer and the macro loop
+         makes no large confined->free jump (that jump diverges the f32 field
+         Newton at N>=16). Later steps: linear extrapolation of the previous
+         converged lateral strains, which stays physical in deep plasticity
+         (a pure elastic predictor does not, and blows up late). */
+      if (step === 0 || ebFreePrev === null) {
+        for (var ps = 0; ps < nf; ps++) {
+          var pred = 0; for (var pc = 0; pc < nf; pc++) pred += Sff[ps * nf + pc] * Cfa[pc];
+          eb[freeIdx[ps]] = -pred * trial;
+        }
+      } else {
+        var esc = trial / eAxisPrev;
+        for (var ex = 0; ex < nf; ex++) eb[freeIdx[ex]] = ebFreePrev[ex] * esc;
+      }
       var fieldDiverged = false;
       for (var mit = 0; mit < macroMax; mit++) {
         /* hold committed history at the previous load step through the macro loop */
@@ -927,6 +939,8 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     }
     eAxis = trial;
     curve.push({ eps: eAxis, sigma: res.sigma_bar[axis] });
+    ebFreePrev = freeIdx.map(function (fi) { return eb[fi]; });
+    eAxisPrev = eAxis;
     if (verbose) console.log('[crush] step ' + (step + 1) + '/' + nSteps + '  eps=' + eAxis.toFixed(5) + '  sig=' + res.sigma_bar[axis].toFixed(1) +
                              ' MPa  macro=' + (mit + 1) + '  newt=' + res.newtonIters + '  cg=' + res.totalCgIters + '  relRes=' + res.relRes.toExponential(2));
     step++;
