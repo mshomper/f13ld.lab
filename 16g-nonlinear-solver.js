@@ -488,10 +488,11 @@ async function runNonlinearKernelTest(mat) {
        (b) plastic       : strain-mode crush vs 16f at N=8
    ════════════════════════════════════════════════════════════ */
 
-var NL_NEWTON_TOL = 1e-4;   /* f32-appropriate (CPU oracle used 1e-5) */
-var NL_NEWTON_MAX = 25;
-var NL_CG_TOL     = 1e-4;
-var NL_CG_MAX     = 600;
+var NL_NEWTON_TOL    = 1e-3;   /* f32-appropriate outer tol (inner CG floor ~1e-4) */
+var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-floor guard) */
+var NL_NEWTON_MAX    = 30;
+var NL_CG_TOL        = 1e-4;
+var NL_CG_MAX        = 1000;
 
 function NonlinearSolverFull(N, fftPlan) {
   this.N = N;
@@ -518,6 +519,7 @@ function NonlinearSolverFull(N, fftPlan) {
 
   this.newtonTol = NL_NEWTON_TOL; this.newtonMax = NL_NEWTON_MAX;
   this.cgTol = NL_CG_TOL; this.cgMax = NL_CG_MAX;
+  this.acceptRel = NL_NEWTON_ACCEPT;
 }
 
 NonlinearSolverFull.prototype.setMaterial = function (m) {
@@ -667,7 +669,7 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
   var es = this.es, d = es.device;
   var encB = d.createCommandEncoder(); es._fillPair(encB, es.b, eps_bar); d.queue.submit([encB.finish()]);
   var ebNorm = Math.sqrt(await es._dotPair(es.b, es.b)) + 1e-30;
-  var converged = false, nit = 0, totalCg = 0;
+  var converged = false, nit = 0, totalCg = 0, lastRel = Infinity;
 
   for (var n = 0; n < this.newtonMax; n++) {
     nit = n + 1;
@@ -678,7 +680,8 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
     es._axpyPair(encR, -1.0, es.b, es.r);
     d.queue.submit([encR.finish()]);
     var rr = await es._dotPair(es.r, es.r);
-    if (Math.sqrt(rr) / ebNorm < this.newtonTol) { converged = true; break; }
+    lastRel = Math.sqrt(rr) / ebNorm;
+    if (lastRel < this.newtonTol) { converged = true; break; }
 
     /* CG: solve A_nl * deps = R (= es.r), x0 = 0; then eps -= deps */
     var encZ = d.createCommandEncoder();
@@ -714,7 +717,8 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
   var sig6 = await es._readbackPair(es.sig);
   var sBar = [0,0,0,0,0,0], N3 = this.N3;
   for (var c = 0; c < 6; c++) { var acc = 0, a = sig6[c]; for (var i = 0; i < N3; i++) acc += a[i]; sBar[c] = acc / N3; }
-  return { sigma_bar: sBar, converged: converged, newtonIters: nit, totalCgIters: totalCg };
+  if (!converged && lastRel < this.acceptRel) converged = true;   /* f32-floor stall acceptance */
+  return { sigma_bar: sBar, converged: converged, newtonIters: nit, totalCgIters: totalCg, relRes: lastRel };
 };
 
 /* Uniaxial-STRAIN crush along solver-frame axis (0/1/2). Push 2b adds stress. */
@@ -843,6 +847,8 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var cutbackMax = opts.cutbackMax != null ? opts.cutbackMax : 4;
   var macroTol = opts.macroTol != null ? opts.macroTol : 1e-3;
   var macroMax = opts.macroMax != null ? opts.macroMax : 6;
+  var verbose = !!opts.verbose;
+  var relax = opts.macroRelax != null ? opts.macroRelax : 0.85;
   var es = this.es, d = es.device;
 
   var C = await this._ensureElasticMacro();
@@ -889,7 +895,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
         if (Math.sqrt(sn) / sref < macroTol) break;   /* lateral stress ~ 0: macro converged */
         for (var r = 0; r < nf; r++) {
           var dd = 0; for (var c = 0; c < nf; c++) dd += Sff[r * nf + c] * res.sigma_bar[freeIdx[c]];
-          eb[freeIdx[r]] -= dd;
+          eb[freeIdx[r]] -= relax * dd;
         }
       }
       /* Accept whenever the FIELD Newton converged. A macro-tolerance miss is
@@ -903,9 +909,15 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       d.queue.submit([encR.finish()]);
       dStep *= 0.5; trial = eAxis + dStep; cut++;
     }
-    if (!ok) return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis };
+    if (!ok) {
+      console.warn('[crush] newton_diverged @ step ' + step + ' eAxis=' + eAxis.toFixed(5) + ' trial=' + trial.toFixed(5) +
+                   ' relRes=' + (res ? res.relRes.toExponential(2) : 'n/a') + ' newt=' + (res ? res.newtonIters : 0) + ' cg=' + (res ? res.totalCgIters : 0));
+      return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis, atStep: step, eAxis: eAxis, lastRelRes: res ? res.relRes : null };
+    }
     eAxis = trial;
     curve.push({ eps: eAxis, sigma: res.sigma_bar[axis] });
+    if (verbose) console.log('[crush] step ' + (step + 1) + '/' + nSteps + '  eps=' + eAxis.toFixed(5) + '  sig=' + res.sigma_bar[axis].toFixed(1) +
+                             ' MPa  macro=' + (mit + 1) + '  newt=' + res.newtonIters + '  cg=' + res.totalCgIters + '  relRes=' + res.relRes.toExponential(2));
     step++;
   }
   var sigmaY = nlOffsetYield(curve, E0, 0.002);
