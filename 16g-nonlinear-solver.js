@@ -900,9 +900,6 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
         es._copyPair(encB, { n: this.snapEpp_n, s: this.snapEpp_s }, { n: this.epp_n, s: this.epp_s });
         d.queue.submit([encB.finish()]);
         res = await this.newtonSolve(eb);
-        if (verbose) console.log('    [solve] cut=' + cut + ' mit=' + mit + ' eb_ax=' + trial.toFixed(5) +
-          '  conv=' + res.converged + '  relRes=' + res.relRes.toExponential(2) + '  newt=' + res.newtonIters + '  cg=' + res.totalCgIters +
-          '  sFree=[' + freeIdx.map(function (fi) { return res.sigma_bar[fi].toFixed(2); }).join(',') + ']');
         if (!res.converged) { fieldDiverged = true; break; }
         var sn = 0, sref = Math.max(Math.abs(res.sigma_bar[axis]), 1e-6);
         for (var f = 0; f < nf; f++) { var sv = res.sigma_bar[freeIdx[f]]; sn += sv * sv; }
