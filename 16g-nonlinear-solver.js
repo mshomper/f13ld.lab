@@ -464,3 +464,352 @@ async function runNonlinearKernelTest(mat) {
   console.log('[16g] kernel validation: ' + (passSig && passTan ? 'ALL PASS' : 'FAIL') + '  (tol ' + TOL + ', f32)');
   return { worstSig: worstSig, worstTan: worstTan, pass: passSig && passTan };
 }
+
+
+/* ════════════════════════════════════════════════════════════
+   PUSH 2 · NonlinearSolverFull — full GPU solver
+   ────────────────────────────────────────────────────────────
+   Composes an ElasticSolverFull (es) and reuses its FFT / Green
+   operator / CG primitives wholesale. The ONLY change to the
+   operator is local_stress -> apply_tangent (frozen per-voxel
+   consistent tangent). Adds the Newton equilibrium loop, load
+   stepping, and (this push) uniaxial-STRAIN control. The
+   uniaxial-stress macro-Newton + warm-start arrive in Push 2b.
+
+   Frame note: es and 16f both work in the un-swapped solver
+   frame (SWAP is applied only at solveDesignElasticFull's
+   reporting boundary), so GPU vs 16f cross-checks use the same
+   axis index directly. Physical-axis (SWAP) mapping is an
+   integration concern handled later.
+
+   Validation (browser console):
+     await runNonlinearGPUTest(8, 2)
+       (a) elastic-limit : Newton(elastic) vs es elastic LC
+       (b) plastic       : strain-mode crush vs 16f at N=8
+   ════════════════════════════════════════════════════════════ */
+
+var NL_NEWTON_TOL = 1e-4;   /* f32-appropriate (CPU oracle used 1e-5) */
+var NL_NEWTON_MAX = 25;
+var NL_CG_TOL     = 1e-4;
+var NL_CG_MAX     = 600;
+
+function NonlinearSolverFull(N, fftPlan) {
+  this.N = N;
+  this.N3 = N * N * N;
+  this.es = new ElasticSolverFull(N, fftPlan);   /* borrow all FFT/Gamma/CG machinery */
+  var d = this.es.device;
+  this.device = d;
+  var BU = GPUBufferUsage;
+  var V = this.es.v4Size;
+  var sb = function () { return d.createBuffer({ size: V, usage: BU.STORAGE | BU.COPY_SRC | BU.COPY_DST }); };
+
+  this.rmPipeline = d.createComputePipeline({ layout: 'auto',
+    compute: { module: d.createShaderModule({ code: RETURN_MAP_FULL_WGSL }), entryPoint: 'return_map_full' } });
+  this.atPipeline = d.createComputePipeline({ layout: 'auto',
+    compute: { module: d.createShaderModule({ code: APPLY_TANGENT_FULL_WGSL }), entryPoint: 'apply_tangent_full' } });
+
+  this.tan_n = sb(); this.tan_s = sb();
+  this.epp_n = sb(); this.epp_s = sb();     /* committed plastic history (alpha in epp_n.w) */
+  this.eppT_n = sb(); this.eppT_s = sb();   /* trial history from current return_map */
+  this.deps_n = sb(); this.deps_s = sb();   /* Newton correction (CG solution) */
+  this.snap_n = sb(); this.snap_s = sb();   /* strain snapshot for load-step cutback */
+  this.j2ParamsBuf = d.createBuffer({ size: 64, usage: BU.UNIFORM | BU.COPY_DST });
+
+  this.newtonTol = NL_NEWTON_TOL; this.newtonMax = NL_NEWTON_MAX;
+  this.cgTol = NL_CG_TOL; this.cgMax = NL_CG_MAX;
+}
+
+NonlinearSolverFull.prototype.setMaterial = function (m) {
+  var Ev = m.E * 1e-4;
+  var mu_v = Ev / (2 * (1 + m.nu));
+  var lam_v = Ev * m.nu / ((1 + m.nu) * (1 - 2 * m.nu));
+  var K_v = lam_v + 2 * mu_v / 3;
+  var useVoce = m.voce ? 1 : 0;
+  var buf = new ArrayBuffer(64), f = new Float32Array(buf), u = new Uint32Array(buf);
+  f[0]=m.mu; f[1]=m.lam; f[2]=m.K; f[3]=m.sigY0;
+  f[4]=mu_v; f[5]=lam_v; f[6]=K_v; f[7]=useVoce;
+  f[8]=m.H; f[9]=m.voce?m.voce.sigSat_MPa:0; f[10]=m.voce?m.voce.delta:0; f[11]=m.voce?(m.voce.Hlin_MPa||0):0;
+  u[12]=this.N3;
+  this.device.queue.writeBuffer(this.j2ParamsBuf, 0, buf);
+};
+
+/* rasterize + Gamma + upload (mirrors solveDesignElasticFull setup) */
+NonlinearSolverFull.prototype.upload = function (recipe) {
+  var family = recipe.family;
+  var params = KERNELS[family].parseRecipe(recipe);
+  var args = resolveBuildArgs(recipe);
+  var solid = buildVoxels(family, params, args.offset, this.N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+  var inside = 0; for (var v = 0; v < solid.length; v++) inside += solid[v];
+  this.rho = inside / solid.length;
+  var mat = recipe.material || NL_MAT_DEFAULT;
+  var m = nlMakeMaterial(mat);
+  this.material = m;
+  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * 1e-4, m.nu), C_0 = isoC(m.E, m.nu);
+  var Gamma = buildGammaFull(this.N, C_0[21], C_0[1]);
+  this.es.uploadDesign(solid, Gamma, C_s, C_v, C_0);
+  this.setMaterial(m);
+  this.resetHistory();
+  return this.rho;
+};
+
+NonlinearSolverFull.prototype.resetHistory = function () {
+  var d = this.device, enc = d.createCommandEncoder();
+  this.es._fillPair(enc, { n: this.epp_n, s: this.epp_s }, [0,0,0,0,0,0]);
+  this.es._fillPair(enc, { n: this.eppT_n, s: this.eppT_s }, [0,0,0,0,0,0]);
+  this.es._fillPair(enc, this.es.eps, [0,0,0,0,0,0]);
+  d.queue.submit([enc.finish()]);
+};
+
+/* return_map sweep at current es.eps -> es.sig (stress), tan, trial history */
+NonlinearSolverFull.prototype._sweepReturnMap = function (enc) {
+  var es = this.es, d = es.device;
+  var bg = d.createBindGroup({ layout: this.rmPipeline.getBindGroupLayout(0), entries: [
+    { binding: 0,  resource: { buffer: es.solidBuf } },
+    { binding: 1,  resource: { buffer: es.eps.n } },
+    { binding: 2,  resource: { buffer: es.eps.s } },
+    { binding: 3,  resource: { buffer: this.epp_n } },
+    { binding: 4,  resource: { buffer: this.epp_s } },
+    { binding: 5,  resource: { buffer: es.sig.n } },
+    { binding: 6,  resource: { buffer: es.sig.s } },
+    { binding: 7,  resource: { buffer: this.tan_n } },
+    { binding: 8,  resource: { buffer: this.tan_s } },
+    { binding: 9,  resource: { buffer: this.eppT_n } },
+    { binding: 10, resource: { buffer: this.eppT_s } },
+    { binding: 11, resource: { buffer: this.j2ParamsBuf } }
+  ]});
+  es._dispatchEncoded(enc, this.rmPipeline, bg, es.N3, 64);
+};
+
+/* out = epsPair + Gamma:(sigPair - C0:epsPair) — copy of es._applyA steps 2-5 */
+NonlinearSolverFull.prototype._gammaApply = function (enc, sigPair, epsPair, out) {
+  var es = this.es, d = es.device;
+  var tcBg = d.createBindGroup({ layout: es.tcLayout, entries: [
+    { binding: 0, resource: { buffer: epsPair.n } },
+    { binding: 1, resource: { buffer: epsPair.s } },
+    { binding: 2, resource: { buffer: sigPair.n } },
+    { binding: 3, resource: { buffer: sigPair.s } },
+    { binding: 4, resource: { buffer: es.tau.n } },
+    { binding: 5, resource: { buffer: es.tau.s } },
+    { binding: 6, resource: { buffer: es.elasticParamsBuf } }
+  ]});
+  es._dispatchEncoded(enc, es.tcPipeline, tcBg, es.N3, 64);
+  for (var Q = 0; Q < 6; Q++) {
+    var srcBuf = (Q < 3) ? es.tau.n : es.tau.s;
+    var pcBg = d.createBindGroup({ layout: es.pcLayout, entries: [
+      { binding: 0, resource: { buffer: srcBuf } },
+      { binding: 1, resource: { buffer: es.tauCmplx[Q] } },
+      { binding: 2, resource: { buffer: es.laneParamsBufs[Q] } }
+    ]});
+    es._dispatchEncoded(enc, es.pcPipeline, pcBg, es.N3, 64);
+    es.fft.loadFromBuffer(enc, es.tauCmplx[Q]);
+    es.fft.forwardEncoded(enc);
+    es.fft.storeToBuffer(enc, es.tauHat[Q]);
+  }
+  enc.copyBufferToBuffer(epsPair.n, 0, out.n, 0, es.v4Size);
+  enc.copyBufferToBuffer(epsPair.s, 0, out.s, 0, es.v4Size);
+  for (var P = 0; P < 6; P++) {
+    var gaWBg = d.createBindGroup({ layout: es.gaLayout, entries: [
+      { binding: 0, resource: { buffer: es.tauHat[0] } },
+      { binding: 1, resource: { buffer: es.tauHat[1] } },
+      { binding: 2, resource: { buffer: es.tauHat[2] } },
+      { binding: 3, resource: { buffer: es.gamma[P][0] } },
+      { binding: 4, resource: { buffer: es.gamma[P][1] } },
+      { binding: 5, resource: { buffer: es.gamma[P][2] } },
+      { binding: 6, resource: { buffer: es.depsHat[P] } },
+      { binding: 7, resource: { buffer: es.sizeParamsBuf } }
+    ]});
+    es._dispatchEncoded(enc, es.gaWritePipeline, gaWBg, es.N3, 64);
+    var gaABg = d.createBindGroup({ layout: es.gaLayout, entries: [
+      { binding: 0, resource: { buffer: es.tauHat[3] } },
+      { binding: 1, resource: { buffer: es.tauHat[4] } },
+      { binding: 2, resource: { buffer: es.tauHat[5] } },
+      { binding: 3, resource: { buffer: es.gamma[P][3] } },
+      { binding: 4, resource: { buffer: es.gamma[P][4] } },
+      { binding: 5, resource: { buffer: es.gamma[P][5] } },
+      { binding: 6, resource: { buffer: es.depsHat[P] } },
+      { binding: 7, resource: { buffer: es.sizeParamsBuf } }
+    ]});
+    es._dispatchEncoded(enc, es.gaAddPipeline, gaABg, es.N3, 64);
+    es.fft.loadFromBuffer(enc, es.depsHat[P]);
+    es.fft.inverseEncoded(enc);
+    es.fft.storeToBuffer(enc, es.depsC[P]);
+    var destBuf = (P < 3) ? out.n : out.s;
+    var daBg = d.createBindGroup({ layout: es.daLayout, entries: [
+      { binding: 0, resource: { buffer: destBuf } },
+      { binding: 1, resource: { buffer: es.depsC[P] } },
+      { binding: 2, resource: { buffer: es.laneParamsBufs[P] } }
+    ]});
+    es._dispatchEncoded(enc, es.daPipeline, daBg, es.N3, 64);
+  }
+};
+
+/* A_nl : v = v + Gamma:(C_alg:v - C0:v), frozen tangent in tan_{n,s} */
+NonlinearSolverFull.prototype._applyA_nl = function (enc, vPair, out) {
+  var es = this.es, d = es.device;
+  var atBg = d.createBindGroup({ layout: this.atPipeline.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: es.solidBuf } },
+    { binding: 1, resource: { buffer: vPair.n } },
+    { binding: 2, resource: { buffer: vPair.s } },
+    { binding: 3, resource: { buffer: this.tan_n } },
+    { binding: 4, resource: { buffer: this.tan_s } },
+    { binding: 5, resource: { buffer: es.sig.n } },
+    { binding: 6, resource: { buffer: es.sig.s } },
+    { binding: 7, resource: { buffer: this.j2ParamsBuf } }
+  ]});
+  es._dispatchEncoded(enc, this.atPipeline, atBg, es.N3, 64);
+  this._gammaApply(enc, es.sig, vPair, out);
+};
+
+/* Newton solve at prescribed macro strain eps_bar. Warm-starts from es.eps.
+   On convergence, commits trial history -> committed. Returns sigma_bar(6). */
+NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
+  var es = this.es, d = es.device;
+  var encB = d.createCommandEncoder(); es._fillPair(encB, es.b, eps_bar); d.queue.submit([encB.finish()]);
+  var ebNorm = Math.sqrt(await es._dotPair(es.b, es.b)) + 1e-30;
+  var converged = false, nit = 0, totalCg = 0;
+
+  for (var n = 0; n < this.newtonMax; n++) {
+    nit = n + 1;
+    /* residual R = eps + Gamma:(sigma - C0:eps) - eps_bar  -> es.r */
+    var encR = d.createCommandEncoder();
+    this._sweepReturnMap(encR);
+    this._gammaApply(encR, es.sig, es.eps, es.r);
+    es._axpyPair(encR, -1.0, es.b, es.r);
+    d.queue.submit([encR.finish()]);
+    var rr = await es._dotPair(es.r, es.r);
+    if (Math.sqrt(rr) / ebNorm < this.newtonTol) { converged = true; break; }
+
+    /* CG: solve A_nl * deps = R (= es.r), x0 = 0; then eps -= deps */
+    var encZ = d.createCommandEncoder();
+    es._fillPair(encZ, { n: this.deps_n, s: this.deps_s }, [0,0,0,0,0,0]);
+    es._copyPair(encZ, es.r, es.p);
+    d.queue.submit([encZ.finish()]);
+    var rrcg = await es._dotPair(es.r, es.r);
+    var bnorm = Math.sqrt(rrcg) + 1e-30;
+    var dpair = { n: this.deps_n, s: this.deps_s };
+
+    for (var k = 0; k < this.cgMax; k++) {
+      var encA = d.createCommandEncoder(); this._applyA_nl(encA, es.p, es.Ap); d.queue.submit([encA.finish()]);
+      var pAp = await es._dotPair(es.p, es.Ap);
+      if (Math.abs(pAp) < 1e-30) { totalCg += k + 1; break; }
+      var al = rrcg / pAp;
+      var encE = d.createCommandEncoder(); es._axpyPair(encE, al, es.p, dpair); d.queue.submit([encE.finish()]);
+      var encRr = d.createCommandEncoder(); es._axpyPair(encRr, -al, es.Ap, es.r); d.queue.submit([encRr.finish()]);
+      var rrNew = await es._dotPair(es.r, es.r);
+      if (Math.sqrt(rrNew) / bnorm < this.cgTol) { totalCg += k + 1; break; }
+      var beta = rrNew / rrcg;
+      var encP = d.createCommandEncoder(); es._xbpyPair(encP, beta, es.r, es.p); d.queue.submit([encP.finish()]);
+      rrcg = rrNew; totalCg = k + 1;
+    }
+    var encU = d.createCommandEncoder(); es._axpyPair(encU, -1.0, dpair, es.eps); d.queue.submit([encU.finish()]);
+  }
+
+  /* final stress + commit history */
+  var encF = d.createCommandEncoder(); this._sweepReturnMap(encF); d.queue.submit([encF.finish()]);
+  var encC = d.createCommandEncoder();
+  es._copyPair(encC, { n: this.eppT_n, s: this.eppT_s }, { n: this.epp_n, s: this.epp_s });
+  d.queue.submit([encC.finish()]);
+
+  var sig6 = await es._readbackPair(es.sig);
+  var sBar = [0,0,0,0,0,0], N3 = this.N3;
+  for (var c = 0; c < 6; c++) { var acc = 0, a = sig6[c]; for (var i = 0; i < N3; i++) acc += a[i]; sBar[c] = acc / N3; }
+  return { sigma_bar: sBar, converged: converged, newtonIters: nit, totalCgIters: totalCg };
+};
+
+/* Uniaxial-STRAIN crush along solver-frame axis (0/1/2). Push 2b adds stress. */
+NonlinearSolverFull.prototype.crushStrain = async function (axis, opts) {
+  opts = opts || {};
+  var epsTarget = opts.epsTarget != null ? opts.epsTarget : 0.02;
+  var nSteps = opts.nSteps != null ? opts.nSteps : 16;
+  var cutbackMax = opts.cutbackMax != null ? opts.cutbackMax : 4;
+  var es = this.es, d = es.device;
+  var curve = [], dStep = epsTarget / nSteps, eAxis = 0, step = 0, E0 = null;
+  var eb = [0,0,0,0,0,0];
+
+  while (step < nSteps) {
+    /* snapshot strain for cutback */
+    var encS = d.createCommandEncoder(); es._copyPair(encS, es.eps, { n: this.snap_n, s: this.snap_s }); d.queue.submit([encS.finish()]);
+    var trial = eAxis + dStep, ok = false, res = null, cut = 0;
+    while (cut <= cutbackMax) {
+      eb[axis] = trial;
+      res = await this.newtonSolve(eb);
+      if (res.converged) { ok = true; break; }
+      var encR = d.createCommandEncoder(); es._copyPair(encR, { n: this.snap_n, s: this.snap_s }, es.eps); d.queue.submit([encR.finish()]);
+      dStep *= 0.5; trial = eAxis + dStep; cut++;
+    }
+    if (!ok) return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis };
+    eAxis = trial;
+    var sAxis = res.sigma_bar[axis];
+    curve.push({ eps: eAxis, sigma: sAxis });
+    if (E0 === null && eAxis > 0) E0 = sAxis / eAxis;
+    step++;
+  }
+  var sigmaY = nlOffsetYield(curve, E0, 0.002);
+  return { rho: this.rho, axis: axis, control: 'strain', curve: curve, sigma_y_eff: sigmaY, E0: E0, N: this.N };
+};
+
+NonlinearSolverFull.prototype.destroy = function () { this.es.destroy(); };
+
+
+/* ════════════════════════════════════════════════════════════
+   runNonlinearGPUTest — layered validation (browser console)
+     await runNonlinearGPUTest(8, 2)
+   ════════════════════════════════════════════════════════════ */
+async function runNonlinearGPUTest(N, axis) {
+  N = N || 8; axis = axis != null ? axis : 2;
+  if (!WGPU.device) await ensureDevice();
+  if (typeof nonlinearCrushCPU === 'undefined') { console.warn('[16g] 16f not loaded'); return; }
+  var recipe = DEMO_RECIPES.schwarzP;
+
+  /* shared FFT plan */
+  var fft;
+  if (window.__sharedFFT && window.__sharedFFT.N === N) fft = window.__sharedFFT;
+  else { if (window.__sharedFFT) window.__sharedFFT.destroy(); fft = new FFTPlan(N); window.__sharedFFT = fft; }
+
+  /* (a) ELASTIC LIMIT — Newton(elastic) vs es elastic LC, same design */
+  var matHuge = { Es_MPa: 110000, nu: 0.34, sigY0_MPa: 1e15, H_MPa: 2000, voce: null };
+  var rH = JSON.parse(JSON.stringify(recipe)); rH.material = matHuge;
+  var solverH = new NonlinearSolverFull(N, fft);
+  solverH.upload(rH);
+  var eb = [0,0,0,0,0,0]; eb[axis] = 0.001;
+  var elastRef = await solverH.es.solveLoadCaseFull(eb, {});   /* borrowed elastic oracle */
+  var encZ = solverH.device.createCommandEncoder();
+  solverH.es._fillPair(encZ, solverH.es.eps, [0,0,0,0,0,0]); solverH.device.queue.submit([encZ.finish()]);
+  var nlElast = await solverH.newtonSolve(eb);
+  var worstE = 0;
+  for (var p = 0; p < 6; p++) {
+    var sc = Math.max(1, Math.abs(elastRef.sigma[p]));
+    var rel = Math.abs(nlElast.sigma_bar[p] - elastRef.sigma[p]) / sc;
+    if (rel > worstE) worstE = rel;
+  }
+  var passE = worstE < 5e-3;
+  console.log('[16g] elastic-limit  Newton vs es  worst rel = ' + worstE.toExponential(3) + (passE ? '  PASS' : '  FAIL') + '  (Newton iters=' + nlElast.newtonIters + ')');
+  solverH.destroy();
+
+  /* (b) PLASTIC strain-mode crush vs 16f at N */
+  var solver = new NonlinearSolverFull(N, fft);
+  solver.upload(recipe);
+  var t0 = performance.now();
+  var g = await solver.crushStrain(axis, { epsTarget: 0.02, nSteps: 10 });
+  var dt = performance.now() - t0;
+  solver.destroy();
+  if (g.error) { console.error('[16g] plastic crush: ' + g.error); return g; }
+
+  var c = nonlinearCrushCPU(recipe, N, axis, { control: 'strain', epsTarget: 0.02, nSteps: 10 });
+  var relSy = Math.abs(g.sigma_y_eff - c.sigma_y_eff) / Math.max(1, Math.abs(c.sigma_y_eff));
+  var relE0 = Math.abs(g.E0 - c.E0) / Math.max(1, Math.abs(c.E0));
+  var worstC = 0;
+  var nC = Math.min(g.curve.length, c.curve.length);
+  for (var i = 0; i < nC; i++) {
+    var sc2 = Math.max(1, Math.abs(c.curve[i].sigma));
+    var r2 = Math.abs(g.curve[i].sigma - c.curve[i].sigma) / sc2;
+    if (r2 > worstC) worstC = r2;
+  }
+  var passP = relSy < 0.02 && worstC < 0.02;
+  console.log('[16g] plastic crush  GPU vs 16f (strain, N=' + N + ', ' + dt.toFixed(0) + ' ms)');
+  console.log('       E0:        GPU ' + (g.E0/1000).toFixed(2) + '  16f ' + (c.E0/1000).toFixed(2) + ' GPa   rel ' + relE0.toExponential(2));
+  console.log('       sigma_y:   GPU ' + g.sigma_y_eff.toFixed(1) + '  16f ' + c.sigma_y_eff.toFixed(1) + ' MPa   rel ' + relSy.toExponential(2));
+  console.log('       curve worst rel = ' + worstC.toExponential(3) + (passP ? '  PASS' : '  FAIL'));
+  console.log('[16g] GPU solver validation: ' + (passE && passP ? 'ALL PASS' : 'FAIL'));
+  return { elasticLimit: worstE, plasticCurve: worstC, sigmaYrel: relSy, pass: passE && passP, gpu: g, cpu: c };
+}
