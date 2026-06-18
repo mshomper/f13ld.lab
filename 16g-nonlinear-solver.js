@@ -999,16 +999,35 @@ async function runNonlinearStressTest(N) {
   var c = nonlinearCrushCPU(recipe, N, axInternal, { control: 'stress', epsTarget: 0.02, nSteps: 10 });
   var relSy = Math.abs(g.sigma_y_eff - c.sigma_y_eff) / Math.max(1, Math.abs(c.sigma_y_eff));
   var relE0 = Math.abs(g.E0 - c.E0) / Math.max(1, Math.abs(c.E0));
-  var worstC = 0, nC = Math.min(g.curve.length, c.curve.length);
-  for (var i = 0; i < nC; i++) {
-    var sc = Math.max(1, Math.abs(c.curve[i].sigma));
-    var r = Math.abs(g.curve[i].sigma - c.curve[i].sigma) / sc;
-    if (r > worstC) worstC = r;
+  /* Curves may have different eps spacing if either side took a cutback, so
+     interpolate the 16f curve onto each GPU eps (over the overlapping range)
+     instead of comparing point-by-index, and normalize by the peak stress. */
+  function interpSig(cv, x) {
+    if (x <= cv[0].eps) return cv[0].sigma;
+    for (var j = 1; j < cv.length; j++) {
+      if (cv[j].eps >= x) {
+        var t = (x - cv[j - 1].eps) / (cv[j].eps - cv[j - 1].eps);
+        return cv[j - 1].sigma + t * (cv[j].sigma - cv[j - 1].sigma);
+      }
+    }
+    return cv[cv.length - 1].sigma;
   }
-  var pass = relSy < 0.02 && worstC < 0.05;   /* stress-mode: macro-Newton tol looser */
+  var sigMax = 0; for (var im = 0; im < c.curve.length; im++) sigMax = Math.max(sigMax, Math.abs(c.curve[im].sigma));
+  var cMaxEps = c.curve[c.curve.length - 1].eps;
+  var worstC = 0, eAt = 0;
+  for (var i = 0; i < g.curve.length; i++) {
+    var xg = g.curve[i].eps;
+    if (xg > cMaxEps) break;
+    var sci = interpSig(c.curve, xg);
+    var r = Math.abs(g.curve[i].sigma - sci) / Math.max(0.05 * sigMax, 1);
+    if (r > worstC) { worstC = r; eAt = xg; }
+  }
+  var pass = relSy < 0.02 && relE0 < 0.02 && worstC < 0.03;
   console.log('[16g] stress crush  GPU vs 16f (N=' + N + ')');
+  console.log('       GPU eps ' + g.curve[0].eps.toFixed(4) + '..' + g.curve[g.curve.length - 1].eps.toFixed(4) + ' (' + g.curve.length + ' pts),  ' +
+              '16f eps ' + c.curve[0].eps.toFixed(4) + '..' + cMaxEps.toFixed(4) + ' (' + c.curve.length + ' pts)');
   console.log('       E0:       GPU ' + (g.E0/1000).toFixed(2) + '  16f ' + (c.E0/1000).toFixed(2) + ' GPa   rel ' + relE0.toExponential(2));
   console.log('       sigma_y:  GPU ' + g.sigma_y_eff.toFixed(1) + '  16f ' + c.sigma_y_eff.toFixed(1) + ' MPa   rel ' + relSy.toExponential(2));
-  console.log('       curve worst rel = ' + worstC.toExponential(3) + (pass ? '  PASS' : '  FAIL'));
+  console.log('       curve worst rel = ' + worstC.toExponential(3) + ' (at eps=' + eAt.toFixed(4) + ', vs ' + sigMax.toFixed(0) + ' MPa peak)' + (pass ? '  PASS' : '  FAIL'));
   return { sigmaYrel: relSy, curveWorst: worstC, pass: pass, gpu: g, cpu: c };
 }
