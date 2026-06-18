@@ -492,7 +492,7 @@ var NL_VOID_CONTRAST = 1e-3;   /* void stiffness = this * solid; ~+2% modulus fo
 var NL_NEWTON_TOL    = 1e-3;   /* f32-appropriate outer tol (inner CG floor ~1e-4) */
 var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-floor guard) */
 var NL_NEWTON_MAX    = 12;   /* cap failed-attempt cost; successful solves use ~3 */
-var NL_CG_TOL        = 1e-3;   /* matched to the Newton target — inexact-Newton inner tol */
+var NL_CG_TOL        = 1e-4;   /* inner ~10x tighter than newtonTol(1e-3); required for Newton to converge (matches 16f) */
 var NL_CG_MAX        = 1000;
 
 function NonlinearSolverFull(N, fftPlan) {
