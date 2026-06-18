@@ -339,18 +339,17 @@ function nlNewtonSolveCPU(ws, solid, m, C_v, C0, Gamma, N, eps_bar, opts) {
     if (rNorm < newtonTol) { converged = true; break; }
 
     /* CG solve A dEps = -R */
-    for (P = 0; P < 6; P++) { dEps[P].fill(0); }
-    for (P = 0; P < 6; P++) { var rcg = ws.r[P]; var pc = pcg[P]; for (i = 0; i < N3; i++) pc[i] = -rcg[i]; }
-    var rrcg = 0; for (P = 0; P < 6; P++){ var pc2=pcg[P]; for(i=0;i<N3;i++) rrcg += pc2[i]*pc2[i]; }
-    var bnorm = Math.sqrt(rrcg) + 1e-30;
-    /* CG state: residual of linear system held in pcg-derived; use standard CG */
-    var rk = ws.tmp; for (P=0;P<6;P++) rk[P] = null; /* tmp is in use by applyA; allocate small */
-    /* Run CG with its own residual arrays (reuse Ap, dEps; residual = -R - A dEps) */
+    /* Standard CG on A dEps = -R, with x0 = 0 so r0 = p0 = b = -R.
+       cgR holds the linear residual; pcg (ws.p) holds the search direction.
+       ws.tmp is left intact — applyA uses it as scratch each iteration. */
+    for (P = 0; P < 6; P++) dEps[P].fill(0);
     var cgR = [ new Float64Array(N3), new Float64Array(N3), new Float64Array(N3),
                new Float64Array(N3), new Float64Array(N3), new Float64Array(N3) ];
-    for (P=0;P<6;P++) { var rr0 = ws.r[P]; var cR = cgR[P]; for (i=0;i<N3;i++) cR[i] = -rr0[i]; }
+    var bnorm2 = 0;
+    for (P=0;P<6;P++) { var rr0 = ws.r[P]; var cR = cgR[P]; for (i=0;i<N3;i++) { cR[i] = -rr0[i]; bnorm2 += cR[i]*cR[i]; } }
+    var bnorm = Math.sqrt(bnorm2) + 1e-30;
     for (P=0;P<6;P++) pcg[P].set(cgR[P]);
-    var rsold = 0; for (P=0;P<6;P++){ var cR2=cgR[P]; for(i=0;i<N3;i++) rsold += cR2[i]*cR2[i]; }
+    var rsold = bnorm2;
     var cgIters = 0;
     for (var kit = 0; kit < cgMax; kit++) {
       cgIters = kit + 1;
