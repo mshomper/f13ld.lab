@@ -111,6 +111,17 @@
         <div class="spec-pill lab" id="bucklePill" onclick="onBucklePillClick()" title="Buckling grid resolution (CPU reference oracle)">
           <span class="key">Buckle</span> <span class="v" id="bucklePillVal">8³</span> <span class="caret">▾</span>
         </div>
+        <div class="spec-pill lab" id="nonlinPill" onclick="onNonlinPillClick()" title="Nonlinear crush grid resolution (GPU J2 plasticity)">
+          <span class="key">Nonlin</span> <span class="v" id="nonlinPillVal">8³</span> <span class="caret">▾</span>
+        </div>
+        <div class="spec-pill" id="nonlinAxisPill" title="Nonlinear crush load axis">
+          <span class="key">Crush axis</span>
+          <select id="nonlinAxisSel" onchange="onNonlinAxisChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;">
+            <option value="zz" selected>ZZ</option>
+            <option value="xx">XX</option>
+            <option value="yy">YY</option>
+          </select>
+        </div>
         <div class="spec-pill" id="hardwarePill"><span class="key">Hardware</span> <span class="v" id="hardwarePillVal">detecting…</span></div>
         <div class="spec-pill"><span class="key">Designs</span> <span class="v" id="designCountVal">3</span></div>
         <div class="spec-pill"><span class="key">Est.</span> <span class="v" id="estTimeVal">~7.5 min</span></div>

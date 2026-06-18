@@ -203,69 +203,106 @@ function svgEmptyViewport(message){
    when curve mode is active. Reads from LAB_STATE.designs.
    ---------------------------------------------------------- */
 function buildMergedCurvePlot(){
-  if (!LAB_STATE.runHasCompleted){
-    return '<div class="mp-empty">' +
-      '<div class="icon">∿</div>' +
-      '<div class="msg">Run a comparison to see σ–ε curves</div>' +
-      '</div>';
-  }
-  var html = '<div class="mp-head">' +
-    '<div class="mp-title">Stress–Strain · Comparison</div>' +
-    '<div class="mp-sub">UNIAXIAL · Z · 15 increments · J2 plasticity + geometric NL</div>' +
-    '</div>' +
-    '<div class="mp-canvas">' +
-    '<svg viewBox="0 0 800 360" preserveAspectRatio="none">' +
-    '<g stroke="#1a1a2a" stroke-width="0.5">' +
-      '<line x1="60" y1="20"  x2="60"  y2="320"/>' +
-      '<line x1="60" y1="320" x2="780" y2="320"/>' +
-      '<line x1="60" y1="260" x2="780" y2="260" stroke-dasharray="2,4"/>' +
-      '<line x1="60" y1="200" x2="780" y2="200" stroke-dasharray="2,4"/>' +
-      '<line x1="60" y1="140" x2="780" y2="140" stroke-dasharray="2,4"/>' +
-      '<line x1="60" y1="80"  x2="780" y2="80"  stroke-dasharray="2,4"/>' +
-      '<line x1="204" y1="20"  x2="204" y2="320" stroke-dasharray="2,4"/>' +
-      '<line x1="348" y1="20"  x2="348" y2="320" stroke-dasharray="2,4"/>' +
-      '<line x1="492" y1="20"  x2="492" y2="320" stroke-dasharray="2,4"/>' +
-      '<line x1="636" y1="20"  x2="636" y2="320" stroke-dasharray="2,4"/>' +
-    '</g>' +
-    '<g font-family="JetBrains Mono,monospace" font-size="10" fill="#555">' +
-      '<text x="40" y="324" text-anchor="end">0</text>' +
-      '<text x="40" y="264" text-anchor="end">15</text>' +
-      '<text x="40" y="204" text-anchor="end">30</text>' +
-      '<text x="40" y="144" text-anchor="end">45</text>' +
-      '<text x="40" y="84"  text-anchor="end">60</text>' +
-      '<text x="60"  y="338" text-anchor="middle">0</text>' +
-      '<text x="204" y="338" text-anchor="middle">0.5</text>' +
-      '<text x="348" y="338" text-anchor="middle">1.0</text>' +
-      '<text x="492" y="338" text-anchor="middle">1.5</text>' +
-      '<text x="636" y="338" text-anchor="middle">2.0</text>' +
-      '<text x="780" y="338" text-anchor="middle">2.5</text>' +
-      '<text x="20" y="170" text-anchor="middle" transform="rotate(-90, 20, 170)" letter-spacing="1.5">σ (MPa)</text>' +
-      '<text x="420" y="354" text-anchor="middle" letter-spacing="1.5">ε (%)</text>' +
-    '</g>';
-
-  // mock curve paths — Phase 6 replaces with real solver data
-  var curves = [
-    { d:'M60,320 L120,260 L180,200 L240,140 L290,108 L340,90 L400,82 L470,78 L540,76 L620,75 L720,74',  yieldX:290, yieldY:108 },
-    { d:'M60,320 L130,278 L210,236 L290,196 L360,170 L430,156 L510,148 L590,144 L680,142 L760,141',     yieldX:290, yieldY:196 },
-    { d:'M60,320 L150,272 L240,224 L330,182 L410,160 L490,156 L570,160 L650,168 L730,180',              yieldX:410, yieldY:160 }
-  ];
+  // Gather real nonlinear curves from the Run All nonlinear phase.
+  var entries = [];
   for (var i = 0; i < LAB_STATE.designs.length && i < 3; i++){
     var d = LAB_STATE.designs[i];
-    var c = curves[i];
-    html += '<path d="'+c.d+'" fill="none" stroke="'+d.color+'" stroke-width="2"/>';
-    html += '<circle cx="'+c.yieldX+'" cy="'+c.yieldY+'" r="3" fill="'+d.color+'"/>';
+    var nl = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
+    if (nl && !nl.error && nl.curve && nl.curve.length > 1){
+      entries.push({ design: d, nl: nl });
+    }
+  }
+
+  if (!entries.length){
+    var msg = LAB_STATE.runHasCompleted
+      ? 'Enable Nonlinear and Run a comparison to see \u03c3\u2013\u03b5 curves'
+      : 'Run a comparison to see \u03c3\u2013\u03b5 curves';
+    return '<div class="mp-empty"><div class="icon">\u223f</div><div class="msg">' + msg + '</div></div>';
+  }
+
+  // Auto-scale axes to the data (strain in %, stress in MPa).
+  var epsMax = 0, sigMax = 0;
+  for (var e = 0; e < entries.length; e++){
+    var cv = entries[e].nl.curve;
+    for (var k = 0; k < cv.length; k++){
+      if (cv[k].eps   > epsMax) epsMax = cv[k].eps;
+      if (cv[k].sigma > sigMax) sigMax = cv[k].sigma;
+    }
+  }
+  function niceCap(x){
+    if (!(x > 0)) return 1;
+    var pw = Math.pow(10, Math.floor(Math.log10(x)));
+    var m = x / pw;
+    var nm = (m <= 1) ? 1 : (m <= 2) ? 2 : (m <= 5) ? 5 : 10;
+    return nm * pw;
+  }
+  var epsCap = niceCap(epsMax * 100);   // %
+  var sigCap = niceCap(sigMax);         // MPa
+  var axisLabel = (entries[0].nl.axis || 'zz').toUpperCase();
+  var nLabel = entries[0].nl.N;
+
+  var X0 = 60, X1 = 780, Y0 = 20, Y1 = 320;
+  function px(epsPct){ return X0 + (X1 - X0) * (epsPct / epsCap); }
+  function py(sig){    return Y1 - (Y1 - Y0) * (sig / sigCap); }
+
+  var html = '<div class="mp-head">' +
+    '<div class="mp-title">Stress\u2013Strain \u00b7 Comparison</div>' +
+    '<div class="mp-sub">UNIAXIAL \u00b7 ' + axisLabel + ' \u00b7 J2 plasticity + geometric NL \u00b7 N=' + nLabel + '</div>' +
+    '</div>' +
+    '<div class="mp-canvas">' +
+    '<svg viewBox="0 0 800 360" preserveAspectRatio="none">';
+
+  // gridlines (5 vertical, 4 horizontal) + axes
+  html += '<g stroke="#1a1a2a" stroke-width="0.5">';
+  html += '<line x1="' + X0 + '" y1="' + Y0 + '" x2="' + X0 + '" y2="' + Y1 + '"/>';
+  html += '<line x1="' + X0 + '" y1="' + Y1 + '" x2="' + X1 + '" y2="' + Y1 + '"/>';
+  for (var gy = 1; gy <= 4; gy++){ var yy = (Y1 - (Y1 - Y0) * gy / 4).toFixed(1); html += '<line x1="' + X0 + '" y1="' + yy + '" x2="' + X1 + '" y2="' + yy + '" stroke-dasharray="2,4"/>'; }
+  for (var gx = 1; gx <= 5; gx++){ var xx = (X0 + (X1 - X0) * gx / 5).toFixed(1); html += '<line x1="' + xx + '" y1="' + Y0 + '" x2="' + xx + '" y2="' + Y1 + '" stroke-dasharray="2,4"/>'; }
+  html += '</g>';
+
+  // axis tick labels
+  html += '<g font-family="JetBrains Mono,monospace" font-size="10" fill="#555">';
+  for (var ly = 0; ly <= 4; ly++){
+    var yv = sigCap * ly / 4;
+    var yt = (Y1 - (Y1 - Y0) * ly / 4 + 4).toFixed(1);
+    var yl = (yv >= 100) ? Math.round(yv).toString() : yv.toFixed(0);
+    html += '<text x="' + (X0 - 18) + '" y="' + yt + '" text-anchor="end">' + yl + '</text>';
+  }
+  for (var lx = 0; lx <= 5; lx++){
+    var xv = epsCap * lx / 5;
+    var xt = (X0 + (X1 - X0) * lx / 5).toFixed(1);
+    html += '<text x="' + xt + '" y="' + (Y1 + 18) + '" text-anchor="middle">' + xv.toFixed(xv < 1 ? 2 : 1) + '</text>';
+  }
+  html += '<text x="20" y="170" text-anchor="middle" transform="rotate(-90, 20, 170)" letter-spacing="1.5">\u03c3 (MPa)</text>';
+  html += '<text x="420" y="354" text-anchor="middle" letter-spacing="1.5">\u03b5 (%)</text>';
+  html += '</g>';
+
+  // per-design curve + 0.2%-offset yield marker
+  for (var ci = 0; ci < entries.length; ci++){
+    var dd = entries[ci].design, nlc = entries[ci].nl, cvv = nlc.curve;
+    var path = '';
+    for (var pi = 0; pi < cvv.length; pi++){
+      path += (pi === 0 ? 'M' : 'L') + px(cvv[pi].eps * 100).toFixed(1) + ',' + py(cvv[pi].sigma).toFixed(1) + ' ';
+    }
+    html += '<path d="' + path.replace(/\s+$/, '') + '" fill="none" stroke="' + dd.color + '" stroke-width="2"/>';
+    if (isFinite(nlc.sigma_y_eff)){
+      var yEps = null;
+      for (var qi = 0; qi < cvv.length; qi++){ if (cvv[qi].sigma >= nlc.sigma_y_eff){ yEps = cvv[qi].eps; break; } }
+      if (yEps == null) yEps = cvv[cvv.length - 1].eps;
+      html += '<circle cx="' + px(yEps * 100).toFixed(1) + '" cy="' + py(nlc.sigma_y_eff).toFixed(1) + '" r="3.5" fill="' + dd.color + '" stroke="#0a0a0a" stroke-width="1"/>';
+    }
   }
   html += '</svg></div>';
 
-  // legend
+  // legend with real sigma_y_eff
   html += '<div class="mp-legend">';
-  for (var j = 0; j < LAB_STATE.designs.length; j++){
-    var dd = LAB_STATE.designs[j];
-    var letter = dd.label.split('·').pop().trim();
+  for (var li = 0; li < entries.length; li++){
+    var ld = entries[li].design, lnl = entries[li].nl;
+    var letter = ld.label.split('\u00b7').pop().trim();
     html += '<div class="mp-legend-item">' +
-      '<div class="swatch" style="background:'+dd.color+'"></div>' +
-      '<strong style="color:'+dd.color+'">Design '+letter+'</strong> '+dd.title+
-      '<span class="marker">σ_y = '+dd.results.sigma_y_z.toFixed(1)+' MPa</span>' +
+      '<div class="swatch" style="background:' + ld.color + '"></div>' +
+      '<strong style="color:' + ld.color + '">Design ' + letter + '</strong> ' + ld.title +
+      '<span class="marker">\u03c3_y = ' + lnl.sigma_y_eff.toFixed(1) + ' MPa' + (lnl.truncated ? ' (partial)' : '') + '</span>' +
       '</div>';
   }
   html += '</div>';

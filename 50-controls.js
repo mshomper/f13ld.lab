@@ -30,6 +30,15 @@ var BUCKLE_STATE = {
    arrays must not hit localStorage).  The Buckling view tab reads here. */
 var BUCKLE_BY_DESIGN = {};
 
+/* Nonlinear crush resolution + load axis (GPU J2 plasticity, 16g).
+   N=8 fast / N=16 more accurate; axis xx/yy/zz -> crush() physical 0/1/2. */
+var NONLIN_STATE = { N: 8, axis: 'zz' };
+
+/* Transient per-design nonlinear results (id -> { sigma_y_eff, E0, curve,
+   axis, N, truncated } | { error }).  Feeds the sigma-epsilon curve tab, the
+   sigma_y(z) metric, and the P_cr/P_y seam (replaces provisional 880 MPa). */
+var NONLIN_BY_DESIGN = {};
+
 /* Provisional yield stress for P_cr/P_y until the nonlinear solver supplies
    a real macroscopic sigma_y.  Solid Ti-6Al-4V, MPa. */
 var SIGMA_Y_TI64_MPA = 880;
@@ -95,6 +104,26 @@ function paintBucklePill(){
   var val = document.getElementById('bucklePillVal');
   if (!val) return;
   val.textContent = BUCKLE_STATE.N + '³';
+}
+
+/* ============================================================
+   NONLIN GRID PILL — cycles GPU nonlinear crush resolution 8 ⇄ 16,
+   plus the load-axis dropdown handler.
+   ============================================================ */
+function onNonlinPillClick(){
+  NONLIN_STATE.N = (NONLIN_STATE.N === 8) ? 16 : 8;
+  paintNonlinPill();
+  recomputeEstimate();
+}
+
+function paintNonlinPill(){
+  var val = document.getElementById('nonlinPillVal');
+  if (!val) return;
+  val.textContent = NONLIN_STATE.N + '³';
+}
+
+function onNonlinAxisChange(axis){
+  if (axis === 'xx' || axis === 'yy' || axis === 'zz') NONLIN_STATE.axis = axis;
 }
 
 /* ============================================================
@@ -235,6 +264,7 @@ async function runRealSweep(N){
 
   var doElastic = !!PHYS_STATE.elastic;
   var doBuckle  = !!PHYS_STATE.buckle;
+  var doNonlin  = !!PHYS_STATE.nonlin && typeof NonlinearSolverFull === 'function';
 
   /* WebGPU is required only for the elastic / GPU path. */
   if (doElastic && typeof ensureDevice === 'function'){
@@ -255,9 +285,11 @@ async function runRealSweep(N){
   }
   var nBuckleDesigns = 0;
   if (doBuckle){ for (var bi = 0; bi < nDesigns; bi++){ if (recipes[bi]) nBuckleDesigns++; } }
+  var nNonlinDesigns = 0;
+  if (doNonlin){ for (var npi = 0; npi < nDesigns; npi++){ if (recipes[npi]) nNonlinDesigns++; } }
 
   /* Progress in work-units: 1 per elastic design + 3 per buckled design. */
-  var totalUnits = (doElastic ? nDesigns : 0) + (doBuckle ? nBuckleDesigns * 3 : 0);
+  var totalUnits = (doElastic ? nDesigns : 0) + (doNonlin ? nNonlinDesigns * 4 : 0) + (doBuckle ? nBuckleDesigns * 3 : 0);
   if (totalUnits < 1) totalUnits = 1;
   var doneUnits = 0;
   function bumpProgress(){ RUN_STATE.progress = doneUnits / totalUnits; paintRunProgress(RUN_STATE.progress); }
@@ -311,7 +343,50 @@ async function runRealSweep(N){
 
   if (RUN_STATE.cancelled) return;
 
-  /* ---------- Phase 2 · Buckling (CPU worker pool) ---------- */
+  /* ---------- Phase 2 · Nonlinear crush (GPU, 16g) ---------- */
+  if (doNonlin && nNonlinDesigns > 0){
+    var nlN = NONLIN_STATE.N;
+    var axisMap = { xx: 0, yy: 1, zz: 2 };
+    var nlAxis = (axisMap[NONLIN_STATE.axis] != null) ? axisMap[NONLIN_STATE.axis] : 2;
+    var nlfft;
+    if (window.__sharedFFT && window.__sharedFFT.N === nlN){ nlfft = window.__sharedFFT; }
+    else { if (window.__sharedFFT) window.__sharedFFT.destroy(); nlfft = new FFTPlan(nlN); window.__sharedFFT = nlfft; }
+
+    for (var ni = 0; ni < nDesigns; ni++){
+      if (RUN_STATE.cancelled) return;
+      RUN_STATE.currentIndex = ni;
+      var dn = designs[ni];
+      var rcpN = recipes[ni];
+      if (!rcpN) continue;
+      paintRunStatus('<span class="v">Nonlinear</span> · Design ' + letterFor(ni) + ' · N=' + nlN +
+                     ' · ' + NONLIN_STATE.axis.toUpperCase() + ' · crushing…');
+      renderDesignGrid();
+
+      var nlSolver = null, nlErr = null, nlOut = null;
+      try {
+        nlSolver = new NonlinearSolverFull(nlN, nlfft);
+        nlSolver.upload(rcpN);
+        nlOut = await nlSolver.crush(nlAxis, { control: 'stress', nSteps: 16, epsTarget: 0.02 });
+      } catch (e){ nlErr = e; console.error('[run] nonlinear solve failed for ' + dn.id + ':', e); }
+      if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
+      if (RUN_STATE.cancelled) return;
+
+      if (nlErr || !nlOut || nlOut.error || !isFinite(nlOut.sigma_y_eff)){
+        NONLIN_BY_DESIGN[dn.id] = { error: (nlErr && nlErr.message) || (nlOut && nlOut.error) || 'failed', N: nlN };
+      } else {
+        NONLIN_BY_DESIGN[dn.id] = {
+          sigma_y_eff: nlOut.sigma_y_eff, E0: nlOut.E0, curve: nlOut.curve,
+          axis: NONLIN_STATE.axis, N: nlN, truncated: !!nlOut.truncated
+        };
+      }
+      doneUnits += 4; bumpProgress();
+    }
+    renderDesignGrid();
+  }
+
+  if (RUN_STATE.cancelled) return;
+
+  /* ---------- Phase 3 · Buckling (CPU worker pool) ---------- */
   if (doBuckle && nBuckleDesigns > 0 && typeof computeBucklingCPU === 'function'){
     var bN = (typeof BUCKLE_STATE !== 'undefined') ? BUCKLE_STATE.N : 8;
     paintRunStatus('<span class="v">Buckling</span> · N=' + bN + ' · ' + nBuckleDesigns + ' design(s) · pool solving…');
@@ -327,10 +402,12 @@ async function runRealSweep(N){
             paintRunStatus('<span class="v">Buckling</span> · ' + (design.label || design.id) +
                            ' · ' + p.axis + ' (' + p.done + '/' + p.total + ') · N=' + bN);
           }).then(function(res){
-            res.pcr_py = isFinite(res.pcr) ? res.pcr / SIGMA_Y_TI64_MPA : Infinity;
+            var nl = NONLIN_BY_DESIGN[design.id];
+            var sigY = (nl && isFinite(nl.sigma_y_eff)) ? nl.sigma_y_eff : SIGMA_Y_TI64_MPA;
+            res.pcr_py = isFinite(res.pcr) ? res.pcr / sigY : Infinity;
             res.failure_mode = (res.pcr_py >= 1) ? 'Yield-limited' : 'Buckling-limited';
-            res.sigma_y_ref = SIGMA_Y_TI64_MPA;
-            res.provisional = true;
+            res.sigma_y_ref = sigY;
+            res.provisional = !(nl && isFinite(nl.sigma_y_eff));
             res.N = bN;
             BUCKLE_BY_DESIGN[design.id] = res;
           }).catch(function(e){
@@ -347,7 +424,6 @@ async function runRealSweep(N){
 
   /* ---------- Unimplemented modes: honest status, no fake numbers ---------- */
   var notWired = [];
-  if (PHYS_STATE.nonlin)  notWired.push('Nonlinear');
   if (PHYS_STATE.thermal) notWired.push('Thermal');
 
   RUN_STATE.progress = 1;

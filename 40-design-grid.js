@@ -39,6 +39,7 @@ function statsForDesign(d, mode){
     /* P_cr/P_y reflects the buckling run (BUCKLE_BY_DESIGN), not d.results,
        so the metric shows on every tab once buckling has run. */
     var bkd = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
+    var nld = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
     var bkPcrPy = (bkd && !bkd.error && isFinite(bkd.pcr_py)) ? bkd.pcr_py : null;
     var pcrLbl = (bkd && bkd.provisional) ? 'P_cr/P_y*' : 'P_cr / P_y';
     var pcrVal = (bkPcrPy != null) ? bkPcrPy.toFixed(2) : fmtComputed(r.pcr_py, '', 2);
@@ -48,7 +49,7 @@ function statsForDesign(d, mode){
     return [
       { lbl:'E11',     val:r.E11.toFixed(2)+' GPa',  delta:deltaVsBaseline(r.E11, 'E11', d.id) },
       { lbl:'Zener A', val:r.zener.toFixed(2),       delta:[zenerDescriptor(r.zener), 'neut'] },
-      { lbl:'σ_y (z)', val:fmtComputed(r.sigma_y_z, ' MPa', 1), delta:[failureModeText(r), 'neut'] },
+      { lbl:'σ_y (z)', val:(nld && isFinite(nld.sigma_y_eff)) ? nld.sigma_y_eff.toFixed(1)+' MPa' : fmtComputed(r.sigma_y_z, ' MPa', 1), delta:[(nld && isFinite(nld.sigma_y_eff)) ? ((nld.axis||'zz').toUpperCase()+(nld.truncated?' · partial':' · crush')) : failureModeText(r), 'neut'] },
       { lbl:pcrLbl,    val:pcrVal,                   delta:pcrDelta }
     ];
   }
