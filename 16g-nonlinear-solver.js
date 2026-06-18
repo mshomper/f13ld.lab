@@ -694,17 +694,18 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
     var dpair = { n: this.deps_n, s: this.deps_s };
 
     for (var k = 0; k < this.cgMax; k++) {
+      totalCg += 1;
       var encA = d.createCommandEncoder(); this._applyA_nl(encA, es.p, es.Ap); d.queue.submit([encA.finish()]);
       var pAp = await es._dotPair(es.p, es.Ap);
-      if (Math.abs(pAp) < 1e-30) { totalCg += k + 1; break; }
+      if (Math.abs(pAp) < 1e-30) break;
       var al = rrcg / pAp;
       var encE = d.createCommandEncoder(); es._axpyPair(encE, al, es.p, dpair); d.queue.submit([encE.finish()]);
       var encRr = d.createCommandEncoder(); es._axpyPair(encRr, -al, es.Ap, es.r); d.queue.submit([encRr.finish()]);
       var rrNew = await es._dotPair(es.r, es.r);
-      if (Math.sqrt(rrNew) / bnorm < this.cgTol) { totalCg += k + 1; break; }
+      if (Math.sqrt(rrNew) / bnorm < this.cgTol) break;
       var beta = rrNew / rrcg;
       var encP = d.createCommandEncoder(); es._xbpyPair(encP, beta, es.r, es.p); d.queue.submit([encP.finish()]);
-      rrcg = rrNew; totalCg = k + 1;
+      rrcg = rrNew;
     }
     var encU = d.createCommandEncoder(); es._axpyPair(encU, -1.0, dpair, es.eps); d.queue.submit([encU.finish()]);
   }
@@ -876,13 +877,10 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     var trial = eAxis + dStep, ok = false, res = null, cut = 0;
     while (cut <= cutbackMax) {
       eb[axis] = trial;
-      /* elastic predictor for the free macro strains: exact in the elastic
-         regime, strong starting guess in the plastic regime — keeps the macro
-         loop to ~1-2 iterations instead of grinding. */
-      for (var pr = 0; pr < nf; pr++) {
-        var pred = 0; for (var pc = 0; pc < nf; pc++) pred += Sff[pr * nf + pc] * Cfa[pc];
-        eb[freeIdx[pr]] = -pred * trial;
-      }
+      /* warm-start: keep the previous step's converged free lateral strains
+         (carried in eb across steps and cutbacks) — mirrors the 16f oracle.
+         No elastic reseed: in deep plasticity the elastic guess is wrong
+         (near-incompressible flow) and destabilizes the field Newton. */
       var fieldDiverged = false;
       for (var mit = 0; mit < macroMax; mit++) {
         /* hold committed history at the previous load step through the macro loop */
@@ -896,7 +894,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
         if (Math.sqrt(sn) / sref < macroTol) break;   /* lateral stress ~ 0: macro converged */
         for (var r = 0; r < nf; r++) {
           var dd = 0; for (var c = 0; c < nf; c++) dd += Sff[r * nf + c] * res.sigma_bar[freeIdx[c]];
-          eb[freeIdx[r]] -= relax * dd;
+          eb[freeIdx[r]] -= dd;
         }
       }
       /* Accept whenever the FIELD Newton converged. A macro-tolerance miss is
@@ -911,9 +909,17 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       dStep *= 0.5; trial = eAxis + dStep; cut++;
     }
     if (!ok) {
-      console.warn('[crush] newton_diverged @ step ' + step + ' eAxis=' + eAxis.toFixed(5) + ' trial=' + trial.toFixed(5) +
+      console.warn('[crush] field Newton diverged @ step ' + (step + 1) + ' eAxis=' + eAxis.toFixed(5) + ' trial=' + trial.toFixed(5) +
                    ' relRes=' + (res ? res.relRes.toExponential(2) : 'n/a') + ' newt=' + (res ? res.newtonIters : 0) + ' cg=' + (res ? res.totalCgIters : 0));
-      return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis, atStep: step, eAxis: eAxis, lastRelRes: res ? res.relRes : null };
+      /* salvage: if the curve already passed the 0.2% offset knee, the yield is
+         determined — return it rather than discarding a usable result. */
+      var sySalv = nlOffsetYield(curve, E0, 0.002);
+      var pastKnee = (sySalv != null && curve.length >= 2 && eAxis > 0.002 + sySalv / Math.max(E0, 1));
+      if (pastKnee) {
+        console.warn('[crush] salvaged sigma_y_eff=' + sySalv.toFixed(1) + ' MPa from ' + curve.length + ' steps (truncated at eps=' + eAxis.toFixed(4) + ')');
+        return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: sySalv, E0: E0, N: this.N, truncated: true, atStep: step + 1, eAxisMax: eAxis };
+      }
+      return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis, atStep: step + 1, eAxis: eAxis, lastRelRes: res ? res.relRes : null };
     }
     eAxis = trial;
     curve.push({ eps: eAxis, sigma: res.sigma_bar[axis] });
