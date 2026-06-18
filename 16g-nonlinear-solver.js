@@ -513,6 +513,7 @@ function NonlinearSolverFull(N, fftPlan) {
   this.eppT_n = sb(); this.eppT_s = sb();   /* trial history from current return_map */
   this.deps_n = sb(); this.deps_s = sb();   /* Newton correction (CG solution) */
   this.snap_n = sb(); this.snap_s = sb();   /* strain snapshot for load-step cutback */
+  this.snapEpp_n = sb(); this.snapEpp_s = sb(); /* committed-history baseline for macro-Newton */
   this.j2ParamsBuf = d.createBuffer({ size: 64, usage: BU.UNIFORM | BU.COPY_DST });
 
   this.newtonTol = NL_NEWTON_TOL; this.newtonMax = NL_NEWTON_MAX;
@@ -812,4 +813,155 @@ async function runNonlinearGPUTest(N, axis) {
   console.log('       curve worst rel = ' + worstC.toExponential(3) + (passP ? '  PASS' : '  FAIL'));
   console.log('[16g] GPU solver validation: ' + (passE && passP ? 'ALL PASS' : 'FAIL'));
   return { elasticLimit: worstE, plasticCurve: worstC, sigmaYrel: relSy, pass: passE && passP, gpu: g, cpu: c };
+}
+
+/* ════════════════════════════════════════════════════════════
+   PUSH 2b · uniaxial-STRESS macro-Newton + physical-axis mapping
+   The unconfined "cube in a press" case: drive one axis, iterate
+   the other five macro strains so their averaged stress -> 0,
+   using the elastic macro stiffness (computed once via the
+   borrowed homogenizeFull) as the fixed macro Jacobian. Committed
+   plastic history is held at the previous LOAD STEP value through
+   the whole macro loop (restored before each field solve) and
+   only advances when the load step is accepted.
+   ════════════════════════════════════════════════════════════ */
+
+/* elastic macro stiffness C_eff (solver-internal frame), cached */
+NonlinearSolverFull.prototype._ensureElasticMacro = async function () {
+  if (this._Cmacro) return this._Cmacro;
+  var hom = await this.es.homogenizeFull({});
+  this._Cmacro = hom.C_eff;        /* Float64Array(36), internal frame */
+  this.resetHistory();             /* homogenize dirtied eps/sig — zero state */
+  return this._Cmacro;
+};
+
+/* Uniaxial-stress crush along solver-frame axis (0/1/2). */
+NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
+  opts = opts || {};
+  var epsTarget = opts.epsTarget != null ? opts.epsTarget : 0.02;
+  var nSteps = opts.nSteps != null ? opts.nSteps : 16;
+  var cutbackMax = opts.cutbackMax != null ? opts.cutbackMax : 4;
+  var macroTol = opts.macroTol != null ? opts.macroTol : 1e-3;
+  var macroMax = opts.macroMax != null ? opts.macroMax : 8;
+  var es = this.es, d = es.device;
+
+  var C = await this._ensureElasticMacro();
+  var freeIdx = []; for (var i = 0; i < 6; i++) if (i !== axis) freeIdx.push(i);
+  var nf = freeIdx.length;
+  var Kff = new Float64Array(nf * nf);
+  for (var a = 0; a < nf; a++) for (var b = 0; b < nf; b++) Kff[a * nf + b] = C[freeIdx[a] * 6 + freeIdx[b]];
+  var Sff = invertSmall(Kff, nf);
+  var S6 = invert6x6(C);
+  var E0 = S6 ? 1 / S6[axis * 6 + axis] : null;
+
+  var curve = [], dStep = epsTarget / nSteps, eAxis = 0, step = 0;
+  var eb = [0, 0, 0, 0, 0, 0];
+
+  while (step < nSteps) {
+    /* snapshot strain + committed history for cutback and macro-loop baseline */
+    var encS = d.createCommandEncoder();
+    es._copyPair(encS, es.eps, { n: this.snap_n, s: this.snap_s });
+    es._copyPair(encS, { n: this.epp_n, s: this.epp_s }, { n: this.snapEpp_n, s: this.snapEpp_s });
+    d.queue.submit([encS.finish()]);
+
+    var trial = eAxis + dStep, ok = false, res = null, cut = 0;
+    while (cut <= cutbackMax) {
+      eb[axis] = trial;
+      var macroOk = false;
+      for (var mit = 0; mit < macroMax; mit++) {
+        /* restore committed-history baseline before each field solve */
+        var encB = d.createCommandEncoder();
+        es._copyPair(encB, { n: this.snapEpp_n, s: this.snapEpp_s }, { n: this.epp_n, s: this.epp_s });
+        d.queue.submit([encB.finish()]);
+        res = await this.newtonSolve(eb);
+        if (!res.converged) break;
+        var sn = 0, sref = Math.abs(res.sigma_bar[axis]) + 1e-9;
+        for (var f = 0; f < nf; f++) { var sv = res.sigma_bar[freeIdx[f]]; sn += sv * sv; }
+        if (Math.sqrt(sn) / sref < macroTol) { macroOk = true; break; }
+        for (var r = 0; r < nf; r++) {
+          var dd = 0; for (var c = 0; c < nf; c++) dd += Sff[r * nf + c] * res.sigma_bar[freeIdx[c]];
+          eb[freeIdx[r]] -= dd;
+        }
+      }
+      if (macroOk) { ok = true; break; }
+      /* cutback: restore strain + history, halve increment */
+      var encR = d.createCommandEncoder();
+      es._copyPair(encR, { n: this.snap_n, s: this.snap_s }, es.eps);
+      es._copyPair(encR, { n: this.snapEpp_n, s: this.snapEpp_s }, { n: this.epp_n, s: this.epp_s });
+      d.queue.submit([encR.finish()]);
+      dStep *= 0.5; trial = eAxis + dStep; cut++;
+    }
+    if (!ok) return { error: 'macro_diverged', rho: this.rho, curve: curve, axis: axis };
+    eAxis = trial;
+    curve.push({ eps: eAxis, sigma: res.sigma_bar[axis] });
+    step++;
+  }
+  var sigmaY = nlOffsetYield(curve, E0, 0.002);
+  return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: sigmaY, E0: E0, N: this.N };
+};
+
+/* Public crush entry — physical axis (0=xx,1=yy,2=zz). Maps to the
+   solver-internal frame via SWAP=[2,1,0,5,4,3] (matches 16b). */
+NonlinearSolverFull.prototype.crush = async function (physicalAxis, opts) {
+  opts = opts || {};
+  var SWAP = [2, 1, 0, 5, 4, 3];
+  var axInternal = SWAP[physicalAxis];
+  if ((opts.control || 'stress') === 'strain') return await this.crushStrain(axInternal, opts);
+  return await this.crushStress(axInternal, opts);
+};
+
+/* Equivalent-plastic-strain field (alpha) for the viz, in i*N²+j*N+k order. */
+NonlinearSolverFull.prototype.readAlphaField = async function () {
+  var es = this.es, d = es.device, V = es.v4Size;
+  var rb = d.createBuffer({ size: V, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  var enc = d.createCommandEncoder(); enc.copyBufferToBuffer(this.epp_n, 0, rb, 0, V); d.queue.submit([enc.finish()]);
+  await rb.mapAsync(GPUMapMode.READ);
+  var arr = new Float32Array(rb.getMappedRange().slice(0)); rb.unmap(); rb.destroy();
+  var N3 = this.N3, out = new Float32Array(N3);
+  for (var i = 0; i < N3; i++) out[i] = arr[4 * i + 3];   /* alpha in .w */
+  return out;
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   runNonlinearStressTest — uniaxial-STRESS GPU vs 16f at N
+     await runNonlinearStressTest(8)
+   The 16f CPU stress path is slow (macro-Newton on CPU) — expect
+   the tab to chug a couple minutes at N=8. GPU half is fast.
+   ════════════════════════════════════════════════════════════ */
+async function runNonlinearStressTest(N) {
+  N = N || 8;
+  if (!WGPU.device) await ensureDevice();
+  if (typeof nonlinearCrushCPU === 'undefined') { console.warn('[16g] 16f not loaded'); return; }
+  var recipe = DEMO_RECIPES.schwarzP;
+  var axInternal = 2;   /* compare same internal axis on both sides */
+
+  var fft;
+  if (window.__sharedFFT && window.__sharedFFT.N === N) fft = window.__sharedFFT;
+  else { if (window.__sharedFFT) window.__sharedFFT.destroy(); fft = new FFTPlan(N); window.__sharedFFT = fft; }
+
+  var solver = new NonlinearSolverFull(N, fft);
+  solver.upload(recipe);
+  var t0 = performance.now();
+  var g = await solver.crushStress(axInternal, { epsTarget: 0.02, nSteps: 10 });
+  var dtG = performance.now() - t0;
+  solver.destroy();
+  if (g.error) { console.error('[16g] stress crush: ' + g.error); return g; }
+  console.log('[16g] stress crush GPU done (' + dtG.toFixed(0) + ' ms) — running 16f CPU stress (slow)...');
+
+  var c = nonlinearCrushCPU(recipe, N, axInternal, { control: 'stress', epsTarget: 0.02, nSteps: 10 });
+  var relSy = Math.abs(g.sigma_y_eff - c.sigma_y_eff) / Math.max(1, Math.abs(c.sigma_y_eff));
+  var relE0 = Math.abs(g.E0 - c.E0) / Math.max(1, Math.abs(c.E0));
+  var worstC = 0, nC = Math.min(g.curve.length, c.curve.length);
+  for (var i = 0; i < nC; i++) {
+    var sc = Math.max(1, Math.abs(c.curve[i].sigma));
+    var r = Math.abs(g.curve[i].sigma - c.curve[i].sigma) / sc;
+    if (r > worstC) worstC = r;
+  }
+  var pass = relSy < 0.02 && worstC < 0.05;   /* stress-mode: macro-Newton tol looser */
+  console.log('[16g] stress crush  GPU vs 16f (N=' + N + ')');
+  console.log('       E0:       GPU ' + (g.E0/1000).toFixed(2) + '  16f ' + (c.E0/1000).toFixed(2) + ' GPa   rel ' + relE0.toExponential(2));
+  console.log('       sigma_y:  GPU ' + g.sigma_y_eff.toFixed(1) + '  16f ' + c.sigma_y_eff.toFixed(1) + ' MPa   rel ' + relSy.toExponential(2));
+  console.log('       curve worst rel = ' + worstC.toExponential(3) + (pass ? '  PASS' : '  FAIL'));
+  return { sigmaYrel: relSy, curveWorst: worstC, pass: pass, gpu: g, cpu: c };
 }
