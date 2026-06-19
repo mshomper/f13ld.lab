@@ -114,6 +114,7 @@
         <div class="phys-toggle on" data-phys="buckle"  onclick="onPhysToggle(this)"><span class="check">✓</span>Buckling</div>
         <div class="phys-toggle on" data-phys="nonlin"  onclick="onPhysToggle(this)"><span class="check">✓</span>Nonlinear · J2 + geom</div>
         <div class="phys-toggle"    data-phys="thermal" onclick="onPhysToggle(this)"><span class="check">✓</span>Thermal κ</div>
+        <div class="phys-toggle on" id="prunePill" onclick="onPruneToggle(this)" title="Keep only the largest periodically-connected solid component before solving — removes floating islands that cause spurious buckling/crush results"><span class="check">✓</span>Prune islands</div>
       </div>
     </div>
 

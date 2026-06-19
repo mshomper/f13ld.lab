@@ -538,11 +538,16 @@ NonlinearSolverFull.prototype.setMaterial = function (m) {
 };
 
 /* rasterize + Gamma + upload (mirrors solveDesignElasticFull setup) */
-NonlinearSolverFull.prototype.upload = function (recipe) {
+NonlinearSolverFull.prototype.upload = function (recipe, opts) {
   var family = recipe.family;
   var params = KERNELS[family].parseRecipe(recipe);
   var args = resolveBuildArgs(recipe);
   var solid = buildVoxels(family, params, args.offset, this.N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+  /* Connectivity gate (default-on) — prune floating islands before the crush
+     so isolated satellites don't diverge the field Newton. */
+  if (opts && opts.pruneLargest && typeof pruneToLargestComponent === 'function') {
+    solid = pruneToLargestComponent(solid, this.N);
+  }
   var inside = 0; for (var v = 0; v < solid.length; v++) inside += solid[v];
   this.rho = inside / solid.length;
   var mat = recipe.material || NL_MAT_DEFAULT;

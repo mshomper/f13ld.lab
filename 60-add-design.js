@@ -150,6 +150,7 @@ function onAddDesignClick(){
       var json = JSON.parse(raw);
       var design = normalizeDesignJson(json, json.name || 'pasted.json');
       LAB_STATE.designs.push(design);
+      if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();
       LAB_STATE.runHasCompleted = false;
       LAB_STATE.winningId = null;
       updateLoadedPill();
@@ -190,6 +191,7 @@ function ingestDesignFile(file){
       var json = JSON.parse(ev.target.result);
       var design = normalizeDesignJson(json, file.name);
       LAB_STATE.designs.push(design);
+      if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();
       // New design loaded — clear any prior run results
       LAB_STATE.runHasCompleted = false;
       LAB_STATE.winningId = null;
@@ -233,8 +235,8 @@ function ingestDesignFile(file){
         - TPMS surface.type can be 'terms' (full) or 'raw_preset' (preset name only)
    ---------------------------------------------------------- */
 function normalizeDesignJson(json, filename){
-  var letter = String.fromCharCode(65 + LAB_STATE.designs.length);
-  var palette = ['#22d3ee','#fbbf24','#fb7185'];
+  /* Slot/letter/color are assigned by reconcileDesignSlots() AFTER insertion
+     (slot-stable identity); here we only stamp a placeholder + unassigned slot. */
 
   /* ── 1. Family inference ─────────────────────────────────── */
   var family = json.family || json.tool || null;
@@ -426,7 +428,8 @@ function normalizeDesignJson(json, filename){
   var id = json.id || ('user-' + Date.now().toString(36));
   return {
     id: id,
-    label: 'DESIGN · ' + letter,
+    label: 'DESIGN · ?',
+    slot: -1,
     title: title,
     source: 'imported · ' + filename,
     family: (family === 'unknown' ? 'tpms' : family),   /* fallback for SVG */
@@ -438,7 +441,7 @@ function normalizeDesignJson(json, filename){
                 (json.homogenization && json.homogenization.E_solid_GPa) || 110,
     mat_nu: json.mat_nu || json.nu ||
             (json.homogenization && json.homogenization.poisson) || 0.30,
-    color: palette[LAB_STATE.designs.length] || '#aaa',
+    color: '#aaa',
     results: null,
     raw_json: json,
     recipe: recipe
@@ -470,6 +473,7 @@ function ingestUrlParam(){
     var design = normalizeDesignJson(json, r.split('/').pop() || 'remote.json');
     // Replace demo set with the imported one
     LAB_STATE.designs = [design];
+    if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();
     LAB_STATE.runHasCompleted = false;
     LAB_STATE.winningId = null;
     LAB_STATE.baselineId = design.id;

@@ -18,6 +18,7 @@ var MOCK_DESIGNS = [
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
     color:'#22d3ee',
+    slot:0,
     /* mock results (populated by mock run, in real Phase 3+ these
        come from solver output) */
     results:{
@@ -44,6 +45,7 @@ var MOCK_DESIGNS = [
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
     color:'#fbbf24',
+    slot:1,
     results:{
       E11:0.89, E22:0.89, E33:0.89,
       G12:0.38, G13:0.38, G23:0.38,
@@ -68,6 +70,7 @@ var MOCK_DESIGNS = [
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
     color:'#fb7185',
+    slot:2,
     results:{
       E11:1.05, E22:1.05, E33:1.05,
       G12:0.42, G13:0.42, G23:0.42,
@@ -132,6 +135,34 @@ function loadDesigns(){
   } catch (e){ return null; }
 }
 
+/* ----------------------------------------------------------
+   Slot-stable design identity.  Each design owns a slot 0/1/2 -> letter
+   A/B/C and a fixed color, kept for the design's whole life: removing a
+   different design never reshuffles it, and the lowest free slot is handed
+   to the next add, so duplicate letters/colors are impossible.  Honors
+   existing valid, unique slot claims; (re)assigns only the rest.
+   ---------------------------------------------------------- */
+var DESIGN_PALETTE = ['#22d3ee', '#fbbf24', '#fb7185'];
+function reconcileDesignSlots(){
+  var ds = LAB_STATE.designs, used = [false, false, false], i;
+  for (i = 0; i < ds.length; i++){
+    var s = ds[i].slot;
+    if (s === 0 || s === 1 || s === 2){
+      if (!used[s]) used[s] = true; else ds[i].slot = -1;   /* duplicate claim → reassign */
+    } else ds[i].slot = -1;
+  }
+  for (i = 0; i < ds.length; i++){
+    if (ds[i].slot === -1){
+      for (var f = 0; f < 3; f++){ if (!used[f]){ ds[i].slot = f; used[f] = true; break; } }
+    }
+  }
+  for (i = 0; i < ds.length; i++){
+    var sl = ds[i].slot;
+    ds[i].label = 'DESIGN \u00b7 ' + String.fromCharCode(65 + sl);
+    ds[i].color = DESIGN_PALETTE[sl] || '#aaa';
+  }
+}
+
 /* Restore on load.  Empty or invalid saved state falls back to the demo
    seed, so a first visit (or a cleared+reloaded session) still shows the
    built-in comparison rather than an empty grid. */
@@ -141,6 +172,7 @@ function loadDesigns(){
     LAB_STATE.designs = saved.designs;
     if (saved.baselineId) LAB_STATE.baselineId = saved.baselineId;
   }
+  reconcileDesignSlots();   /* normalize slots/letters/colors for saved + seed alike */
 })();
 
 /* ----------------------------------------------------------

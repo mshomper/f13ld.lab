@@ -824,6 +824,7 @@ function removeDesign(designId){
   if (typeof disposeRaymarcher === 'function') disposeRaymarcher(designId);
 
   LAB_STATE.designs = LAB_STATE.designs.filter(function(d){ return d.id !== designId; });
+  if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();   /* freed slot returns to the pool; survivors keep theirs */
   if (LAB_STATE.baselineId === designId && LAB_STATE.designs.length > 0){
     LAB_STATE.baselineId = LAB_STATE.designs[0].id;
   }

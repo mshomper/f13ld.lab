@@ -183,3 +183,65 @@ function checkVoxelConnectivity(solid, N) {
     orphans:         total - sizes[0]
   };
 }
+
+/* ============================================================
+   pruneToLargestComponent(solid, N)
+   Keep only the largest periodically-6-connected solid component;
+   zero every voxel in smaller islands.  Same periodic flood-fill as
+   checkVoxelConnectivity(), but it labels voxels so the largest can be
+   isolated.  Returns a pruned copy (same typed-array dtype as `solid`);
+   returns the original array unchanged when there is 0 or 1 component.
+
+   Rationale: floating islands (e.g. corner satellites left after trimming
+   a cell to a cube) carry no load yet seed spurious low-energy buckling
+   modes and Newton divergence in the crush solve.  Pruning them — under
+   the SAME periodicity the solvers assume — removes only genuinely
+   disconnected material; fragments that wrap-connect into the bulk are
+   load-bearing and are kept.
+   ============================================================ */
+function pruneToLargestComponent(solid, N) {
+  var N3 = N * N * N;
+  var label = new Int32Array(N3);     /* 0 = unlabeled; component ids start at 1 */
+  var stack = new Int32Array(N3);
+  var sizes = [0];                    /* sizes[compId]; index 0 unused */
+  var SA = N * N, SB = N, Nm1 = N - 1;
+  var comp = 0;
+
+  for (var seed = 0; seed < N3; seed++) {
+    if (!solid[seed] || label[seed]) continue;
+    comp++;
+    var compSize = 0, top = 0;
+    stack[top++] = seed; label[seed] = comp;
+    while (top > 0) {
+      var idx = stack[--top]; compSize++;
+      var a = (idx / SA) | 0, rem = idx - a * SA, b = (rem / SB) | 0, c = rem - b * SB;
+      var am = (a === 0) ? Nm1 : a - 1, ap = (a === Nm1) ? 0 : a + 1;
+      var bm = (b === 0) ? Nm1 : b - 1, bp = (b === Nm1) ? 0 : b + 1;
+      var cm = (c === 0) ? Nm1 : c - 1, cp = (c === Nm1) ? 0 : c + 1;
+      var aRow = a * SA, bRow = b * SB, amRow = am * SA, apRow = ap * SA, bmRow = bm * SB, bpRow = bp * SB;
+      var n0 = amRow + bRow + c, n1 = apRow + bRow + c, n2 = aRow + bmRow + c,
+          n3 = aRow + bpRow + c, n4 = aRow + bRow + cm, n5 = aRow + bRow + cp;
+      if (solid[n0] && !label[n0]) { label[n0] = comp; stack[top++] = n0; }
+      if (solid[n1] && !label[n1]) { label[n1] = comp; stack[top++] = n1; }
+      if (solid[n2] && !label[n2]) { label[n2] = comp; stack[top++] = n2; }
+      if (solid[n3] && !label[n3]) { label[n3] = comp; stack[top++] = n3; }
+      if (solid[n4] && !label[n4]) { label[n4] = comp; stack[top++] = n4; }
+      if (solid[n5] && !label[n5]) { label[n5] = comp; stack[top++] = n5; }
+    }
+    sizes.push(compSize);
+  }
+
+  if (comp <= 1) return solid;        /* empty or already fully connected */
+
+  var best = 1, bestSize = sizes[1];
+  for (var ci = 2; ci <= comp; ci++) { if (sizes[ci] > bestSize) { bestSize = sizes[ci]; best = ci; } }
+
+  var out = solid.slice();            /* preserves Float32Array dtype */
+  var removed = 0;
+  for (var i = 0; i < N3; i++) { if (out[i] && label[i] !== best) { out[i] = 0; removed++; } }
+  if (removed > 0) {
+    console.log('[prune] kept largest of ' + comp + ' periodic components (' + bestSize +
+                ' voxels); removed ' + removed + ' voxel(s) across ' + (comp - 1) + ' island(s)');
+  }
+  return out;
+}

@@ -1073,6 +1073,11 @@ function homogenizeBucklingCPU(recipe, N, opts) {
   var params = KERNELS[family].parseRecipe(recipe);
   var args = resolveBuildArgs(recipe);
   var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+  /* Connectivity gate (default-on) — prune floating islands before the
+     q=0 cell-periodic buckling solve to avoid spurious low-σ_cr modes. */
+  if (opts && opts.pruneLargest && typeof pruneToLargestComponent === 'function') {
+    solid = pruneToLargestComponent(solid, N);
+  }
   var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
   var C_s = isoC(mat.Es_MPa, mat.nu);
   var C_v = isoC(mat.Es_MPa * 1e-4, mat.nu);

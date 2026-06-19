@@ -51,6 +51,7 @@ var BUCKLE_CPU_DEFAULTS = {
 var BUCKLE_WORKER_FILES = [
   '18-stokes-cpu-ref.js',
   '14-rasterizer.js',
+  '14a-connectivity.js',
   '13-kernels.js',
   '16c-buckling-cpu-ref.js'
 ];

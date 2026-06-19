@@ -1452,6 +1452,11 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var t0 = performance.now();
   var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt,
                           args.nWeights, args.pipeR, args.phaseShift);
+  /* Connectivity gate — keep only the largest periodic solid component so
+     floating islands don't seed spurious modes (default-on from the run). */
+  if (opts.pruneLargest && typeof pruneToLargestComponent === 'function') {
+    solid = pruneToLargestComponent(solid, N);
+  }
   var tRast = performance.now() - t0;
 
   var inside = 0;
