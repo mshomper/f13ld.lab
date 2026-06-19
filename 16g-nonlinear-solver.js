@@ -943,6 +943,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     if (verbose) console.log('[crush] step ' + (step + 1) + '/' + nSteps + '  eps=' + eAxis.toFixed(5) + '  sig=' + res.sigma_bar[axis].toFixed(1) +
                              ' MPa  macro=' + (mit + 1) + '  newt=' + res.newtonIters + '  cg=' + res.totalCgIters + '  relRes=' + res.relRes.toExponential(2));
     step++;
+    if (opts.onStep) opts.onStep(step, eAxis, res.sigma_bar[axis]);
     /* adaptive early-stop: once the 0.2%-offset knee appears, take 3 more steps
        to draw cleanly past it, then stop — no need to grind to the cap. */
     if (kneeStep < 0 && nlOffsetYieldEx(curve, E0, 0.002).yielded) kneeStep = step;

@@ -316,7 +316,7 @@ function buildMergedCurvePlot(){
     var letter = ld.label.split('\u00b7').pop().trim();
     var yieldTxt = (lnl.yielded && isFinite(lnl.sigma_y_eff))
       ? ('\u03c3_y = ' + lnl.sigma_y_eff.toFixed(1) + ' MPa' + (lnl.truncated ? ' (partial)' : ''))
-      : ('no yield \u2264 ' + Math.round((lnl.epsCap || 0.05) * 100) + '%');
+      : ('no yield \u2264 ' + Math.round((lnl.epsCap || 0.05) * 100) + '%' + (isFinite(lnl.sigmaCap) ? (' (\u03c3_y > ' + lnl.sigmaCap.toFixed(0) + ' MPa)') : ''));
     var buckTxt = (lpcr != null && ((!lnl.yielded) || (isFinite(lnl.sigma_y_eff) && lpcr < lnl.sigma_y_eff)))
       ? ' \u00b7 buckling-limited (\u03c3_cr ' + lpcr.toFixed(1) + ')'
       : '';

@@ -42,14 +42,14 @@ function statsForDesign(d, mode){
     var nld = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
     var bkPcrPy = (bkd && !bkd.error && isFinite(bkd.pcr_py)) ? bkd.pcr_py : null;
     var pcrLbl = (bkd && bkd.provisional) ? 'P_cr/P_y*' : 'P_cr / P_y';
-    var pcrVal = (bkPcrPy != null) ? bkPcrPy.toFixed(2) : fmtComputed(r.pcr_py, '', 2);
+    var pcrVal = (bkPcrPy != null) ? ((bkd && bkd.yieldBound) ? ('< '+bkPcrPy.toFixed(2)) : bkPcrPy.toFixed(2)) : fmtComputed(r.pcr_py, '', 2);
     var pcrDelta = (bkPcrPy != null)
       ? [(bkPcrPy < 1 ? 'buckling-limited' : 'yield-limited'), (bkPcrPy < 1 ? 'down' : 'neut')]
       : [failureModeText(r), pcrPyDeltaClass(r)];
     return [
       { lbl:'E11',     val:r.E11.toFixed(2)+' GPa',  delta:deltaVsBaseline(r.E11, 'E11', d.id) },
       { lbl:'Zener A', val:r.zener.toFixed(2),       delta:[zenerDescriptor(r.zener), 'neut'] },
-      { lbl:'σ_y (z)', val:(nld && nld.yielded && isFinite(nld.sigma_y_eff)) ? nld.sigma_y_eff.toFixed(1)+' MPa' : ((nld && !nld.error) ? 'no yield' : fmtComputed(r.sigma_y_z, ' MPa', 1)), delta:[(nld && nld.yielded) ? ((nld.axis||'zz').toUpperCase()+(nld.truncated?' · partial':' · crush')) : ((nld && !nld.error) ? ('≤ '+Math.round((nld.epsCap||0.05)*100)+'% ε') : failureModeText(r)), 'neut'] },
+      { lbl:'σ_y (z)', val:(nld && nld.yielded && isFinite(nld.sigma_y_eff)) ? nld.sigma_y_eff.toFixed(1)+' MPa' : ((nld && !nld.error) ? (isFinite(nld.sigmaCap) ? ('> '+nld.sigmaCap.toFixed(0)+' MPa') : 'no yield') : fmtComputed(r.sigma_y_z, ' MPa', 1)), delta:[(nld && nld.yielded) ? ((nld.axis||'zz').toUpperCase()+(nld.truncated?' · partial':' · crush')) : ((nld && !nld.error) ? ('no yield · ≤ '+Math.round((nld.epsCap||0.05)*100)+'% ε') : failureModeText(r)), 'neut'] },
       { lbl:pcrLbl,    val:pcrVal,                   delta:pcrDelta }
     ];
   }
@@ -73,7 +73,7 @@ function statsForDesign(d, mode){
       return [
         { lbl:'λ_cr',  val:bk.lambda_cr.toExponential(2),                      delta:['crit '+(bk.critAxis||'—'), 'neut'] },
         { lbl:'p_cr',  val:(isFinite(bk.pcr) ? bk.pcr.toFixed(1) : '—')+' MPa', delta:['N='+(bk.N||'—'), 'neut'] },
-        { lbl:provLbl, val:(isFinite(bk.pcr_py) ? bk.pcr_py.toFixed(2) : '—'),  delta:[safeTxt, limited ? 'down' : 'neut'] },
+        { lbl:provLbl, val:(isFinite(bk.pcr_py) ? ((bk.yieldBound?'< ':'')+bk.pcr_py.toFixed(2)) : '—'),  delta:[safeTxt, limited ? 'down' : 'neut'] },
         { lbl:'E11',   val:e11,                                                delta:deltaVsBaseline(r.E11, 'E11', d.id) }
       ];
     }

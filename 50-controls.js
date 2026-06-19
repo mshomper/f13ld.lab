@@ -377,11 +377,21 @@ async function runRealSweep(N){
                      ' · ' + NONLIN_STATE.axis.toUpperCase() + ' · crushing…');
       renderDesignGrid();
 
+      var baseUnits = doneUnits;
+      var nlEstSteps = Math.max(8, Math.round(NONLIN_STATE.cap / 0.003125));
+      var onNlStep = function(stepIdx, eps, sig){
+        if (RUN_STATE.cancelled) return;
+        doneUnits = baseUnits + 4 * Math.min(stepIdx / nlEstSteps, 0.95);
+        bumpProgress();
+        paintRunStatus('<span class="v">Nonlinear</span> · Design ' + letterFor(ni) + ' · N=' + nlN +
+                       ' · ' + NONLIN_STATE.axis.toUpperCase() + ' · step ' + stepIdx +
+                       ' · ε=' + (eps * 100).toFixed(2) + '% · σ=' + sig.toFixed(1) + ' MPa');
+      };
       var nlSolver = null, nlErr = null, nlOut = null;
       try {
         nlSolver = new NonlinearSolverFull(nlN, nlfft);
         nlSolver.upload(rcpN);
-        nlOut = await nlSolver.crush(nlAxis, { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap });
+        nlOut = await nlSolver.crush(nlAxis, { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: onNlStep });
       } catch (e){ nlErr = e; console.error('[run] nonlinear solve failed for ' + dn.id + ':', e); }
       if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
       if (RUN_STATE.cancelled) return;
@@ -392,10 +402,11 @@ async function runRealSweep(N){
         NONLIN_BY_DESIGN[dn.id] = {
           sigma_y_eff: nlOut.sigma_y_eff, yielded: !!nlOut.yielded, E0: nlOut.E0, curve: nlOut.curve,
           axis: NONLIN_STATE.axis, N: nlN, truncated: !!nlOut.truncated,
-          epsCap: (nlOut.epsCap != null ? nlOut.epsCap : NONLIN_STATE.cap)
+          epsCap: (nlOut.epsCap != null ? nlOut.epsCap : NONLIN_STATE.cap),
+          sigmaCap: (nlOut.curve && nlOut.curve.length ? nlOut.curve[nlOut.curve.length - 1].sigma : null)
         };
       }
-      doneUnits += 4; bumpProgress();
+      doneUnits = baseUnits + 4; bumpProgress();
     }
     renderDesignGrid();
   }
@@ -420,11 +431,13 @@ async function runRealSweep(N){
           }).then(function(res){
             var nl = NONLIN_BY_DESIGN[design.id];
             var haveY = !!(nl && nl.yielded && isFinite(nl.sigma_y_eff));
-            var sigY = haveY ? nl.sigma_y_eff : SIGMA_Y_TI64_MPA;
+            var boundBasis = (nl && isFinite(nl.sigmaCap)) ? nl.sigmaCap : null;  /* cap stress = lower bound on true yield */
+            var sigY = haveY ? nl.sigma_y_eff : (boundBasis != null ? boundBasis : SIGMA_Y_TI64_MPA);
             res.pcr_py = isFinite(res.pcr) ? res.pcr / sigY : Infinity;
             res.failure_mode = (res.pcr_py >= 1) ? 'Yield-limited' : 'Buckling-limited';
             res.sigma_y_ref = sigY;
             res.provisional = !haveY;
+            res.yieldBound = (!haveY && boundBasis != null);  /* pcr_py is an UPPER bound: true sigma_y >= cap stress */
             res.N = bN;
             BUCKLE_BY_DESIGN[design.id] = res;
           }).catch(function(e){
