@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.5.0 · alpha · Phase 5 complete · Linear buckling + animated mode-shape viz live
+**Status:** v0.6.0 · alpha · Phase 6 in progress · Nonlinear J2 plasticity + adaptive crush + σ–ε comparison live
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -37,6 +37,36 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 † Full-Voigt runs ≈2× the Phase 3 normal-only figures (6 load cases vs 3); N=64 timing is predicted, not yet measured — validated at N=16 and N=32. 10-minute ceiling for default tier. F13LD = FAST.
 
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above (it does not use the N=64 path). Measured on an 8-core desktop, Schwarz P: **N=8 three-axis ≈ 18 s per design** (vs ~62 s serial); N=16 is opt-in. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
+
+**Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a calibrated estimate are in progress, so the headline estimate currently under-reports it. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.6.0
+
+Phase 6 adds **nonlinear crush** (J2 plasticity + geometric NL) behind the σ–ε view tab, and uses its real per-design yield to retire the provisional buckling seam. A from-scratch crush solver — a CPU oracle cross-validated against a GPU solver — produces the effective uniaxial stress–strain response and the 0.2%-offset effective yield σ_y_eff.
+
+### Nonlinear J2 solver
+
+- **A CPU reference oracle** (`16f-nonlinear-cpu-ref.js`) and a **GPU solver** (`16g-nonlinear-solver.js`) that composes the full-Voigt elastic solver, reusing its FFT, Green's operator, and CG path. Validated on the Schwarz P demo: oracle σ_y_eff = 214.3 MPa, E0 = 31.28 GPa at N=8; GPU-vs-oracle cross-check E0 rel 6e-7, σ_y rel 1.06e-3.
+- **Adaptive crush.** Steps to a detected 0.2%-offset knee (plus a few steps past it) or to a user strain cap — capturing yield where it exists and stopping early when it doesn't.
+- **Honest no-yield reporting.** Compliant low-density designs that stay elastic to the cap report `no yield (> σ_cap)` rather than a fabricated yield.
+
+### σ–ε comparison tab + buckling context
+
+- **Real per-design σ–ε curves** with auto-scaled axes and a 0.2%-offset yield marker (drawn only when a real knee exists).
+- **σ_cr cross-reference line.** The buckling critical stress is overlaid on the σ–ε axes; when it sits below yield, the plot flags the design *buckling-limited — collapses at σ_cr before yield*. Material yield and elastic stability now read on one set of axes.
+
+### Real yield retires the provisional seam
+
+- `P_cr/P_y` now divides the real critical stress by the design's own σ_y_eff — the `*` drops when a design yields. For designs that don't yield in range, it shows an honest upper bound `< σ_cr/σ_cap` instead of dividing by solid-Ti yield.
+
+### Crush controls
+
+- **Nonlin grid pill** (default **16³** — the floor for sheet-TPMS; 8³ is too coarse for thin shell walls and reads ~2× too stiff).
+- **Crush-ε cap pill** (2 / 5 / 10%, default 5%) — bounds the adaptive crush.
+- **Crush-axis dropdown** (ZZ default — physiological compression).
+- **Live per-step progress** during the long crush phase.
+
+Full detail in [`docs/PHASE_6.md`](./docs/PHASE_6.md) and [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
 ## What's new in v0.5.0
 
@@ -82,7 +112,7 @@ Phase 4 takes the solver from Phase 3's normal-only 3×3 to the full Voigt 6×6 
 - **Phase 3** · SDF rasterizer, linear elastic FFT-CG, field extraction, viz stack ✓
 - **Phase 4** · Full Voigt 6×6 with shear cases, stiffness directional surface viz, connectivity gating, six-axis toggle ✓
 - **Phase 5** · Linear buckling — CPU oracle + worker pool, animated mode-shape viz, local/global localization ✓ *(GPU LOBPCG solver deferred as a follow-on)*
-- **Phase 6** ← *next* · Nonlinear (Newton + J2 plasticity) — also supplies the per-design yield for P_cr/P_y
+- **Phase 6** ← *in progress* · Nonlinear (Newton + J2 plasticity) — solver + σ–ε comparison live and supplying the per-design yield for P_cr/P_y; field-viz tab queued
 - **Phase 7** · ~~Deformed-geometry domain warp, stress field overlay~~ — landed early in Phase 3
 - **Phase 8** · Thermal κ tensor, remaining view modes
 - **Phase 9** · Multi-page PDF export
