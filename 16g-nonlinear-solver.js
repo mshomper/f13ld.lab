@@ -866,6 +866,10 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
 
   var capEps = epsTarget;                 /* user strain cap; adaptive crush stops here */
   var curve = [], dStep = capEps / nSteps, eAxis = 0, step = 0;
+  /* Phase-6 tie-up #5 — per-accepted-step plastic-strain (alpha) capture for the
+     Nonlinear-tab progression scrubber.  Read straight from the committed history
+     (epp_n) right after each step commits, before the next step's snapshot. */
+  var alphaSteps = [], alphaMax = 0;
   var maxSteps = nSteps * 3;              /* guard: cutbacks halve dStep, so allow extra steps */
   var kneeStep = -1;                      /* step at which the 0.2%-offset knee first appears */
   var eb = [0, 0, 0, 0, 0, 0];
@@ -932,7 +936,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       var ySalv = nlOffsetYieldEx(curve, E0, 0.002);
       if (ySalv.yielded && curve.length >= 2) {
         console.warn('[crush] salvaged sigma_y_eff=' + ySalv.sigma.toFixed(1) + ' MPa from ' + curve.length + ' steps (truncated at eps=' + eAxis.toFixed(4) + ')');
-        return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: ySalv.sigma, yielded: true, E0: E0, N: this.N, truncated: true, atStep: step + 1, eAxisMax: eAxis, epsCap: capEps };
+        return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: ySalv.sigma, yielded: true, E0: E0, N: this.N, truncated: true, atStep: step + 1, eAxisMax: eAxis, epsCap: capEps, alphaSteps: alphaSteps, alphaMax: alphaMax };
       }
       return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis, atStep: step + 1, eAxis: eAxis, lastRelRes: res ? res.relRes : null };
     }
@@ -944,13 +948,18 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
                              ' MPa  macro=' + (mit + 1) + '  newt=' + res.newtonIters + '  cg=' + res.totalCgIters + '  relRes=' + res.relRes.toExponential(2));
     step++;
     if (opts.onStep) opts.onStep(step, eAxis, res.sigma_bar[axis]);
+    if (opts.captureAlpha){
+      var aF = await this.readAlphaField();         /* Float32Array(N^3), i*N^2+j*N+k order */
+      for (var ai = 0; ai < aF.length; ai++){ if (aF[ai] > alphaMax) alphaMax = aF[ai]; }
+      alphaSteps.push({ eps: eAxis, alpha: aF });
+    }
     /* adaptive early-stop: once the 0.2%-offset knee appears, take 3 more steps
        to draw cleanly past it, then stop — no need to grind to the cap. */
     if (kneeStep < 0 && nlOffsetYieldEx(curve, E0, 0.002).yielded) kneeStep = step;
     if (kneeStep >= 0 && step >= kneeStep + 3) break;
   }
   var yEx = nlOffsetYieldEx(curve, E0, 0.002);
-  return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: yEx.sigma, yielded: yEx.yielded, E0: E0, N: this.N, epsCap: capEps, eAxisMax: eAxis };
+  return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: yEx.sigma, yielded: yEx.yielded, E0: E0, N: this.N, epsCap: capEps, eAxisMax: eAxis, alphaSteps: alphaSteps, alphaMax: alphaMax };
 };
 
 

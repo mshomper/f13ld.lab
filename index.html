@@ -65,7 +65,7 @@
       <button class="view-tab"        data-mode="stiff"   onclick="onViewModeClick('stiff')">Stiffness ⊕</button>
       <button class="view-tab"        data-mode="thermal" onclick="onViewModeClick('thermal')">Thermal κ</button>
       <button class="view-tab"        data-mode="buckle"  onclick="onViewModeClick('buckle')">Buckling modes</button>
-      <button class="view-tab"        data-mode="curve"   onclick="onViewModeClick('curve')">σ–ε curve</button>
+      <button class="view-tab"        data-mode="curve"   onclick="onViewModeClick('curve')">Nonlinear</button>
     </div>
     <!-- A.3.3 — Stress-normalization toggle (per-design auto vs shared linear).
          Hidden in non-stress modes; toggled via onViewModeClick. -->
@@ -80,6 +80,17 @@
     </div>
     <div class="right">
       <span class="pill" id="loadedPill">3 of 3 designs loaded</span>
+      <!-- Phase-6 tie-up #2 — branded "still working" spinner (shown only while a run is live) -->
+      <span class="solver-spinner" id="solverSpinner" aria-hidden="true" title="Solving…">
+        <svg width="16" height="16" viewBox="0 0 40 40">
+          <path class="ss-hex" d="M20 3 L34 11 L34 29 L20 37 L6 29 L6 11 Z" fill="none" stroke="#2c4e30" stroke-width="2"/>
+          <g class="ss-arcs">
+            <path d="M20 5 A15 15 0 0 1 34 18" fill="none" stroke="#c8f542" stroke-width="3" stroke-linecap="round"/>
+            <path d="M20 35 A15 15 0 0 1 6 22" fill="none" stroke="#1D9E75" stroke-width="3" stroke-linecap="round"/>
+          </g>
+          <circle class="ss-core" cx="20" cy="20" r="3.2" fill="#c8f542"/>
+        </svg>
+      </span>
       <span class="pill" id="solverPill">solver idle</span>
     </div>
   </div>
@@ -88,6 +99,10 @@
   <div class="compare" id="compareGrid"></div>
   <div class="compare merged" id="mergedView" style="display:none">
     <div class="merged-plot" id="mergedPlot"></div>
+    <!-- Phase-6 tie-up #1 — up to 3 animated cubes show the looped crush deformation
+         colored by plastic strain (alpha), built by renderNonlinearViz() -->
+    <div class="merged-cubes" id="mergedCubes"></div>
+    <div class="merged-scrubber" id="mergedScrubber"></div>
   </div>
 
   <!-- ============ CONTROLS PANEL ============ -->

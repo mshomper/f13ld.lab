@@ -184,16 +184,24 @@ function renderDesignGrid(){
   var mPlot   = document.getElementById('mergedPlot');
   if (!grid || !merged || !mPlot) return;
 
-  // σ–ε mode — collapse to merged plot
+  // Nonlinear mode (internal id 'curve') — collapse to merged σ–ε plot plus
+  // the α-progression cubes + scrubber.  Clearing grid.innerHTML here is
+  // REQUIRED: the cubes reuse the same per-design raymarcher instances, so a
+  // stale hidden grid tile carrying the same data-design-id would make
+  // mountRaymarcherTiles() fight over where each shared canvas lands.  The
+  // non-curve path below always rebuilds grid.innerHTML, so this is safe.
   if (VIEW_STATE.mode === 'curve'){
     grid.style.display   = 'none';
+    grid.innerHTML       = '';
     merged.style.display = 'grid';
     mPlot.innerHTML = buildMergedCurvePlot();
+    if (typeof renderNonlinearViz === 'function') renderNonlinearViz();   /* tie-up #1 */
     return;
   }
 
   grid.style.display   = 'grid';
   merged.style.display = 'none';
+  if (typeof nlvizStop === 'function') nlvizStop();   /* tie-up #1 — halt α animation on leaving the Nonlinear tab */
 
   // Empty state
   if (LAB_STATE.designs.length === 0){
@@ -1106,4 +1114,253 @@ function buildStressColorbar(capMPa, gamma, mode){
          '<div class="stress-colorbar-label-top">'+capStr +
            '<span class="stress-colorbar-suffix">'+suffixText+'</span></div>' +
          '<div class="stress-colorbar-label-bot">0</div>';
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   Phase-6 tie-up #1 — NONLINEAR-TAB VISUALIZER (NLVIZ)
+   The relabeled "Nonlinear" tab pairs the merged σ–ε plot (left) with up to
+   three small raymarcher cubes (right) that loop the crush deformation colored
+   by plastic strain (α).  One shared scrubber drives all cubes in lockstep:
+   it auto-loops on entry, then hands control to the user on first slider touch.
+
+   α (captured per accepted crush step at the solver's N, default 16³) RIDES ON
+   the crush — i.e. it is uploaded as the raymarcher's scalar field while the
+   deformation warp uses the elastic u'(x) (at the elastic run-N), and α is
+   trilinearly upsampled to that elastic N so color and geometry co-register.
+   ════════════════════════════════════════════════════════════════════════ */
+
+var NLVIZ = {
+  playing:   true,     /* auto-loop until the user grabs the slider */
+  manual:    false,    /* latched true after first slider interaction */
+  frac:      0,        /* 0..1 position along the shared crush timeline */
+  raf:       null,
+  t0:        0,
+  periodMs:  3000,     /* one full crush loop */
+  maxAmp:    0.32,     /* deform-slider units at full crush (≈6.4% cell) */
+  entries:   [],       /* [{ id, design, nl, elastic, axisKey, n }] */
+  lastInt:   {}        /* id -> last integer step uploaded (skip redundant texture swaps) */
+};
+
+/* Trilinear upsample of a scalar field Ns³ -> Nd³ (i*N²+j*N+k order, periodic
+   wrap to match the cell's periodicity).  Run once per integer step change. */
+function upsampleScalarTrilinear(src, Ns, Nd){
+  if (!src) return src;
+  if (Ns === Nd) return src;
+  var out = new Float32Array(Nd * Nd * Nd);
+  var Ns2 = Ns * Ns, Nd2 = Nd * Nd, r = Ns / Nd;
+  for (var i = 0; i < Nd; i++){
+    var fx = i * r, x0 = Math.floor(fx) % Ns, x1 = (x0 + 1) % Ns, tx = fx - Math.floor(fx);
+    for (var j = 0; j < Nd; j++){
+      var fy = j * r, y0 = Math.floor(fy) % Ns, y1 = (y0 + 1) % Ns, ty = fy - Math.floor(fy);
+      for (var k = 0; k < Nd; k++){
+        var fz = k * r, z0 = Math.floor(fz) % Ns, z1 = (z0 + 1) % Ns, tz = fz - Math.floor(fz);
+        var c000 = src[x0*Ns2 + y0*Ns + z0], c001 = src[x0*Ns2 + y0*Ns + z1];
+        var c010 = src[x0*Ns2 + y1*Ns + z0], c011 = src[x0*Ns2 + y1*Ns + z1];
+        var c100 = src[x1*Ns2 + y0*Ns + z0], c101 = src[x1*Ns2 + y0*Ns + z1];
+        var c110 = src[x1*Ns2 + y1*Ns + z0], c111 = src[x1*Ns2 + y1*Ns + z1];
+        var c00 = c000 + (c001 - c000) * tz, c01 = c010 + (c011 - c010) * tz;
+        var c10 = c100 + (c101 - c100) * tz, c11 = c110 + (c111 - c110) * tz;
+        var c0 = c00 + (c01 - c00) * ty, c1 = c10 + (c11 - c10) * ty;
+        out[i*Nd2 + j*Nd + k] = c0 + (c1 - c0) * tx;
+      }
+    }
+  }
+  return out;
+}
+
+/* Gather up to 3 loaded designs that have a usable α progression. */
+function nlEntries(){
+  var out = [];
+  for (var i = 0; i < LAB_STATE.designs.length && out.length < 3; i++){
+    var d = LAB_STATE.designs[i];
+    var nl = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
+    if (!nl || nl.error || !nl.alphaSteps || !nl.alphaSteps.length) continue;
+    var axisKey = nl.axis || 'zz';
+    var elastic = (d.results && d.results._fieldsByAxis) ? d.results._fieldsByAxis[axisKey] : null;
+    out.push({ id: d.id, design: d, nl: nl, elastic: elastic, axisKey: axisKey, n: nl.alphaSteps.length });
+  }
+  return out;
+}
+
+function nlCubeLabel(d){
+  if (d.label && d.label.indexOf('\u00b7') >= 0) return d.label.split('\u00b7').pop().trim();
+  return d.label || d.name || d.id;
+}
+
+/* Build the cube column + scrubber, mount raymarchers, prime each one for the
+   α-on-crush view, and start the auto-loop. */
+function renderNonlinearViz(){
+  var cubes = document.getElementById('mergedCubes');
+  var scrub = document.getElementById('mergedScrubber');
+  var view  = document.getElementById('mergedView');
+  if (!cubes || !scrub || !view) return;
+
+  var entries = nlEntries();
+  NLVIZ.entries = entries;
+  NLVIZ.lastInt = {};
+
+  /* No α data → keep the merged plot full-width, hide cubes + scrubber. */
+  if (!entries.length){
+    nlvizStop();
+    view.classList.remove('has-cubes');
+    cubes.style.display = 'none';
+    scrub.style.display = 'none';
+    cubes.innerHTML = '';
+    scrub.innerHTML = '';
+    return;
+  }
+
+  view.classList.add('has-cubes');
+  cubes.style.display = '';
+  scrub.style.display = '';
+
+  /* Cube tiles (each reuses the design's shared raymarcher via .rm-mount). */
+  var ch = '';
+  for (var i = 0; i < entries.length; i++){
+    var e = entries[i], lab = nlCubeLabel(e.design);
+    ch += '<div class="nl-cube">' +
+            '<div class="nl-cube-head"><span class="dot" style="background:' + e.design.color + '"></span>' +
+              '<span class="nm">' + lab + '</span></div>' +
+            '<div class="rm-mount" data-design-id="' + e.id + '"></div>' +
+            '<div class="nl-cube-readout" id="nlcr-' + e.id + '">\u03b5 0.00%</div>' +
+          '</div>';
+  }
+  cubes.innerHTML = ch;
+
+  /* Shared scrubber. */
+  scrub.innerHTML =
+    '<button class="nl-play" id="nlPlayBtn" title="Play / pause">\u275a\u275a</button>' +
+    '<div class="nl-track-wrap">' +
+      '<div class="nl-ticks" id="nlTicks"></div>' +
+      '<input type="range" id="nlScrub" min="0" max="1000" value="0" step="1">' +
+    '</div>' +
+    '<span class="nl-readout" id="nlReadout">crush \u03b5 0.00%</span>';
+
+  /* ε_cr onset ticks (per design, colored): mark where the buckling cross-over
+     σ_cr would be reached in strain (ε_cr = σ_cr / E0), as a fraction of that
+     design's displayed crush range.  A tick that sits before the yield knee is
+     the "buckling-limited" warning the merged plot also annotates. */
+  var ticks = document.getElementById('nlTicks'), th = '';
+  for (var t = 0; t < entries.length; t++){
+    var et = entries[t];
+    var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[et.id] : null;
+    var pcr = (bk && !bk.error && isFinite(bk.pcr)) ? bk.pcr : null;
+    var E0 = et.nl.E0;
+    var epsMax = et.nl.alphaSteps[et.n - 1].eps;
+    if (pcr != null && isFinite(E0) && E0 > 0 && epsMax > 0){
+      var ecr = pcr / E0;
+      var frac = Math.max(0, Math.min(1, ecr / epsMax));
+      th += '<span class="nl-tick" title="\u03b5_cr (buckling onset)" style="left:' + (frac * 100).toFixed(2) + '%;background:' + et.design.color + '"></span>';
+    }
+  }
+  if (ticks) ticks.innerHTML = th;
+
+  /* Ensure each design has a raymarcher, then mount canvases into the cubes. */
+  for (var m = 0; m < entries.length; m++){
+    var em = entries[m];
+    var rcp = (typeof recipeForDesign === 'function') ? recipeForDesign(em.design) : null;
+    if (rcp && typeof getOrCreateRaymarcher === 'function') getOrCreateRaymarcher(em.id, rcp);
+  }
+  if (typeof mountRaymarcherTiles === 'function') mountRaymarcherTiles();
+
+  /* Prime each raymarcher: upload elastic u'(x) once + α step-0 as the scalar,
+     turbo colormap, stress (warp+color) mode, no auto-pulse (the scrubber drives
+     the deformation), unit gamma. */
+  for (var q = 0; q < entries.length; q++){
+    var eq = entries[q];
+    var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[eq.id] : null;
+    if (!rm) continue;
+    var Nd = (eq.elastic && eq.elastic.N) ? eq.elastic.N : eq.nl.N;
+    var uPrime = (eq.elastic && eq.elastic.u_prime) ? eq.elastic.u_prime : null;
+    var a0 = upsampleScalarTrilinear(eq.nl.alphaSteps[0].alpha, eq.nl.N, Nd);
+    var cap = (eq.nl.alphaMax && eq.nl.alphaMax > 0) ? eq.nl.alphaMax : 0;
+    if (rm.uploadFields) rm.uploadFields({ u_prime: uPrime, sigma_vm: a0, N: Nd,
+                                           eps_bar: (eq.elastic && eq.elastic.eps_bar) ? eq.elastic.eps_bar : null }, cap);
+    if (rm.setBuckleMap)   rm.setBuckleMap(true);     /* turbo ramp for α */
+    if (rm.setPulse)       rm.setPulse(false);
+    if (rm.setStressGamma) rm.setStressGamma(1.0);
+    if (rm.setViewMode)    rm.setViewMode('stress');
+    if (rm.setDeformAmp)   rm.setDeformAmp(0);
+    if (rm.setActive)      rm.setActive(true);   /* render now; IO will manage it thereafter */
+    eq._Nd = Nd;
+    NLVIZ.lastInt[eq.id] = -1;
+  }
+
+  /* Wire scrubber interactions. */
+  var slider = document.getElementById('nlScrub');
+  var playBtn = document.getElementById('nlPlayBtn');
+  if (slider){
+    slider.addEventListener('input', function(){
+      NLVIZ.manual = true;
+      NLVIZ.playing = false;
+      if (playBtn) playBtn.innerHTML = '\u25b6';
+      NLVIZ.frac = (+this.value) / 1000;
+      nlvizApply(NLVIZ.frac);
+    });
+  }
+  if (playBtn){
+    playBtn.addEventListener('click', function(){
+      NLVIZ.playing = !NLVIZ.playing;
+      this.innerHTML = NLVIZ.playing ? '\u275a\u275a' : '\u25b6';
+      if (NLVIZ.playing){
+        NLVIZ.manual = false;
+        NLVIZ.t0 = performance.now() - NLVIZ.frac * NLVIZ.periodMs;
+        if (!NLVIZ.raf) NLVIZ.raf = requestAnimationFrame(nlvizTick);
+      }
+    });
+  }
+
+  /* Start the auto-loop. */
+  NLVIZ.manual = false;
+  NLVIZ.playing = true;
+  NLVIZ.frac = 0;
+  NLVIZ.t0 = performance.now();
+  nlvizApply(0);
+  if (NLVIZ.raf) cancelAnimationFrame(NLVIZ.raf);
+  NLVIZ.raf = requestAnimationFrame(nlvizTick);
+}
+
+/* Apply a timeline fraction to every cube: pick each design's step, swap the α
+   texture only when the integer step changes, scale the deformation with the
+   step, and update the readouts. */
+function nlvizApply(frac){
+  var entries = NLVIZ.entries || [];
+  var leadEps = 0;
+  for (var i = 0; i < entries.length; i++){
+    var e = entries[i], n = e.n;
+    if (n < 1) continue;
+    var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[e.id] : null;
+    if (!rm) continue;
+    var si = Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1))));
+    if (si !== NLVIZ.lastInt[e.id]){
+      var Nd = e._Nd || ((e.elastic && e.elastic.N) ? e.elastic.N : e.nl.N);
+      var aUp = upsampleScalarTrilinear(e.nl.alphaSteps[si].alpha, e.nl.N, Nd);
+      var cap = (e.nl.alphaMax && e.nl.alphaMax > 0) ? e.nl.alphaMax : 0;
+      if (rm.updateScalarField) rm.updateScalarField(aUp, Nd, cap);
+      NLVIZ.lastInt[e.id] = si;
+    }
+    if (rm.setDeformAmp) rm.setDeformAmp(NLVIZ.maxAmp * (n > 1 ? si / (n - 1) : 0));
+    var epsPct = e.nl.alphaSteps[si].eps * 100;
+    if (epsPct > leadEps) leadEps = epsPct;
+    var cr = document.getElementById('nlcr-' + e.id);
+    if (cr) cr.textContent = '\u03b5 ' + epsPct.toFixed(2) + '%';
+  }
+  var slider = document.getElementById('nlScrub');
+  if (slider && !NLVIZ.manual) slider.value = Math.round(frac * 1000);
+  var ro = document.getElementById('nlReadout');
+  if (ro) ro.textContent = 'crush \u03b5 ' + leadEps.toFixed(2) + '%';
+}
+
+function nlvizTick(ts){
+  if (!NLVIZ.playing){ NLVIZ.raf = null; return; }
+  var frac = ((ts - NLVIZ.t0) % NLVIZ.periodMs) / NLVIZ.periodMs;
+  NLVIZ.frac = frac;
+  nlvizApply(frac);
+  NLVIZ.raf = requestAnimationFrame(nlvizTick);
+}
+
+function nlvizStop(){
+  NLVIZ.playing = false;
+  if (NLVIZ.raf){ cancelAnimationFrame(NLVIZ.raf); NLVIZ.raf = null; }
 }

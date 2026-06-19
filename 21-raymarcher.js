@@ -1012,6 +1012,42 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
   this._dirty = true;
 };
 
+/* Phase-6 tie-up #1 — scalar-field-only update (no u' re-encode).
+   The Nonlinear-tab α scrubber uploads u'(x) ONCE via uploadFields and then
+   swaps the plastic-strain (α) scalar per step through here.  Same R8 +
+   one-voxel dilation + LINEAR path as the σ_VM branch of uploadFields, so the
+   turbo colormap reads identically; only the scalar texture is re-encoded. */
+LabRaymarcher.prototype.updateScalarField = function(arr, N, capOverride) {
+  if (this.failed || !arr) return;
+  var gl = this.gl, N3 = N * N * N;
+  if (arr.length !== N3) { console.warn('[LabRaymarcher] updateScalarField: size mismatch'); return; }
+  this._u.texN = N;
+  var svArr = dilateSigmaVMByOneVoxel(arr, N);
+  var svMin = 0;
+  var svMax = (capOverride != null && capOverride > 0) ? capOverride : 0;
+  if (svMax === 0) { for (var k = 0; k < N3; k++) { if (svArr[k] > svMax) svMax = svArr[k]; } }
+  svMax = Math.max(svMax, 1e-12);
+  var svBytes = new Uint8Array(N3), sc255 = 255 / (svMax - svMin);
+  for (var k2 = 0; k2 < N3; k2++) {
+    svBytes[k2] = Math.round(Math.max(0, Math.min(255, (svArr[k2] - svMin) * sc255)));
+  }
+  if (!this._stressTex) this._stressTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, this._stressTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, N, N, 0, gl.RED, gl.UNSIGNED_BYTE, svBytes);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+  gl.bindTexture(gl.TEXTURE_3D, null);
+  this._stressUploaded = true;
+  this._u.stressUploaded = 1.0;
+  this._u.stressMin = svMin;
+  this._u.stressMax = svMax;
+  this._dirty = true;
+};
+
 /* setViewMode('geom'|'deform'|'stress') — selects shader behavior.
    Effective uViewMode is gated by uploaded data: deform requires
    _dispUploaded, stress requires _stressUploaded.  If the required
