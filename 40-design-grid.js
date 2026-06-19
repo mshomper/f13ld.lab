@@ -49,7 +49,7 @@ function statsForDesign(d, mode){
     return [
       { lbl:'E11',     val:r.E11.toFixed(2)+' GPa',  delta:deltaVsBaseline(r.E11, 'E11', d.id) },
       { lbl:'Zener A', val:r.zener.toFixed(2),       delta:[zenerDescriptor(r.zener), 'neut'] },
-      { lbl:'σ_y (z)', val:(nld && isFinite(nld.sigma_y_eff)) ? nld.sigma_y_eff.toFixed(1)+' MPa' : fmtComputed(r.sigma_y_z, ' MPa', 1), delta:[(nld && isFinite(nld.sigma_y_eff)) ? ((nld.axis||'zz').toUpperCase()+(nld.truncated?' · partial':' · crush')) : failureModeText(r), 'neut'] },
+      { lbl:'σ_y (z)', val:(nld && nld.yielded && isFinite(nld.sigma_y_eff)) ? nld.sigma_y_eff.toFixed(1)+' MPa' : ((nld && !nld.error) ? 'no yield' : fmtComputed(r.sigma_y_z, ' MPa', 1)), delta:[(nld && nld.yielded) ? ((nld.axis||'zz').toUpperCase()+(nld.truncated?' · partial':' · crush')) : ((nld && !nld.error) ? ('≤ '+Math.round((nld.epsCap||0.05)*100)+'% ε') : failureModeText(r)), 'neut'] },
       { lbl:pcrLbl,    val:pcrVal,                   delta:pcrDelta }
     ];
   }

@@ -32,7 +32,7 @@ var BUCKLE_BY_DESIGN = {};
 
 /* Nonlinear crush resolution + load axis (GPU J2 plasticity, 16g).
    N=8 fast / N=16 more accurate; axis xx/yy/zz -> crush() physical 0/1/2. */
-var NONLIN_STATE = { N: 8, axis: 'zz' };
+var NONLIN_STATE = { N: 16, axis: 'zz', cap: 0.05 };
 
 /* Transient per-design nonlinear results (id -> { sigma_y_eff, E0, curve,
    axis, N, truncated } | { error }).  Feeds the sigma-epsilon curve tab, the
@@ -124,6 +124,21 @@ function paintNonlinPill(){
 
 function onNonlinAxisChange(axis){
   if (axis === 'xx' || axis === 'yy' || axis === 'zz') NONLIN_STATE.axis = axis;
+}
+
+/* CRUSH-STRAIN CAP pill — cycles the adaptive crush ceiling 2% -> 5% -> 10%. */
+function onNonlinCapPillClick(){
+  var cyc = [0.02, 0.05, 0.10];
+  var idx = cyc.indexOf(NONLIN_STATE.cap);
+  NONLIN_STATE.cap = cyc[(idx + 1) % cyc.length];
+  paintNonlinCapPill();
+  recomputeEstimate();
+}
+
+function paintNonlinCapPill(){
+  var val = document.getElementById('nonlinCapPillVal');
+  if (!val) return;
+  val.textContent = Math.round(NONLIN_STATE.cap * 100) + '%';
 }
 
 /* ============================================================
@@ -366,7 +381,7 @@ async function runRealSweep(N){
       try {
         nlSolver = new NonlinearSolverFull(nlN, nlfft);
         nlSolver.upload(rcpN);
-        nlOut = await nlSolver.crush(nlAxis, { control: 'stress', nSteps: 16, epsTarget: 0.02 });
+        nlOut = await nlSolver.crush(nlAxis, { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap });
       } catch (e){ nlErr = e; console.error('[run] nonlinear solve failed for ' + dn.id + ':', e); }
       if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
       if (RUN_STATE.cancelled) return;
@@ -375,8 +390,9 @@ async function runRealSweep(N){
         NONLIN_BY_DESIGN[dn.id] = { error: (nlErr && nlErr.message) || (nlOut && nlOut.error) || 'failed', N: nlN };
       } else {
         NONLIN_BY_DESIGN[dn.id] = {
-          sigma_y_eff: nlOut.sigma_y_eff, E0: nlOut.E0, curve: nlOut.curve,
-          axis: NONLIN_STATE.axis, N: nlN, truncated: !!nlOut.truncated
+          sigma_y_eff: nlOut.sigma_y_eff, yielded: !!nlOut.yielded, E0: nlOut.E0, curve: nlOut.curve,
+          axis: NONLIN_STATE.axis, N: nlN, truncated: !!nlOut.truncated,
+          epsCap: (nlOut.epsCap != null ? nlOut.epsCap : NONLIN_STATE.cap)
         };
       }
       doneUnits += 4; bumpProgress();
@@ -403,11 +419,12 @@ async function runRealSweep(N){
                            ' · ' + p.axis + ' (' + p.done + '/' + p.total + ') · N=' + bN);
           }).then(function(res){
             var nl = NONLIN_BY_DESIGN[design.id];
-            var sigY = (nl && isFinite(nl.sigma_y_eff)) ? nl.sigma_y_eff : SIGMA_Y_TI64_MPA;
+            var haveY = !!(nl && nl.yielded && isFinite(nl.sigma_y_eff));
+            var sigY = haveY ? nl.sigma_y_eff : SIGMA_Y_TI64_MPA;
             res.pcr_py = isFinite(res.pcr) ? res.pcr / sigY : Infinity;
             res.failure_mode = (res.pcr_py >= 1) ? 'Yield-limited' : 'Buckling-limited';
             res.sigma_y_ref = sigY;
-            res.provisional = !(nl && isFinite(nl.sigma_y_eff));
+            res.provisional = !haveY;
             res.N = bN;
             BUCKLE_BY_DESIGN[design.id] = res;
           }).catch(function(e){

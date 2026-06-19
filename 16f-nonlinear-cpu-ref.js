@@ -530,8 +530,11 @@ function invertSmall(A, n) {
 
 /* 0.2% offset yield: intersect the curve with the line sigma = E0*(eps - off).
    Returns the stress at intersection, or the curve max if no crossing. */
-function nlOffsetYield(curve, E0, off) {
-  if (!curve.length || !E0) return null;
+/* 0.2%-offset yield. nlOffsetYieldEx returns { sigma, yielded } so callers can
+   tell a REAL knee (offset line crossed) from the no-crossing fallback (curve
+   stayed elastic to the end). nlOffsetYield keeps the old scalar contract. */
+function nlOffsetYieldEx(curve, E0, off) {
+  if (!curve.length || !E0) return { sigma: null, yielded: false };
   for (var i = 1; i < curve.length; i++) {
     var e1 = curve[i-1].eps, s1 = curve[i-1].sigma;
     var e2 = curve[i].eps,   s2 = curve[i].sigma;
@@ -540,10 +543,14 @@ function nlOffsetYield(curve, E0, off) {
     var g1 = s1 - l1, g2 = s2 - l2;
     if (g1 >= 0 && g2 < 0) {
       var t = g1 / (g1 - g2);
-      return s1 + t * (s2 - s1);
+      return { sigma: s1 + t * (s2 - s1), yielded: true };
     }
   }
-  return curve[curve.length-1].sigma;
+  return { sigma: curve[curve.length-1].sigma, yielded: false };
+}
+
+function nlOffsetYield(curve, E0, off) {
+  return nlOffsetYieldEx(curve, E0, off).sigma;
 }
 
 
