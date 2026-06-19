@@ -1363,4 +1363,19 @@ function nlvizTick(ts){
 function nlvizStop(){
   NLVIZ.playing = false;
   if (NLVIZ.raf){ cancelAnimationFrame(NLVIZ.raf); NLVIZ.raf = null; }
+  /* Tear down the cube + scrubber DOM.  CRITICAL: #mergedView sits AFTER
+     #compareGrid in document order, so any leftover cube .rm-mount (carrying
+     the same data-design-id as a live grid tile) would win the last-wins
+     appendChild inside mountRaymarcherTiles() and pull each design's single
+     shared canvas into the hidden merged view — blanking every non-Nonlinear
+     tab.  Clearing here (before the grid rebuild + remount) keeps the canvases
+     with the visible grid tiles. */
+  var cubes = document.getElementById('mergedCubes');
+  var scrub = document.getElementById('mergedScrubber');
+  var view  = document.getElementById('mergedView');
+  if (cubes) cubes.innerHTML = '';
+  if (scrub) scrub.innerHTML = '';
+  if (view)  view.classList.remove('has-cubes');
+  NLVIZ.entries = [];
+  NLVIZ.lastInt = {};
 }
