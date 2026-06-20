@@ -142,6 +142,25 @@ function loadDesigns(){
    to the next add, so duplicate letters/colors are impossible.  Honors
    existing valid, unique slot claims; (re)assigns only the rest.
    ---------------------------------------------------------- */
+/* ----------------------------------------------------------
+   Adaptive engineering-unit formatters (shared across tabs).
+   Pressure-like quantities (modulus, strength) carry an MPa base:
+   show GPa at/above 1 GPa, MPa below — so 0.05 GPa reads as 50 MPa
+   and 2.5 GPa stays GPa.  Force shows N below 1 kN, kN above.
+   ---------------------------------------------------------- */
+function fmtEngMPa(mpa){
+  if (mpa == null || !isFinite(mpa) || mpa === 0) return '\u2014';   /* 0 = sentinel/no-data */
+  if (mpa >= 1000) return (mpa / 1000).toFixed(2) + ' GPa';
+  if (mpa >= 100)  return mpa.toFixed(0) + ' MPa';
+  return mpa.toFixed(1) + ' MPa';
+}
+function fmtForceN(n){
+  if (n == null || !isFinite(n) || n === 0) return '\u2014';
+  if (n >= 1000) return (n / 1000).toFixed(2) + ' kN';
+  if (n >= 100)  return n.toFixed(0) + ' N';
+  return n.toFixed(1) + ' N';
+}
+
 var DESIGN_PALETTE = ['#22d3ee', '#fbbf24', '#fb7185'];
 function reconcileDesignSlots(){
   var ds = LAB_STATE.designs, used = [false, false, false], i;

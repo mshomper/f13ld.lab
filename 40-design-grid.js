@@ -30,6 +30,36 @@ function pcrPyDeltaClass(r){
   return r.pcr_py < 1 ? 'down' : 'neut';
 }
 
+/* ----------------------------------------------------------
+   Load Capacity — "how much can this cell carry."  Governing strength is the
+   smaller of effective yield (crush) and buckling, when both exist; load is
+   that stress over one unit-cell footprint:  F = sigma[MPa] x cell_mm^2  (= N,
+   since 1 MPa = 1 N/mm^2).  Per-cell basis — intrinsic to the design.
+   ---------------------------------------------------------- */
+function governingStrength(d){
+  var bkd = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
+  var nld = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
+  var sy  = (nld && nld.yielded && isFinite(nld.sigma_y_eff)) ? nld.sigma_y_eff : null;
+  var scr = (bkd && !bkd.error && isFinite(bkd.pcr)) ? bkd.pcr : null;
+  if (sy != null && scr != null) return (scr < sy) ? { stress: scr, mode: 'buckling-governed' } : { stress: sy, mode: 'yield-governed' };
+  if (sy  != null) return { stress: sy,  mode: 'yield' };
+  if (scr != null) return { stress: scr, mode: 'buckling' };
+  return null;
+}
+function loadCapacity(d){
+  var g = governingStrength(d);
+  if (!g) return null;
+  var cell = (d && isFinite(d.cell_mm) && d.cell_mm > 0) ? d.cell_mm : null;
+  if (cell == null) return null;
+  return { N: g.stress * cell * cell, mode: g.mode, stress: g.stress, cell_mm: cell };
+}
+function loadCapacityCell(d){
+  var lc = loadCapacity(d);
+  if (!lc) return { lbl:'Load Capacity', val:'\u2014', delta:['needs yield or buckling','neut'] };
+  var govCls = /buckl/.test(lc.mode) ? 'down' : 'neut';
+  return { lbl:'Load Capacity', val:fmtForceN(lc.N), delta:[lc.mode + ' \u00b7 ' + lc.cell_mm + ' mm cell', govCls] };
+}
+
 function statsForDesign(d, mode){
   var r = d.results;
   if (!r) return [];
@@ -41,48 +71,64 @@ function statsForDesign(d, mode){
     var bkd = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
     var nld = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
     var bkPcrPy = (bkd && !bkd.error && isFinite(bkd.pcr_py)) ? bkd.pcr_py : null;
-    var pcrLbl = (bkd && bkd.provisional) ? 'P_cr/P_y*' : 'P_cr / P_y';
+    var pcrLbl = (bkd && bkd.provisional) ? 'Buckling-to-Yield Ratio*' : 'Buckling-to-Yield Ratio';
     var pcrVal = (bkPcrPy != null) ? ((bkd && bkd.yieldBound) ? ('< '+bkPcrPy.toFixed(2)) : bkPcrPy.toFixed(2)) : fmtComputed(r.pcr_py, '', 2);
     var pcrDelta = (bkPcrPy != null)
       ? [(bkPcrPy < 1 ? 'buckling-limited' : 'yield-limited'), (bkPcrPy < 1 ? 'down' : 'neut')]
       : [failureModeText(r), pcrPyDeltaClass(r)];
+    var yVal, yDelta;
+    if (nld && nld.yielded && isFinite(nld.sigma_y_eff)) {
+      yVal = fmtEngMPa(nld.sigma_y_eff);
+      yDelta = [(nld.axis||'zz').toUpperCase() + (nld.truncated ? ' · partial' : ' · crush'), 'neut'];
+    } else if (nld && !nld.error) {
+      yVal = isFinite(nld.sigmaCap) ? ('> ' + fmtEngMPa(nld.sigmaCap)) : 'no yield';
+      yDelta = ['no yield · ≤ ' + Math.round((nld.epsCap||0.05)*100) + '% strain', 'neut'];
+    } else {
+      yVal = fmtComputed(r.sigma_y_z, ' MPa', 1);
+      yDelta = [failureModeText(r), 'neut'];
+    }
     return [
-      { lbl:'E11',     val:r.E11.toFixed(2)+' GPa',  delta:deltaVsBaseline(r.E11, 'E11', d.id) },
-      { lbl:'Zener A', val:r.zener.toFixed(2),       delta:[zenerDescriptor(r.zener), 'neut'] },
-      { lbl:'σ_y (z)', val:(nld && nld.yielded && isFinite(nld.sigma_y_eff)) ? nld.sigma_y_eff.toFixed(1)+' MPa' : ((nld && !nld.error) ? (isFinite(nld.sigmaCap) ? ('> '+nld.sigmaCap.toFixed(0)+' MPa') : 'no yield') : fmtComputed(r.sigma_y_z, ' MPa', 1)), delta:[(nld && nld.yielded) ? ((nld.axis||'zz').toUpperCase()+(nld.truncated?' · partial':' · crush')) : ((nld && !nld.error) ? ('no yield · ≤ '+Math.round((nld.epsCap||0.05)*100)+'% ε') : failureModeText(r)), 'neut'] },
-      { lbl:pcrLbl,    val:pcrVal,                   delta:pcrDelta }
+      { lbl:'Modulus X', val:fmtEngMPa(r.E11 * 1000), delta:deltaVsBaseline(r.E11, 'E11', d.id) },
+      { lbl:'Modulus Y', val:fmtEngMPa(r.E22 * 1000), delta:deltaVsBaseline(r.E22, 'E22', d.id) },
+      { lbl:'Modulus Z', val:fmtEngMPa(r.E33 * 1000), delta:deltaVsBaseline(r.E33, 'E33', d.id) },
+      { lbl:'Anisotropy', val:r.zener.toFixed(2), delta:[zenerDescriptor(r.zener), 'neut'] },
+      { lbl:'Yield Strength', val:yVal, delta:yDelta },
+      { lbl:pcrLbl, val:pcrVal, delta:pcrDelta },
+      loadCapacityCell(d)
     ];
   }
   // Thermal mode prioritizes κ
   if (mode === 'thermal'){
     return [
-      { lbl:'κ_z',    val:fmtComputed(r.kappa_z, ' W/mK', 2),     delta:[failureModeText(r), 'neut'] },
-      { lbl:'ρ_rel',  val:d.rho_rel.toFixed(2),                    delta:['baseline','neut'] },
-      { lbl:'E11',    val:r.E11.toFixed(2)+' GPa',                 delta:deltaVsBaseline(r.E11, 'E11', d.id) },
-      { lbl:'Zener',  val:r.zener.toFixed(2),                      delta:[zenerDescriptor(r.zener), 'neut'] }
+      { lbl:'Thermal Conductivity', val:fmtComputed(r.kappa_z, ' W/mK', 2), delta:[failureModeText(r), 'neut'] },
+      { lbl:'Relative Density',     val:d.rho_rel.toFixed(2),                delta:['baseline','neut'] },
+      { lbl:'Modulus Z',            val:fmtEngMPa(r.E33 * 1000),            delta:deltaVsBaseline(r.E33, 'E33', d.id) },
+      { lbl:'Anisotropy',           val:r.zener.toFixed(2),                  delta:[zenerDescriptor(r.zener), 'neut'] }
     ];
   }
   // Buckling mode — reads BUCKLE_BY_DESIGN (Run All buckling phase), not d.results.
   if (mode === 'buckle'){
-    var e11 = (isFinite(r.E11) ? r.E11.toFixed(2) : '—') + ' GPa';
+    var modZ = fmtEngMPa(isFinite(r.E33) ? r.E33 * 1000 : NaN);
     var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
     if (bk && !bk.error && isFinite(bk.lambda_cr)){
       var limited = isFinite(bk.pcr_py) && bk.pcr_py < 1;
       var safeTxt = isFinite(bk.pcr_py) ? (limited ? 'buckling-limited' : 'yield-limited') : '—';
-      var provLbl = bk.provisional ? 'P_cr/P_y*' : 'P_cr/P_y';
+      var ratLbl = bk.provisional ? 'Buckling-to-Yield Ratio*' : 'Buckling-to-Yield Ratio';
       return [
-        { lbl:'λ_cr',  val:bk.lambda_cr.toExponential(2),                      delta:['crit '+(bk.critAxis||'—'), 'neut'] },
-        { lbl:'p_cr',  val:(isFinite(bk.pcr) ? bk.pcr.toFixed(1) : '—')+' MPa', delta:['N='+(bk.N||'—'), 'neut'] },
-        { lbl:provLbl, val:(isFinite(bk.pcr_py) ? ((bk.yieldBound?'< ':'')+bk.pcr_py.toFixed(2)) : '—'),  delta:[safeTxt, limited ? 'down' : 'neut'] },
-        { lbl:'E11',   val:e11,                                                delta:deltaVsBaseline(r.E11, 'E11', d.id) }
+        { lbl:'Buckling Strength',       val:(isFinite(bk.pcr) ? fmtEngMPa(bk.pcr) : '—'),                              delta:['N='+(bk.N||'—'), 'neut'] },
+        { lbl:ratLbl,                    val:(isFinite(bk.pcr_py) ? ((bk.yieldBound?'< ':'')+bk.pcr_py.toFixed(2)) : '—'), delta:[safeTxt, limited ? 'down' : 'neut'] },
+        loadCapacityCell(d),
+        { lbl:'Critical Load Factor',    val:bk.lambda_cr.toExponential(2),                                            delta:['crit '+(bk.critAxis||'—'), 'neut'] },
+        { lbl:'Modulus Z',               val:modZ,                                                                     delta:deltaVsBaseline(r.E33, 'E33', d.id) }
       ];
     }
     var note = (bk && bk.error) ? bk.error : (LAB_STATE.runHasCompleted ? 'enable Buckling + Run' : 'not run');
     return [
-      { lbl:'λ_cr',     val:'—',   delta:[note, 'neut'] },
-      { lbl:'p_cr',     val:'—',   delta:['—', 'neut'] },
-      { lbl:'P_cr/P_y', val:'—',   delta:['—', 'neut'] },
-      { lbl:'E11',      val:e11,   delta:deltaVsBaseline(r.E11, 'E11', d.id) }
+      { lbl:'Buckling Strength',       val:'—',   delta:[note, 'neut'] },
+      { lbl:'Buckling-to-Yield Ratio', val:'—',   delta:['—', 'neut'] },
+      loadCapacityCell(d),
+      { lbl:'Critical Load Factor',    val:'—',   delta:['—', 'neut'] },
+      { lbl:'Modulus Z',               val:modZ,  delta:deltaVsBaseline(r.E33, 'E33', d.id) }
     ];
   }
   return [];
@@ -1110,7 +1156,7 @@ function buildStressColorbar(capMPa, gamma, mode){
   if (mode === 'shared') suffixText = 'global p95';
   else if (gamma < 0.99) suffixText = 'p95 · γ=' + gamma.toFixed(2);
   else                   suffixText = 'p95';
-  return '<div class="stress-colorbar-header">σ_VM</div>' +
+  return '<div class="stress-colorbar-header">von Mises stress</div>' +
          '<div class="stress-colorbar"></div>' +
          '<div class="stress-colorbar-label-top">'+capStr +
            '<span class="stress-colorbar-suffix">'+suffixText+'</span></div>' +
@@ -1194,6 +1240,7 @@ function nlCubeLabel(d){
 function renderNonlinearViz(){
   var cubes = document.getElementById('mergedCubes');
   var scrub = document.getElementById('mergedScrubber');
+  var metrics = document.getElementById('mergedMetrics');
   var view  = document.getElementById('mergedView');
   if (!cubes || !scrub || !view) return;
 
@@ -1201,7 +1248,7 @@ function renderNonlinearViz(){
   NLVIZ.entries = entries;
   NLVIZ.lastInt = {};
 
-  /* No α data → keep the merged plot full-width, hide cubes + scrubber. */
+  /* No α data → keep the merged plot full-width, hide cubes + metrics + scrubber. */
   if (!entries.length){
     nlvizStop();
     view.classList.remove('has-cubes');
@@ -1209,12 +1256,14 @@ function renderNonlinearViz(){
     scrub.style.display = 'none';
     cubes.innerHTML = '';
     scrub.innerHTML = '';
+    if (metrics){ metrics.style.display = 'none'; metrics.innerHTML = ''; }
     return;
   }
 
   view.classList.add('has-cubes');
   cubes.style.display = '';
   scrub.style.display = '';
+  if (metrics) metrics.style.display = '';
 
   /* Cube tiles (each reuses the design's shared raymarcher via .rm-mount). */
   var ch = '';
@@ -1237,6 +1286,28 @@ function renderNonlinearViz(){
       '<input type="range" id="nlScrub" min="0" max="1000" value="0" step="1">' +
     '</div>' +
     '<span class="nl-readout" id="nlReadout">crush \u03b5 0.00%</span>';
+
+  /* Per-design crush metrics: Crush Modulus (E0 from the curve), Yield Strength,
+     and per-cell Load Capacity (governing yield/buckling). */
+  if (metrics){
+    var mh = '';
+    for (var mi = 0; mi < entries.length; mi++){
+      var em = entries[mi], nlm = em.nl;
+      var crushMod = isFinite(nlm.E0) ? fmtEngMPa(nlm.E0) : '\u2014';
+      var yStr = (nlm.yielded && isFinite(nlm.sigma_y_eff)) ? fmtEngMPa(nlm.sigma_y_eff)
+                 : (isFinite(nlm.sigmaCap) ? ('> ' + fmtEngMPa(nlm.sigmaCap)) : 'no yield');
+      var lc = loadCapacity(em.design);
+      var loadStr = lc ? fmtForceN(lc.N) : '\u2014';
+      mh += '<div class="nl-metric-card" style="border-left-color:' + em.design.color + '">' +
+              '<div class="nl-mc-head"><span class="dot" style="background:' + em.design.color + '"></span>' +
+                nlCubeLabel(em.design) + '</div>' +
+              '<div class="nl-mc-row"><span>Crush Modulus</span><b>' + crushMod + '</b></div>' +
+              '<div class="nl-mc-row"><span>Yield Strength</span><b>' + yStr + '</b></div>' +
+              '<div class="nl-mc-row"><span>Load Capacity</span><b>' + loadStr + '</b></div>' +
+            '</div>';
+    }
+    metrics.innerHTML = mh;
+  }
 
   /* ε_cr onset ticks (per design, colored): mark where the buckling cross-over
      σ_cr would be reached in strain (ε_cr = σ_cr / E0), as a fraction of that
@@ -1373,9 +1444,11 @@ function nlvizStop(){
      with the visible grid tiles. */
   var cubes = document.getElementById('mergedCubes');
   var scrub = document.getElementById('mergedScrubber');
+  var metrics = document.getElementById('mergedMetrics');
   var view  = document.getElementById('mergedView');
   if (cubes) cubes.innerHTML = '';
   if (scrub) scrub.innerHTML = '';
+  if (metrics){ metrics.innerHTML = ''; metrics.style.display = 'none'; }
   if (view)  view.classList.remove('has-cubes');
   NLVIZ.entries = [];
   NLVIZ.lastInt = {};

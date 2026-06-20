@@ -491,17 +491,39 @@ html, body {
    Only when renderNonlinearViz() finds α data does it add .has-cubes, opening
    the right cube column and the bottom scrubber row. */
 .merged-cubes,
+.merged-metrics,
 .merged-scrubber { display:none; }
 
 .compare.merged.has-cubes {
   grid-template-columns: minmax(0,1fr) 248px;
-  grid-template-rows: minmax(0,1fr) auto;
+  grid-template-rows: minmax(0,1fr) auto auto;   /* plot+cubes · metrics · scrubber */
   gap:12px;
   align-items:stretch;
 }
 .compare.merged.has-cubes .merged-plot     { grid-column:1; grid-row:1; }
 .compare.merged.has-cubes .merged-cubes    { grid-column:2; grid-row:1; display:flex; }
-.compare.merged.has-cubes .merged-scrubber { grid-column:1 / -1; grid-row:2; display:flex; }
+.compare.merged.has-cubes .merged-metrics  { grid-column:1 / -1; grid-row:2; display:flex; }
+.compare.merged.has-cubes .merged-scrubber { grid-column:1 / -1; grid-row:3; display:flex; }
+
+/* Per-design crush metric cards (Nonlinear tab) */
+.merged-metrics { gap:10px; }
+.merged-metrics .nl-metric-card {
+  flex:1 1 0; min-width:0;
+  background:var(--panel); border:0.5px solid var(--line);
+  border-left:2px solid var(--line); border-radius:8px; padding:8px 12px;
+  font-family:'JetBrains Mono', monospace;
+}
+.nl-metric-card .nl-mc-head {
+  display:flex; align-items:center; gap:7px; margin-bottom:6px;
+  font-size:10px; color:var(--ink-2); letter-spacing:.05em;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.nl-metric-card .nl-mc-head .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.nl-metric-card .nl-mc-row {
+  display:flex; justify-content:space-between; gap:10px; padding:2px 0;
+  font-size:10px; color:var(--ink-dim);
+}
+.nl-metric-card .nl-mc-row b { color:var(--ink); font-weight:600; }
 
 .merged-cubes {
   flex-direction:column; gap:10px; min-height:0; overflow:auto;
@@ -547,10 +569,11 @@ html, body {
 @media (max-width: 880px){
   .compare.merged.has-cubes {
     grid-template-columns:1fr;
-    grid-template-rows:minmax(0,1fr) 150px auto;
+    grid-template-rows:minmax(0,1fr) 150px auto auto;
   }
   .compare.merged.has-cubes .merged-plot     { grid-column:1; grid-row:1; }
   .compare.merged.has-cubes .merged-cubes    { grid-column:1; grid-row:2; flex-direction:row; overflow-x:auto; }
   .compare.merged.has-cubes .merged-cubes .nl-cube { min-width:160px; }
-  .compare.merged.has-cubes .merged-scrubber { grid-row:3; }
+  .compare.merged.has-cubes .merged-metrics  { grid-column:1; grid-row:3; flex-wrap:wrap; }
+  .compare.merged.has-cubes .merged-scrubber { grid-row:4; }
 }
