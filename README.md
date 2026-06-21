@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.6.0 · alpha · Phase 6 in progress · Nonlinear J2 plasticity + adaptive crush + σ–ε comparison live
+**Status:** v0.7.0 · alpha · **Phase 6 complete** · Nonlinear J2 + adaptive crush + σ–ε comparison + α field tab + connectivity prune + plain-language readouts
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -38,7 +38,33 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above (it does not use the N=64 path). Measured on an 8-core desktop, Schwarz P: **N=8 three-axis ≈ 18 s per design** (vs ~62 s serial); N=16 is opt-in. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
-**Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a calibrated estimate are in progress, so the headline estimate currently under-reports it. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+**Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.7.0
+
+Phase 6 closes out. The σ–ε tab becomes the **Nonlinear** tab — pairing the comparison plot with an animated plastic-strain field — and a closeout pass adds a connectivity prune, plain-language readouts, and small-screen UX.
+
+### Nonlinear α field tab
+
+- **Up to three α-colored crush cubes** beside the merged σ–ε plot, animating the plastic-strain (α) field on the crush deformation. α is captured per accepted crush step, upsampled to the elastic grid, and ridden on the elastic displacement warp.
+- **Shared strain scrubber** that auto-loops on entry then hands control to the user on first touch, with per-design ε_cr onset ticks marking where buckling pre-empts yield.
+
+### Connectivity prune
+
+- **`pruneToLargestComponent`** (periodic 6-connected, keep-largest) runs before every solve, default-on via a **Prune islands** toggle. Floating corner-satellite fragments — which seeded spurious buckling/crush modes — are removed; relative density and every metric reflect the cleaned geometry.
+
+### Plain-language readouts + Load Capacity
+
+- Equation symbols became engineering terms: **Modulus X/Y/Z** (all three axes now shown), **Yield Strength**, **Buckling Strength**, **Buckling-to-Yield Ratio**, **Critical Load Factor**, **Thermal Conductivity**, **Relative Density**, and **Crush Modulus** (the crush E₀, distinct from the linear moduli).
+- New **Load Capacity** — governing strength (yield vs buckling) over one cell footprint, in N/kN — answers "how much can this withstand."
+- **Adaptive units** (GPa ≥ 1 GPa, MPa below) so a 0.05 GPa modulus reads as 50 MPa.
+
+### Pipeline + UX
+
+- **Run-complete pill** can no longer fire mid-run (run-token + live-activity gate); a **branded solver spinner**; **self-calibrating per-mode timing** + live ETA; **skip-recompute** of unchanged designs; **slot-stable** design letters (no more duplicate "C"s).
+- **Collapsible metrics drawer** (open on wide screens, collapsed on small) with a viewport floor so the raymarcher is never crushed; **lit baseline star**; amber for status vs red/green for comparisons; cyan section labels.
+
+Full detail in [`docs/PHASE_6.md`](./docs/PHASE_6.md).
 
 ## What's new in v0.6.0
 
@@ -112,9 +138,9 @@ Phase 4 takes the solver from Phase 3's normal-only 3×3 to the full Voigt 6×6 
 - **Phase 3** · SDF rasterizer, linear elastic FFT-CG, field extraction, viz stack ✓
 - **Phase 4** · Full Voigt 6×6 with shear cases, stiffness directional surface viz, connectivity gating, six-axis toggle ✓
 - **Phase 5** · Linear buckling — CPU oracle + worker pool, animated mode-shape viz, local/global localization ✓ *(GPU LOBPCG solver deferred as a follow-on)*
-- **Phase 6** ← *in progress* · Nonlinear (Newton + J2 plasticity) — solver + σ–ε comparison live and supplying the per-design yield for P_cr/P_y; field-viz tab queued
+- **Phase 6** · Nonlinear (Newton + J2 plasticity) — solver + σ–ε comparison, α field tab, connectivity prune, plain-language readouts ✓
 - **Phase 7** · ~~Deformed-geometry domain warp, stress field overlay~~ — landed early in Phase 3
-- **Phase 8** · Thermal κ tensor, remaining view modes
+- **Phase 8** ← *next* · Thermal κ tensor, remaining view modes
 - **Phase 9** · Multi-page PDF export
 - **Phase 10** · F13LD.vault integration (fetch, push as new property record)
 
