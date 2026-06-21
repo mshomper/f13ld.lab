@@ -27,7 +27,7 @@ function failureModeText(r){
 }
 function pcrPyDeltaClass(r){
   if (LAB_STATE.runHasCompleted && r.pcr_py === 0) return 'neut';
-  return r.pcr_py < 1 ? 'down' : 'neut';
+  return r.pcr_py < 1 ? 'warn' : 'neut';   /* status, not comparison → amber */
 }
 
 /* ----------------------------------------------------------
@@ -56,7 +56,7 @@ function loadCapacity(d){
 function loadCapacityCell(d){
   var lc = loadCapacity(d);
   if (!lc) return { lbl:'Load Capacity', val:'\u2014', delta:['needs yield or buckling','neut'] };
-  var govCls = /buckl/.test(lc.mode) ? 'down' : 'neut';
+  var govCls = /buckl/.test(lc.mode) ? 'warn' : 'neut';   /* governing-mode status → amber */
   return { lbl:'Load Capacity', val:fmtForceN(lc.N), delta:[lc.mode + ' \u00b7 ' + lc.cell_mm + ' mm cell', govCls] };
 }
 
@@ -74,7 +74,7 @@ function statsForDesign(d, mode){
     var pcrLbl = (bkd && bkd.provisional) ? 'Buckling-to-Yield Ratio*' : 'Buckling-to-Yield Ratio';
     var pcrVal = (bkPcrPy != null) ? ((bkd && bkd.yieldBound) ? ('< '+bkPcrPy.toFixed(2)) : bkPcrPy.toFixed(2)) : fmtComputed(r.pcr_py, '', 2);
     var pcrDelta = (bkPcrPy != null)
-      ? [(bkPcrPy < 1 ? 'buckling-limited' : 'yield-limited'), (bkPcrPy < 1 ? 'down' : 'neut')]
+      ? [(bkPcrPy < 1 ? 'buckling-limited' : 'yield-limited'), (bkPcrPy < 1 ? 'warn' : 'neut')]
       : [failureModeText(r), pcrPyDeltaClass(r)];
     var yVal, yDelta;
     if (nld && nld.yielded && isFinite(nld.sigma_y_eff)) {
@@ -116,7 +116,7 @@ function statsForDesign(d, mode){
       var ratLbl = bk.provisional ? 'Buckling-to-Yield Ratio*' : 'Buckling-to-Yield Ratio';
       return [
         { lbl:'Buckling Strength',       val:(isFinite(bk.pcr) ? fmtEngMPa(bk.pcr) : '—'),                              delta:['N='+(bk.N||'—'), 'neut'] },
-        { lbl:ratLbl,                    val:(isFinite(bk.pcr_py) ? ((bk.yieldBound?'< ':'')+bk.pcr_py.toFixed(2)) : '—'), delta:[safeTxt, limited ? 'down' : 'neut'] },
+        { lbl:ratLbl,                    val:(isFinite(bk.pcr_py) ? ((bk.yieldBound?'< ':'')+bk.pcr_py.toFixed(2)) : '—'), delta:[safeTxt, limited ? 'warn' : 'neut'] },
         loadCapacityCell(d),
         { lbl:'Critical Load Factor',    val:bk.lambda_cr.toExponential(2),                                            delta:['crit '+(bk.critAxis||'—'), 'neut'] },
         { lbl:'Modulus Z',               val:modZ,                                                                     delta:deltaVsBaseline(r.E33, 'E33', d.id) }
@@ -435,7 +435,7 @@ function renderDesignGrid(){
         '</div>' +
         '<div class="dc-controls">' +
           '<span class="dc-status-dot '+statusClass+'" title="'+statusClass+'"></span>' +
-          '<button class="dc-icon-btn" title="Set as baseline" onclick="setBaseline(\''+d.id+'\')">★</button>' +
+          '<button class="dc-icon-btn'+(d.id===LAB_STATE.baselineId?' is-baseline':'')+'" title="'+(d.id===LAB_STATE.baselineId?'Baseline (comparison reference)':'Set as baseline')+'" onclick="setBaseline(\''+d.id+'\')">★</button>' +
           '<button class="dc-icon-btn" title="Remove" onclick="removeDesign(\''+d.id+'\')">×</button>' +
         '</div>' +
       '</div>' +
@@ -458,7 +458,7 @@ function renderDesignGrid(){
                   : buildDeformControl(d.id, amp, activeAxisFor(d, VIEW_STATE.mode))))
           : '') +
       '</div>' +
-      buildSummary(stats) +
+      buildSummary(stats, d) +
       '</div>';
   }
   grid.innerHTML = html;
@@ -675,19 +675,56 @@ function renderDesignGrid(){
 /* ----------------------------------------------------------
    Helpers used by render.
    ---------------------------------------------------------- */
-function buildSummary(stats){
+/* Metrics drawer open-state.  null = auto (open on wide screens, collapsed on
+   small); once the user taps, METRICS_OPEN latches their choice for the session
+   and all three tiles toggle together (parallel comparison). */
+var METRICS_OPEN = null;
+function drawersEffectiveOpen(){
+  if (METRICS_OPEN === null) return (typeof window !== 'undefined') ? (window.innerWidth >= 880) : true;
+  return METRICS_OPEN;
+}
+function toggleMetricsDrawers(){
+  METRICS_OPEN = !drawersEffectiveOpen();
+  var open = METRICS_OPEN, ds = document.querySelectorAll('.dc-drawer'), i;
+  for (i = 0; i < ds.length; i++) ds[i].classList.toggle('collapsed', !open);
+}
+
+function buildSummary(stats, d){
   if (!stats || stats.length === 0) return '';
-  var html = '<div class="dc-summary">';
+
+  /* Collapsed-bar teaser: Load Capacity when a strength exists, else Modulus Z. */
+  var teaserLbl, teaserVal;
+  var lc = (typeof loadCapacity === 'function') ? loadCapacity(d) : null;
+  if (lc){
+    teaserLbl = 'Load';
+    teaserVal = fmtForceN(lc.N);
+  } else {
+    teaserLbl = 'Modulus Z';
+    teaserVal = (d && d.results && isFinite(d.results.E33)) ? fmtEngMPa(d.results.E33 * 1000) : '\u2014';
+  }
+
+  var rows = '';
   for (var i = 0; i < stats.length; i++){
     var s = stats[i];
-    html += '<div class="dc-stat">' +
-      '<span class="lbl">'+s.lbl+'</span>' +
-      '<span class="val'+(s.valcls ? ' '+s.valcls : '')+'">'+s.val+'</span>' +
-      '<span class="delta '+(s.delta && s.delta[1] ? s.delta[1] : 'neut')+'">'+(s.delta && s.delta[0] ? s.delta[0] : '—')+'</span>' +
-      '</div>';
+    var dtxt = (s.delta && s.delta[0]) ? s.delta[0] : '';
+    var dcls = (s.delta && s.delta[1]) ? s.delta[1] : 'neut';
+    rows += '<div class="dc-row">' +
+              '<span class="rl">'+s.lbl+'</span>' +
+              '<span class="rr">' +
+                '<span class="rv'+(s.valcls ? ' '+s.valcls : '')+'">'+s.val+'</span>' +
+                (dtxt ? ('<span class="rd '+dcls+'">'+dtxt+'</span>') : '') +
+              '</span>' +
+            '</div>';
   }
-  html += '</div>';
-  return html;
+
+  var collapsed = !drawersEffectiveOpen();
+  return '<div class="dc-drawer'+(collapsed ? ' collapsed' : '')+'">' +
+           '<div class="dc-drawer-bar" onclick="toggleMetricsDrawers()">' +
+             '<span class="db-left"><span class="chev">\u25be</span> Metrics</span>' +
+             '<span class="db-teaser">'+teaserLbl+' <b>'+teaserVal+'</b></span>' +
+           '</div>' +
+           '<div class="dc-drawer-panel"><div class="dc-rows">'+rows+'</div></div>' +
+         '</div>';
 }
 
 function buildDeformControl(designId, amp, axis){

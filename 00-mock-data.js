@@ -17,7 +17,7 @@ var MOCK_DESIGNS = [
     rho_rel:0.42,
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
-    color:'#22d3ee',
+    color:'#2dd4bf',
     slot:0,
     /* mock results (populated by mock run, in real Phase 3+ these
        come from solver output) */
@@ -161,7 +161,7 @@ function fmtForceN(n){
   return n.toFixed(1) + ' N';
 }
 
-var DESIGN_PALETTE = ['#22d3ee', '#fbbf24', '#fb7185'];
+var DESIGN_PALETTE = ['#2dd4bf', '#fbbf24', '#fb7185'];   /* A=teal-cyan (cyan reserved for section labels) */
 function reconcileDesignSlots(){
   var ds = LAB_STATE.designs, used = [false, false, false], i;
   for (i = 0; i < ds.length; i++){

@@ -370,7 +370,7 @@ function StiffnessViz() {
      engages, they're driving. */
   this._userInteracted = false;
   this._u = {
-    zoom:    1.6,                            /* slight padding inside the viewport */
+    zoom:    0.8,                            /* opens framed with padding (was 1.6 — too tight) */
     aspect:  1.0                             /* updated per-frame from canvas size */
   };
 

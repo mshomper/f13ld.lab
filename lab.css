@@ -27,7 +27,8 @@ html, body {
   --ink-head:#7c8aaa;
   --green:#1D9E75;       /* F13LD brand */
   --neon:#c8f542;        /* F13LD brand */
-  --sec-green:#18f370;   /* section labels */
+  --sec-green:#18f370;   /* (legacy) */
+  --sec-cyan:#22d3ee;    /* section labels — pure cyan, complements jade/lime */
   --purple:#7c6ff7;      /* primary action */
   --lab:#fbbf24;         /* F13LD.lab tool accent */
   --lab-soft:rgba(251,191,36,0.10);
@@ -178,7 +179,7 @@ html, body {
 
 /* viewport */
 .dc-viewport {
-  flex:1; min-height:0; position:relative;
+  flex:1; min-height:180px; position:relative;   /* floor: raymarcher never collapses */
   background:radial-gradient(ellipse at center, #0d1018 0%, #06080f 70%);
   overflow:hidden;
 }
@@ -314,7 +315,7 @@ html, body {
 }
 .ctrl-block { display:flex; flex-direction:column; gap:8px; min-width:0 }
 .ctrl-label {
-  font-size:9px; color:var(--sec-green); text-transform:uppercase;
+  font-size:9px; color:var(--sec-cyan); text-transform:uppercase;
   letter-spacing:0.16em; font-family:'JetBrains Mono', monospace;
 }
 .ctrl-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center }
@@ -577,3 +578,53 @@ html, body {
   .compare.merged.has-cubes .merged-metrics  { grid-column:1; grid-row:3; flex-wrap:wrap; }
   .compare.merged.has-cubes .merged-scrubber { grid-row:4; }
 }
+
+/* ============ Phase-6 readout pass — metrics drawer + state colors ============ */
+/* Lit baseline star (amber) marks the comparison reference. */
+.dc-icon-btn.is-baseline { color:var(--lab); border-color:var(--lab); text-shadow:0 0 6px var(--lab-glow); }
+
+/* Collapsible metrics drawer: default open on wide screens, collapsed on small
+   (set by JS via .collapsed); the raymarcher above keeps its min-height floor. */
+.dc-drawer { flex-shrink:0; border-top:0.5px solid var(--line); background:var(--panel-2); }
+.dc-drawer-bar {
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:8px 12px; cursor:pointer; user-select:none;
+}
+.dc-drawer-bar:hover { background:rgba(255,255,255,0.025); }
+.dc-drawer-bar .db-left {
+  display:flex; align-items:center; gap:8px;
+  font-family:'JetBrains Mono', monospace; font-size:10px; letter-spacing:0.12em;
+  text-transform:uppercase; color:var(--ink-2);
+}
+.dc-drawer-bar .chev {
+  display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px;
+  border:1px solid var(--neon); border-radius:5px; background:rgba(200,245,66,0.10);
+  color:var(--neon); font-size:11px; line-height:1; transition:transform .22s ease;
+}
+.dc-drawer-bar .db-teaser { font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--ink-dim); }
+.dc-drawer-bar .db-teaser b { color:var(--ink); font-weight:600; }
+.dc-drawer-panel { max-height:600px; overflow:hidden; transition:max-height .26s ease; }
+.dc-drawer.collapsed .dc-drawer-panel { max-height:0; }
+.dc-drawer.collapsed .chev { transform:rotate(180deg); }
+
+.dc-rows { padding:2px 12px 10px; }
+.dc-row {
+  display:grid; grid-template-columns:1fr 116px; align-items:baseline; gap:10px;
+  padding:5px 0; border-top:0.5px solid rgba(255,255,255,0.04);
+}
+.dc-row:first-child { border-top:none; }
+.dc-row .rl {
+  font-family:'JetBrains Mono', monospace; font-size:9px; letter-spacing:0.08em;
+  text-transform:uppercase; color:var(--ink-dim);
+}
+.dc-row .rr { display:flex; flex-direction:column; align-items:flex-start; gap:1px; min-width:0; }
+.dc-row .rv {
+  font-family:'JetBrains Mono', monospace; font-size:14px; font-weight:600; color:var(--ink);
+  letter-spacing:0.02em;
+}
+.dc-row .rv.lab { color:var(--lab); }
+.dc-row .rd { font-family:'JetBrains Mono', monospace; font-size:9px; line-height:1.2; }
+.dc-row .rd.up   { color:var(--good); }     /* comparison only */
+.dc-row .rd.down { color:var(--bad); }      /* comparison only */
+.dc-row .rd.neut { color:var(--ink-dim); }
+.dc-row .rd.warn { color:var(--warn); }     /* status descriptors (buckling-limited, governed…) */
