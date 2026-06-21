@@ -56,6 +56,32 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
   /* Cache evaluate as a local closure — V8 keeps the tight loop monomorphic */
   var evalFn = function (x, y, z) { return kernel.evaluate(params, x, y, z); };
 
+  /* ── TPMS gradient normalization (mesh parity) ─────────────────────────
+     Flags ride on params (stashed by TpmsKernel.parseRecipe) and default
+     OFF when the recipe omits them, so older flag-less recipes rasterize
+     exactly as before.  Constants/finite-difference step match mesh's
+     gradPhiFieldCoord / piDistance verbatim (field-coord radians). */
+  var shellNorm = !!(params && params.shellNorm);
+  var piNorm    = !!(params && params.piNorm);
+  var NORM_E = 0.012, NORM_EPS = 0.08, NORM_COSCLAMP = 0.95, NORM_CLIP_MULT = 5;
+  var NORM_INV_2E = 1 / (2 * NORM_E);
+  function gradFC(ax, ay, az) {
+    var gx = (evalFn(ax+NORM_E,ay,az) - evalFn(ax-NORM_E,ay,az)) * NORM_INV_2E;
+    var gy = (evalFn(ax,ay+NORM_E,az) - evalFn(ax,ay-NORM_E,az)) * NORM_INV_2E;
+    var gz = (evalFn(ax,ay,az+NORM_E) - evalFn(ax,ay,az-NORM_E)) * NORM_INV_2E;
+    return { gx:gx, gy:gy, gz:gz, mag:Math.sqrt(gx*gx+gy*gy+gz*gz) };
+  }
+  function piDistanceN(phiA_, phiB_, grA, grB) {
+    var magA = Math.max(grA.mag, NORM_EPS), magB = Math.max(grB.mag, NORM_EPS);
+    var dA = phiA_/magA, dB = phiB_/magB;
+    var cosA = (grA.gx*grB.gx + grA.gy*grB.gy + grA.gz*grB.gz)/(magA*magB);
+    if (cosA > NORM_COSCLAMP) cosA = NORM_COSCLAMP;
+    if (cosA < -NORM_COSCLAMP) cosA = -NORM_COSCLAMP;
+    var sin2 = 1 - cosA*cosA;
+    var num = dA*dA - 2*cosA*dA*dB + dB*dB;
+    return Math.sqrt(Math.max(num,0)/sin2);
+  }
+
   /* Pass 1 — full field cache. Needed for shell+nWeights gradient stencil
      and reused below for all single-eval-per-point modes. */
   var V = new Float32Array(N3);
@@ -85,8 +111,19 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
         var y2 = -L + (j2 + 0.5) * step;
         for (var k2 = 0; k2 < N; k2++) {
           var vA = V[i2*N*N + j2*N + k2];
-          var vB = evalFn(x2 + dx, y2 + dy, -L + (k2 + 0.5)*step + dz);
-          solid[i2*N*N + j2*N + k2] = Math.max(Math.abs(vA), Math.abs(vB)) < pr ? 1 : 0;
+          var zc = -L + (k2 + 0.5)*step;
+          var vB = evalFn(x2 + dx, y2 + dy, zc + dz);
+          var insidePi;
+          if (piNorm) {
+            var grA = gradFC(x2, y2, zc);
+            var grB = gradFC(x2 + dx, y2 + dy, zc + dz);
+            var dPi = piDistanceN(vA, vB, grA, grB);
+            if (dPi > NORM_CLIP_MULT*pr) dPi = NORM_CLIP_MULT*pr;
+            insidePi = dPi < pr;
+          } else {
+            insidePi = Math.max(Math.abs(vA), Math.abs(vB)) < pr;
+          }
+          solid[i2*N*N + j2*N + k2] = insidePi ? 1 : 0;
         }
       }
     }
@@ -106,7 +143,15 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
           var gLen = Math.sqrt(gx*gx + gy*gy + gz*gz) || 1;
           var localWt = wt * (wx*Math.abs(gx/gLen) + wy*Math.abs(gy/gLen) + wz*Math.abs(gz/gLen));
           var idx = i3*N*N + j3*N + k3;
-          solid[idx] = Math.abs(V[idx] - offset) < localWt ? 1 : 0;
+          if (shellNorm) {
+            var grS = gradFC(-L+(i3+0.5)*step, -L+(j3+0.5)*step, -L+(k3+0.5)*step);
+            var gmS = Math.max(grS.mag, NORM_EPS);
+            var distS = Math.abs(V[idx] - offset) / gmS;
+            if (distS > NORM_CLIP_MULT*localWt) distS = NORM_CLIP_MULT*localWt;
+            solid[idx] = distS < localWt ? 1 : 0;
+          } else {
+            solid[idx] = Math.abs(V[idx] - offset) < localWt ? 1 : 0;
+          }
         }
       }
     }
@@ -140,9 +185,20 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
   /* ── Solid (TPMS, default) or isotropic shell ──────────────────────── */
   } else {
     for (var idx2 = 0; idx2 < N3; idx2++) {
-      solid[idx2] = mode === 'shell'
-        ? (Math.abs(V[idx2] - offset) < wt ? 1 : 0)
-        : (V[idx2] - offset < 0 ? 1 : 0);
+      if (mode === 'shell') {
+        if (shellNorm) {
+          var ia = (idx2/(N*N))|0, rem = idx2 - ia*N*N, ja = (rem/N)|0, ka = rem - ja*N;
+          var grS2 = gradFC(-L+(ia+0.5)*step, -L+(ja+0.5)*step, -L+(ka+0.5)*step);
+          var gmS2 = Math.max(grS2.mag, NORM_EPS);
+          var distS2 = Math.abs(V[idx2] - offset) / gmS2;
+          if (distS2 > NORM_CLIP_MULT*wt) distS2 = NORM_CLIP_MULT*wt;
+          solid[idx2] = distS2 < wt ? 1 : 0;
+        } else {
+          solid[idx2] = Math.abs(V[idx2] - offset) < wt ? 1 : 0;
+        }
+      } else {
+        solid[idx2] = (V[idx2] - offset < 0) ? 1 : 0;
+      }
     }
   }
 

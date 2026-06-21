@@ -245,3 +245,119 @@ function pruneToLargestComponent(solid, N) {
   }
   return out;
 }
+
+/* ============================================================
+   pruneSmallIslands(solid, N, opts)
+   Remove only SMALL floating islands; keep every component at or
+   above a size threshold.  Unlike pruneToLargestComponent (which
+   keeps a single component), this preserves MULTIPLE large
+   load-bearing networks — required for the interwoven SDF
+   families:
+
+     · bundle : many disconnected-but-parallel fibers, each of
+                which spans the cell periodically and carries load
+                along its axis.  Largest-only would delete almost
+                the entire structure.
+     · wave   : frequently resolves into TWO interwoven networks
+                (e.g. the two sides of a cymatic nodal surface);
+                both percolate and both are load-bearing.
+
+   Threshold = max(absFloor, keepFrac · largestComponentSize).
+   Components below it are rasterization specks / loose chips and
+   are zeroed.  Same periodic 6-connectivity the FFT solver assumes.
+
+   opts: { keepFrac=0.05, absFloor=8 }
+   ============================================================ */
+function pruneSmallIslands(solid, N, opts) {
+  opts = opts || {};
+  var keepFrac = (typeof opts.keepFrac === 'number') ? opts.keepFrac : 0.05;
+  var absFloor = (typeof opts.absFloor === 'number') ? opts.absFloor : 8;
+
+  var N3 = N * N * N;
+  var label = new Int32Array(N3);
+  var stack = new Int32Array(N3);
+  var sizes = [0];                    /* sizes[compId]; index 0 unused */
+  var SA = N * N, SB = N, Nm1 = N - 1;
+  var comp = 0;
+
+  for (var seed = 0; seed < N3; seed++) {
+    if (!solid[seed] || label[seed]) continue;
+    comp++;
+    var compSize = 0, top = 0;
+    stack[top++] = seed; label[seed] = comp;
+    while (top > 0) {
+      var idx = stack[--top]; compSize++;
+      var a = (idx / SA) | 0, rem = idx - a * SA, b = (rem / SB) | 0, c = rem - b * SB;
+      var am = (a === 0) ? Nm1 : a - 1, ap = (a === Nm1) ? 0 : a + 1;
+      var bm = (b === 0) ? Nm1 : b - 1, bp = (b === Nm1) ? 0 : b + 1;
+      var cm = (c === 0) ? Nm1 : c - 1, cp = (c === Nm1) ? 0 : c + 1;
+      var aRow = a * SA, bRow = b * SB, amRow = am * SA, apRow = ap * SA, bmRow = bm * SB, bpRow = bp * SB;
+      var n0 = amRow + bRow + c, n1 = apRow + bRow + c, n2 = aRow + bmRow + c,
+          n3 = aRow + bpRow + c, n4 = aRow + bRow + cm, n5 = aRow + bRow + cp;
+      if (solid[n0] && !label[n0]) { label[n0] = comp; stack[top++] = n0; }
+      if (solid[n1] && !label[n1]) { label[n1] = comp; stack[top++] = n1; }
+      if (solid[n2] && !label[n2]) { label[n2] = comp; stack[top++] = n2; }
+      if (solid[n3] && !label[n3]) { label[n3] = comp; stack[top++] = n3; }
+      if (solid[n4] && !label[n4]) { label[n4] = comp; stack[top++] = n4; }
+      if (solid[n5] && !label[n5]) { label[n5] = comp; stack[top++] = n5; }
+    }
+    sizes.push(compSize);
+  }
+
+  if (comp <= 1) return solid;        /* empty or already one component */
+
+  var largest = 0;
+  for (var ci = 1; ci <= comp; ci++) if (sizes[ci] > largest) largest = sizes[ci];
+  var threshold = Math.max(absFloor, Math.floor(keepFrac * largest));
+
+  /* Count kept components; if everything clears the bar there is nothing to do. */
+  var dropped = 0;
+  for (var cj = 1; cj <= comp; cj++) if (sizes[cj] < threshold) dropped++;
+  if (dropped === 0) return solid;
+
+  var out = solid.slice();
+  var removed = 0;
+  for (var i = 0; i < N3; i++) {
+    if (out[i] && sizes[label[i]] < threshold) { out[i] = 0; removed++; }
+  }
+  if (removed > 0) {
+    console.log('[prune] removed ' + dropped + ' small island(s) below ' + threshold +
+                ' voxels (' + removed + ' voxel(s)); kept ' + (comp - dropped) +
+                ' component(s) of ' + comp + ' [largest ' + largest + ']');
+  }
+  return out;
+}
+
+/* ============================================================
+   pruneVoxels(solid, N, family, opts)
+   Family-aware prune dispatcher.  Called by the solvers in place
+   of pruneToLargestComponent so each family gets the right policy:
+
+     · beam            → NONE.  A periodic strut lattice fills the
+                         cube and is connected through its own
+                         periodic images; mesh's cantilever-trim
+                         prune does not apply to a bulk RVE.
+     · bundle, wave    → pruneSmallIslands.  Keep all large
+                         interwoven networks; drop only specks.
+     · tpms/noise/grain→ pruneToLargestComponent (unchanged) so the
+                         already-validated effective-property
+                         numbers are preserved.
+
+   opts is forwarded to pruneSmallIslands (keepFrac / absFloor).
+   ============================================================ */
+function pruneVoxels(solid, N, family, opts) {
+  if (family === 'beam') return solid;
+  if (family === 'bundle' || family === 'wave') return pruneSmallIslands(solid, N, opts);
+  if (typeof pruneToLargestComponent === 'function') return pruneToLargestComponent(solid, N);
+  return solid;
+}
+
+/* node/test harness export (browser ignores this block) */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    checkVoxelConnectivity: checkVoxelConnectivity,
+    pruneToLargestComponent: pruneToLargestComponent,
+    pruneSmallIslands: pruneSmallIslands,
+    pruneVoxels: pruneVoxels
+  };
+}

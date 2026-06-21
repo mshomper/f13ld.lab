@@ -108,7 +108,17 @@ var TpmsKernel = {
     } else {
       terms = s.terms;
     }
-    return { terms: terms };
+    /* Normalization flags (mesh shell_normalize / pi_normalize).
+       Per the alignment session: a recipe now carries these in its
+       geometry block.  When ABSENT (older recipe), default to OFF —
+       no normalization — and respect an explicit true/false otherwise.
+       buildVoxels reads these off params (no call-site signature change). */
+    var g = recipe.geometry || {};
+    return {
+      terms:     terms,
+      shellNorm: (g.shell_normalize !== undefined) ? !!g.shell_normalize : false,
+      piNorm:    (g.pi_normalize    !== undefined) ? !!g.pi_normalize    : false
+    };
   },
 
   evaluate: function (params, x, y, z) {
@@ -482,7 +492,8 @@ var GrainKernel = {
   _buildHUKernels: function (p) {
     var rng = this._mulberry32(p.rngSeed);
     var N = p.huN || 80, aspect = p.huAspect || 4.0, bw = p.huWidth || 0.04;
-    var a = bw * aspect * 0.5, b = bw * 0.5;
+    var ell = p.huEll || 1, sq = Math.sqrt(ell);
+    var a = bw * aspect * 0.5, b = bw * 0.5, b1 = b / sq, b2 = b * sq;
     var kappa = p.kappa, mode = p.dirMode;
     var pts = this._jitteredGrid3D(N, rng);
     var mux = p.principalX, muy = p.principalY, muz = p.principalZ;
@@ -522,9 +533,13 @@ var GrainKernel = {
         n1x: n1[0], n1y: n1[1], n1z: n1[2],
         n2x: n2[0], n2y: n2[1], n2z: n2[2],
         a: a * TWO_PI,
-        b: b * TWO_PI
+        b1: b1 * TWO_PI,
+        b2: b2 * TWO_PI
       });
     }
+    kernels.cross = p.huCross || 2;
+    kernels.sharp = p.huSharp || 1;
+    kernels.blend = p.huBlend || 1;
     return kernels;
   },
 
@@ -549,7 +564,7 @@ var GrainKernel = {
     var ow = (Array.isArray(f.ortho_weights) && f.ortho_weights.length === 3) ? f.ortho_weights : [1, 1, 1];
     var params = {
       fieldType:  ft,
-      frequency:  f.frequency != null ? f.frequency : 0.45,
+      frequency:  f.frequency != null ? f.frequency : 0.27,
       rngSeed:    f.rng_seed  != null ? f.rng_seed  : 42,
       dirMode:    f.dir_mode  || 'single',
       kappa:      f.kappa     != null ? f.kappa     : 6,
@@ -560,6 +575,10 @@ var GrainKernel = {
       huN:       f.hu_n      != null ? f.hu_n      : 80,
       huAspect:  f.hu_aspect != null ? f.hu_aspect : 4.0,
       huWidth:   f.hu_width  != null ? f.hu_width  : 0.04,
+      huCross:   f.hu_cross  != null ? f.hu_cross  : 2,
+      huSharp:   f.hu_sharp  != null ? f.hu_sharp  : 1,
+      huBlend:   f.hu_blend  != null ? f.hu_blend  : 1,
+      huEll:     f.hu_ell    != null ? f.hu_ell    : 1,
       isoLevel:  g.center      != null ? g.center      : 0,
       halfWidth: g.half_width  != null ? g.half_width  : 0.15,
       smoothing: g.smoothing   || 0,
@@ -578,6 +597,8 @@ var GrainKernel = {
   evaluate: function (params, x, y, z) {
     if (params.kernels) {
       var ks = params.kernels;
+      var pe = ks.cross || 2, me = ks.sharp || 1, Pe = ks.blend || 1;
+      var rnd = (pe === 2), shp = (me === 1), bl = (Pe === 1);
       var s = 0;
       for (var i = 0; i < ks.length; i++) {
         var k = ks[i];
@@ -585,8 +606,13 @@ var GrainKernel = {
         var dt  = dx*k.tx  + dy*k.ty  + dz*k.tz;
         var dn1 = dx*k.n1x + dy*k.n1y + dz*k.n1z;
         var dn2 = dx*k.n2x + dy*k.n2y + dz*k.n2z;
-        s += Math.exp(-(dt*dt)/(k.a*k.a) - (dn1*dn1 + dn2*dn2)/(k.b*k.b));
+        var u = dt/k.a, w1 = dn1/k.b1, w2 = dn2/k.b2;
+        var R = u*u + (rnd ? (w1*w1 + w2*w2)
+                           : (Math.pow(Math.abs(w1), pe) + Math.pow(Math.abs(w2), pe)));
+        var Rm = shp ? R : Math.pow(R, me);
+        s += bl ? Math.exp(-Rm) : Math.exp(-Pe*Rm);
       }
+      if (!bl) s = Math.pow(s, 1/Pe);
       return s - 0.3;
     }
     var ws = params.waves;
@@ -657,4 +683,13 @@ function applyModeRaw(evalFn, x, y, z, mode, modeArgs) {
   }
   if (mode === 'grain-solid')  return modeArgs.halfWidth - Math.abs(evalFn(x, y, z) - modeArgs.isoLevel);
   return evalFn(x, y, z) - modeArgs.offset;
+}
+
+/* node/test harness export (browser ignores this block) */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    TpmsKernel: TpmsKernel, NoiseKernel: NoiseKernel, GrainKernel: GrainKernel,
+    KERNELS: KERNELS, applyMode: applyMode, applyModeRaw: applyModeRaw,
+    resolveRawPreset: resolveRawPreset, evaluateTpms: evaluateTpms
+  };
 }

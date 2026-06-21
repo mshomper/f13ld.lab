@@ -1454,8 +1454,8 @@ async function solveDesignElasticFull(recipe, N, opts) {
                           args.nWeights, args.pipeR, args.phaseShift);
   /* Connectivity gate — keep only the largest periodic solid component so
      floating islands don't seed spurious modes (default-on from the run). */
-  if (opts.pruneLargest && typeof pruneToLargestComponent === 'function') {
-    solid = pruneToLargestComponent(solid, N);
+  if (opts.pruneLargest && typeof pruneVoxels === 'function') {
+    solid = pruneVoxels(solid, N, family, opts);
   }
   var tRast = performance.now() - t0;
 

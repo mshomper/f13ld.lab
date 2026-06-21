@@ -241,7 +241,15 @@ function normalizeDesignJson(json, filename){
   /* ── 1. Family inference ─────────────────────────────────── */
   var family = json.family || json.tool || null;
   if (!family){
-    if (json.meta && json.meta.tool === 'grain') family = 'grain';
+    /* New SDF families first — mirror mesh routeRecipe precedence so a
+       flag-less legacy export still routes correctly.  wave is probed
+       before grain (both use a `field` block) by requiring field.modes[]. */
+    if (json.meta && (json.meta.tool === 'beam' || json.meta.tool === 'beam-builder')) family = 'beam';
+    else if (Array.isArray(json.beams) && json.beams.length &&
+             Array.isArray(json.beams[0]) && json.beams[0].length >= 6) family = 'beam';
+    else if (json.surface && (json.surface.structure || json.surface.type === 'ihb')) family = 'bundle';
+    else if (json.field && Array.isArray(json.field.modes)) family = 'wave';
+    else if (json.meta && json.meta.tool === 'grain') family = 'grain';
     else if (json.meta && json.meta.tool === 'noise-scaffold-explorer') family = 'noise';
     else if (json.field && typeof json.field === 'object') family = 'grain';
     else if (json.surface && json.surface.type === 'noise') family = 'noise';
@@ -256,6 +264,12 @@ function normalizeDesignJson(json, filename){
   else if (json.field && typeof json.field.type === 'string') variant = json.field.type;
   else if (json.surface && typeof json.surface.type === 'string') variant = json.surface.type;
   else if (json.meta && typeof json.meta.preset === 'string') variant = json.meta.preset;
+  /* New-family variant hints (structure / symmetry make readable titles) */
+  if (variant === 'custom'){
+    if (family === 'bundle' && json.surface && json.surface.structure) variant = json.surface.structure;
+    else if (family === 'wave' && json.field && json.field.symmetry) variant = json.field.symmetry;
+    else if (family === 'beam') variant = (json.meta && json.meta.preset) || 'lattice';
+  }
 
   /* ── 3. Topology / mode (external uses bare strings) ─────── */
   /* TPMS and Noise put the mode under `geometry.mode`.
@@ -415,6 +429,54 @@ function normalizeDesignJson(json, filename){
         recipeNote = 'Grain recipe accepted';
       } else {
         recipeNote = 'Grain recipe missing field block — falling back to SVG mock';
+      }
+    } else if (family === 'beam'){
+      /* BeamKernel.parseRecipe reads recipe.beams + recipe.geometry (snake_case
+         fields: cell_scale | scale_xyz+cell, radius | radius_x/y/z, node_*).
+         Rasterizer mode 'solid' → default SDF branch (negative-inside < 0). */
+      if (Array.isArray(json.beams) && json.beams.length){
+        var gBeam = {}; for (var kB in (json.geometry || {})) gBeam[kB] = json.geometry[kB];
+        gBeam.mode = 'solid'; gBeam.cellSizeMm = cellSizeMm; gBeam.cellMult = 1.0;
+        recipe = {
+          family: 'beam', name: title,
+          beams: json.beams, geometry: gBeam,
+          material: json.material || DEFAULT_MATERIAL
+        };
+        recipeNote = 'Beam recipe accepted (' + json.beams.length + ' strut(s))';
+      } else {
+        recipeNote = 'Beam recipe missing beams[] — falling back to SVG mock';
+      }
+    } else if (family === 'bundle'){
+      /* BundleKernel.parseRecipe → _bundleParamsFromJSON reads recipe.surface
+         (+ recipe.meta.preset fallback) and recipe.geometry.  Pass geometry
+         through verbatim (snake_case) and tag rasterizer mode 'solid'. */
+      if (json.surface && typeof json.surface === 'object'){
+        var gBun = {}; for (var kU in (json.geometry || {})) gBun[kU] = json.geometry[kU];
+        gBun.mode = 'solid'; gBun.cellSizeMm = cellSizeMm; gBun.cellMult = 1.0;
+        recipe = {
+          family: 'bundle', name: title,
+          surface: json.surface, geometry: gBun, meta: json.meta || null,
+          material: json.material || DEFAULT_MATERIAL
+        };
+        recipeNote = 'Bundle recipe accepted (' + (json.surface.structure || 'bundle') + ')';
+      } else {
+        recipeNote = 'Bundle recipe missing surface block — falling back to SVG mock';
+      }
+    } else if (family === 'wave'){
+      /* WaveKernel.parseRecipe reads recipe.field (modes[], symmetry, iso,
+         mode='sheet'|'solid', thickness, signFlip).  No geometry needed
+         beyond the rasterizer 'solid' tag (topology lives in evaluate). */
+      if (json.field && Array.isArray(json.field.modes)){
+        recipe = {
+          family: 'wave', name: title,
+          field: json.field,
+          geometry: { mode: 'solid', cellSizeMm: cellSizeMm, cellMult: 1.0 },
+          material: json.material || DEFAULT_MATERIAL
+        };
+        recipeNote = 'Wave recipe accepted (' + json.field.modes.length + ' mode(s), ' +
+                     (json.field.symmetry || 'pure') + ')';
+      } else {
+        recipeNote = 'Wave recipe missing field.modes[] — falling back to SVG mock';
       }
     }
   } else if (family === 'unknown'){
