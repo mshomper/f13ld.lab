@@ -1078,12 +1078,59 @@ function homogenizeBucklingCPU(recipe, N, opts) {
   if (opts && opts.pruneLargest && typeof pruneVoxels === 'function') {
     solid = pruneVoxels(solid, N, family, opts);
   }
+  /* Multi-component / under-resolution guard.  q=0 cell-periodic buckling
+     needs ONE connected, adequately-resolved load path.  A disconnected
+     solid leaves the stiffness operator with free rigid-body float modes
+     (one set per island) that the eigensolve cannot remove; a sub-voxel
+     feature breaks the network outright.  Either way no positive critical
+     mode exists — skip the expensive solve and report WHY. */
+  var N3b = N * N * N, inside0 = 0;
+  for (var vb = 0; vb < N3b; vb++) if (solid[vb]) inside0++;
+  var skipReason = null;
+  if (inside0 === 0) {
+    skipReason = 'empty at N=' + N;
+  } else if (typeof checkVoxelConnectivity === 'function') {
+    var interior = 0, Nm1b = N - 1;
+    for (var a = 0; a < N; a++) {
+      var am = (a === 0) ? Nm1b : a - 1, ap = (a === Nm1b) ? 0 : a + 1;
+      for (var b = 0; b < N; b++) {
+        var bm = (b === 0) ? Nm1b : b - 1, bp = (b === Nm1b) ? 0 : b + 1;
+        for (var c = 0; c < N; c++) {
+          var idx = (a * N + b) * N + c;
+          if (!solid[idx]) continue;
+          var cm = (c === 0) ? Nm1b : c - 1, cp = (c === Nm1b) ? 0 : c + 1;
+          if (solid[(am * N + b) * N + c] && solid[(ap * N + b) * N + c] &&
+              solid[(a * N + bm) * N + c] && solid[(a * N + bp) * N + c] &&
+              solid[(a * N + b) * N + cm] && solid[(a * N + b) * N + cp]) interior++;
+        }
+      }
+    }
+    var interiorFrac = interior / inside0;
+    var conn = checkVoxelConnectivity(solid, N);
+    if (interiorFrac < 0.04) {
+      skipReason = 'under-resolved at N=' + N + ' — raise the buckle grid';
+    } else if (conn.numComponents > 1) {
+      skipReason = 'multi-component (' + conn.numComponents +
+                   ' disconnected pieces) — per-component buckling not yet implemented';
+    }
+  }
+  if (skipReason) {
+    var axBuck = (opts && opts.axes && opts.axes.length) ? opts.axes : [0, 1, 2];
+    var anames = ['xx', 'yy', 'zz'], paStub = [];
+    for (var pa2 = 0; pa2 < axBuck.length; pa2++) {
+      paStub.push({ axis: anames[axBuck[pa2]], lambda: Infinity, sBar: 0, cgIters: 0, mode: null, mWave: 0 });
+    }
+    return { lambda_cr: Infinity, pcr: Infinity, critAxis: null, perAxis: paStub,
+             mode: null, N: N, rho: inside0 / N3b, skip_reason: skipReason };
+  }
+
   var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
   var C_s = isoC(mat.Es_MPa, mat.nu);
   var C_v = isoC(mat.Es_MPa * 1e-4, mat.nu);
   var res = bucklingFromSolid(solid, C_s, C_v, N, opts);
   var N3 = N * N * N, inside = 0; for (var v = 0; v < N3; v++) inside += solid[v];
   res.rho = inside / N3;
+  if (!isFinite(res.lambda_cr) && !res.skip_reason) res.skip_reason = 'no positive critical mode found';
   return res;
 }
 

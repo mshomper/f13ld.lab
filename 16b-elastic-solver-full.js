@@ -1559,6 +1559,25 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var nu_xz = -S_phys[0 * 6 + 2] / S_phys[0 * 6 + 0];
   var nu_yz = -S_phys[1 * 6 + 2] / S_phys[1 * 6 + 1];
 
+  /* Voigt-bound + physicality gate.  A porous solid+void composite can never
+     be stiffer than the solid phase, so any normal modulus that is non-finite,
+     non-positive, or exceeds Es is unphysical — the signature of a load case
+     that did not converge (a disconnected or non-periodic axis).  Report it
+     honestly instead of surfacing ~1e23 GPa. */
+  var EsCap = Es * 1.05;
+  var badAxes = [];
+  if (!(isFinite(Ex) && Ex > 0 && Ex <= EsCap)) badAxes.push('xx');
+  if (!(isFinite(Ey) && Ey > 0 && Ey <= EsCap)) badAxes.push('yy');
+  if (!(isFinite(Ez) && Ez > 0 && Ez <= EsCap)) badAxes.push('zz');
+  if (badAxes.length > 0) {
+    return {
+      name: recipe.name, family: family, mode: args.mode, rho: rho,
+      valid: false, reject_reason: 'nonconvergent', badAxes: badAxes,
+      Es_MPa: Es, nu: nu, Ex_MPa: Ex, Ey_MPa: Ey, Ez_MPa: Ez,
+      converged: hom.allConverged, perLC: hom.perLC, connectivity: connectivity
+    };
+  }
+
   /* Zener anisotropy is invariant under the cubic swap, but compute
      from C_phys for clarity */
   var C11p = C_phys[0 * 6 + 0];

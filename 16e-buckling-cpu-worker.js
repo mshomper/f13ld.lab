@@ -53,6 +53,7 @@ var BUCKLE_WORKER_FILES = [
   '14-rasterizer.js',
   '14a-connectivity.js',
   '13-kernels.js',
+  '13b-kernels-new.js',
   '16c-buckling-cpu-ref.js'
 ];
 
@@ -74,7 +75,7 @@ var BUCKLE_WORKER_ONMESSAGE =
   '      mode = { u_prime:[ux,uy,uz], sigma_vm:null, N:N, eps_bar:[0,0,0] };\n' +
   '      transfer.push(ux.buffer, uy.buffer, uz.buffer);\n' +
   '    }\n' +
-  '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, cgIters:pa.cgIters, mWave:pa.mWave }, mode: mode, rho: one.rho }, transfer);\n' +
+  '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, cgIters:pa.cgIters, mWave:pa.mWave }, mode: mode, rho: one.rho, skip_reason: one.skip_reason }, transfer);\n' +
   '  } catch (err){ postMessage({ id: job.id, type:"error", message: (err && err.message) || String(err) }); }\n' +
   '};\n';
 
@@ -214,10 +215,11 @@ function computeBucklingCPU(recipe, N, opts, onProgress){
   }
 
   return Promise.all(tasks).then(function(msgs){
-    var perAxis = [], modes = {}, lambdaCr = Infinity, critAxis = null, critSbar = 0, rho = 0;
+    var perAxis = [], modes = {}, lambdaCr = Infinity, critAxis = null, critSbar = 0, rho = 0, skipReason = null;
     for (var i = 0; i < msgs.length; i++){
       var m = msgs[i];
       rho = m.rho;
+      if (m.skip_reason && !skipReason) skipReason = m.skip_reason;
       perAxis.push(m.perAxis);
       if (m.mode){
         /* |phi| per voxel drives the relative-displacement colormap (reuses
@@ -243,7 +245,7 @@ function computeBucklingCPU(recipe, N, opts, onProgress){
     var order = { xx: 0, yy: 1, zz: 2 };
     perAxis.sort(function(a, b){ return (order[a.axis] || 0) - (order[b.axis] || 0); });
     var pcr = isFinite(lambdaCr) ? lambdaCr * Math.abs(critSbar) : Infinity;
-    return { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: rho, perAxis: perAxis, modes: modes };
+    return { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: rho, perAxis: perAxis, modes: modes, skip_reason: skipReason };
   });
 }
 

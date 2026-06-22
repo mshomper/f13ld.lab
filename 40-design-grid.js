@@ -122,7 +122,7 @@ function statsForDesign(d, mode){
         { lbl:'Modulus Z',               val:modZ,                                                                     delta:deltaVsBaseline(r.E33, 'E33', d.id) }
       ];
     }
-    var note = (bk && bk.error) ? bk.error : (LAB_STATE.runHasCompleted ? 'enable Buckling + Run' : 'not run');
+    var note = (bk && bk.skip_reason) ? bk.skip_reason : (bk && bk.error) ? bk.error : (LAB_STATE.runHasCompleted ? 'enable Buckling + Run' : 'not run');
     return [
       { lbl:'Buckling Strength',       val:'—',   delta:[note, 'neut'] },
       { lbl:'Buckling-to-Yield Ratio', val:'—',   delta:['—', 'neut'] },

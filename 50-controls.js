@@ -20,7 +20,7 @@ var GRID_STATE = {
    than the GPU elastic/thermal path — ~per-axis seconds at N=8.  Its
    resolution is configured separately from the main Grid pill. */
 var BUCKLE_STATE = {
-  N: 8              // 8 (fast) | 16 (accurate)
+  N: 32             // 8 (fast) | 16 | 32 (resolves thin struts)
 };
 
 /* Transient per-design buckling results (id -> { lambda_cr, pcr, pcr_py,
@@ -32,7 +32,7 @@ var BUCKLE_BY_DESIGN = {};
 
 /* Nonlinear crush resolution + load axis (GPU J2 plasticity, 16g).
    N=8 fast / N=16 more accurate; axis xx/yy/zz -> crush() physical 0/1/2. */
-var NONLIN_STATE = { N: 16, axis: 'zz', cap: 0.05 };
+var NONLIN_STATE = { N: 32, axis: 'zz', cap: 0.05 };
 
 /* Transient per-design nonlinear results (id -> { sigma_y_eff, E0, curve,
    axis, N, truncated } | { error }).  Feeds the sigma-epsilon curve tab, the
@@ -123,7 +123,7 @@ function paintGridPill(){
    BUCKLE GRID PILL — cycles the CPU buckling resolution 8 ⇄ 16.
    ============================================================ */
 function onBucklePillClick(){
-  BUCKLE_STATE.N = (BUCKLE_STATE.N === 8) ? 16 : 8;
+  BUCKLE_STATE.N = (BUCKLE_STATE.N === 8) ? 16 : (BUCKLE_STATE.N === 16) ? 32 : 8;
   paintBucklePill();
   recomputeEstimate();
 }
@@ -139,7 +139,7 @@ function paintBucklePill(){
    plus the load-axis dropdown handler.
    ============================================================ */
 function onNonlinPillClick(){
-  NONLIN_STATE.N = (NONLIN_STATE.N === 8) ? 16 : 8;
+  NONLIN_STATE.N = (NONLIN_STATE.N === 8) ? 16 : (NONLIN_STATE.N === 16) ? 32 : 8;
   paintNonlinPill();
   recomputeEstimate();
 }
@@ -435,7 +435,10 @@ async function runRealSweep(N, runToken){
                       (conn.largestFraction * 100).toFixed(1) + '%') : 'islands detected');
           d.results.connectivity = conn || null;
         } else {
-          sourceMsg = 'invalid (singular C)';
+          sourceMsg = (elasticResult && elasticResult.reject_reason === 'nonconvergent')
+            ? ('non-physical modulus' + (elasticResult.badAxes ? ' (' + elasticResult.badAxes.join('/') + ')' : '') +
+               ' — solve did not converge; likely disconnected or non-periodic in that axis')
+            : 'invalid (singular C)';
         }
         d.results._runSource = sourceMsg;
         d.results._error = true;
