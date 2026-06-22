@@ -995,10 +995,26 @@ async function runBucklingGPUTest(N) {
     return [x.subarray(0, N3), x.subarray(N3, 2 * N3), x.subarray(2 * N3, 3 * N3)];
   }
 
-  /* synthetic solid: deterministic ~50% fill (geometry need not be physical
-     for operator parity — only that CPU & GPU rasterize identically) */
-  var rs = mulberry32(99), solid = new Uint8Array(N3), solidF = new Float32Array(N3);
-  for (var i = 0; i < N3; i++) { var v = rs() > 0.5 ? 1 : 0; solid[i] = v; solidF[i] = v; }
+  /* Connected Schwarz-P network at ρ≈0.5 (cos x + cos y + cos z > 0).
+     A *connected* microstructure is required for the PCG row to be a
+     meaningful convergence test — random-noise geometry is near-singular
+     (disconnected solid islands) and neither f32 nor f64 CG converges on
+     it.  Operator parity (P1–P3) is geometry-independent.  Storage order
+     is i·N²+j·N+k, matching the lab's rasterizer. */
+  var solid = new Uint8Array(N3), solidF = new Float32Array(N3);
+  var TWO_PI = 2 * Math.PI;
+  for (var ix = 0; ix < N; ix++) {
+    var cx = Math.cos(TWO_PI * ix / N);
+    for (var jy = 0; jy < N; jy++) {
+      var cy = Math.cos(TWO_PI * jy / N);
+      for (var kz = 0; kz < N; kz++) {
+        var cz = Math.cos(TWO_PI * kz / N);
+        var idx = ix * N * N + jy * N + kz;
+        var v = (cx + cy + cz > 0) ? 1 : 0;
+        solid[idx] = v; solidF[idx] = v;
+      }
+    }
+  }
 
   /* shared FFT plan (matches solveDesignElasticFull caching) */
   var fft;
