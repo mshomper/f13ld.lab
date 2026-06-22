@@ -112,7 +112,7 @@ var VOIGT_F = [1, 1, 1, 2, 2, 2];
    At ξ = 0 (DC bin) Γ̃ is left at zero — no macroscopic
    strain correction to the constant mode.
    ============================================================ */
-function buildGammaFull(N, mu0, lam0) {
+function buildGammaFull(N, mu0, lam0, scheme) {
   var N3 = N * N * N;
 
   /* Allocate 6×6 of N³ Float64 spatial arrays */
@@ -126,6 +126,8 @@ function buildGammaFull(N, mu0, lam0) {
 
   var a = 1.0 / mu0;
   var b = -(lam0 + mu0) / (mu0 * (lam0 + 2 * mu0));
+  var WILLOT = (scheme !== 'continuous');   /* default operator is Willot's rotated scheme */
+  var PI_N = Math.PI / N;
 
   /* Walk Fourier modes via signed-wraparound (standard DFT) */
   for (var i = 0; i < N; i++) {
@@ -143,6 +145,21 @@ function buildGammaFull(N, mu0, lam0) {
         var n1 = kj * rk;
         var n2 = kk * rk;
         var n = [n0, n1, n2];
+        if (WILLOT) {
+          /* Willot (2015) rotated finite-difference frequency:
+             ξ̃_α = sin(πk_α/N)·∏_{β≠α}cos(πk_β/N) (a common 1/h phase cancels
+             in the unit direction).  Annihilates the Nyquist/checkerboard
+             modes that make the continuous operator ring at high phase
+             contrast → far more accurate fields & moduli at the same grid. */
+          var sx = Math.sin(PI_N * ki), cx = Math.cos(PI_N * ki);
+          var sy = Math.sin(PI_N * kj), cy = Math.cos(PI_N * kj);
+          var sz = Math.sin(PI_N * kk), cz = Math.cos(PI_N * kk);
+          var wx = sx * cy * cz, wy = cx * sy * cz, wz = cx * cy * sz;
+          var wsq = wx * wx + wy * wy + wz * wz;
+          if (wsq < 1e-30) continue;   /* Willot-annihilated mode → leave Γ̃ zero */
+          var rw = 1.0 / Math.sqrt(wsq);
+          n[0] = wx * rw; n[1] = wy * rw; n[2] = wz * rw;
+        }
 
         /* Build the 6×6 Γ̃ at this Fourier mode */
         for (var P = 0; P < 6; P++) {
@@ -638,7 +655,7 @@ function homogenizeFullCPU(recipe, N, opts) {
 
   /* Build full Γ̃ — μ₀ = C[21] (C44), λ₀ = C[1] (C12) per isoC layout */
   var t1 = performance.now();
-  var Gamma = buildGammaFull(N, C_0[21], C_0[1]);
+  var Gamma = buildGammaFull(N, C_0[21], C_0[1], opts.scheme);
   var tGamma = performance.now() - t1;
 
   /* Six load cases: eps_bar = unit vector along Voigt axis lc */

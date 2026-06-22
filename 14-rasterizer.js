@@ -288,7 +288,7 @@ function buildRawField(family, params, N) {
    code is byte-identical to the pre-fix path — only this Γ
    tensor changes.
    ============================================================ */
-function buildGamma(N, mu0, lam0) {
+function buildGamma(N, mu0, lam0, scheme) {
   var N3 = N * N * N;
   var Gamma = [
     [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)],
@@ -296,6 +296,8 @@ function buildGamma(N, mu0, lam0) {
     [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)]
   ];
   var a =  1.0 / mu0;
+  var WILLOT = (scheme !== 'continuous');   /* default operator is Willot's rotated scheme */
+  var PI_N = Math.PI / N;
   var b = -(lam0 + mu0) / (mu0 * (lam0 + 2 * mu0));
   for (var i = 0; i < N; i++) {
     var ki = i <= N/2 ? i : i - N;
@@ -309,6 +311,17 @@ function buildGamma(N, mu0, lam0) {
         var rk = 1.0 / Math.sqrt(ksq);
         var n0 = ki*rk, n1 = kj*rk, n2 = kk*rk;
         var nv = [n0, n1, n2];
+        if (WILLOT) {
+          /* Willot (2015) rotated finite-difference frequency (see buildGammaFull). */
+          var sx = Math.sin(PI_N*ki), cx = Math.cos(PI_N*ki);
+          var sy = Math.sin(PI_N*kj), cy = Math.cos(PI_N*kj);
+          var sz = Math.sin(PI_N*kk), cz = Math.cos(PI_N*kk);
+          var wx = sx*cy*cz, wy = cx*sy*cz, wz = cx*cy*sz;
+          var wsq = wx*wx + wy*wy + wz*wz;
+          if (wsq < 1e-30) continue;
+          var rw = 1.0 / Math.sqrt(wsq);
+          nv[0] = wx*rw; nv[1] = wy*rw; nv[2] = wz*rw;
+        }
         for (var p = 0; p < 3; p++) {
           for (var q = 0; q < 3; q++) {
             var Gpq = a*(p===q?1:0) + b*nv[p]*nv[q];
