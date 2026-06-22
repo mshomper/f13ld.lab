@@ -875,6 +875,69 @@ function bk_makePrecondScalar(N, mu0) {
   };
 }
 
+/* Γ⁰ reference preconditioner M⁻¹ ≈ K₀⁻¹ — the exact inverse of the
+   homogeneous-reference acoustic (Christoffel) tensor for an isotropic C₀:
+
+     K̂₀(ξ)_ik = μ₀κ²·δ_ik + (λ₀+μ₀)·κ_i κ_k
+     Ĝ₀(ξ)_ik = (1/(μ₀κ²))·[ δ_ik − β·κ̂_i κ̂_k ],   β = (λ₀+μ₀)/(λ₀+2μ₀)
+
+   Unlike the scalar 1/(μ₀κ²) (which is correct only for transverse modes and
+   over-relaxes longitudinal/dilatational modes by (λ₀+2μ₀)/μ₀ ≈ 4×), this
+   couples the three displacement components through κ̂⊗κ̂ and is the literal
+   inverse of applyKcpu's reference part — so for a uniform medium the inner CG
+   converges in one step.  Same integer-κ, per-axis-Nyquist-zero, DC-zero
+   convention as specDeriv (so it is matched to K, NOT Willot-rotated).
+   Does NOT change the converged eigenvalue — only the path. */
+function bk_makePrecondGamma0(N, mu0, lam0) {
+  var N3 = N * N * N, nyq = N >> 1;
+  var beta = (lam0 + mu0) / (lam0 + 2 * mu0);
+  var invMuKsq = new Float64Array(N3);
+  var dirx = new Float64Array(N3), diry = new Float64Array(N3), dirz = new Float64Array(N3);
+  for (var a = 0; a < N; a++) {
+    var ka = (a === nyq) ? 0 : ((a <= N / 2) ? a : a - N);
+    for (var b = 0; b < N; b++) {
+      var kb = (b === nyq) ? 0 : ((b <= N / 2) ? b : b - N);
+      for (var c = 0; c < N; c++) {
+        var kc = (c === nyq) ? 0 : ((c <= N / 2) ? c : c - N);
+        var idx = a * N * N + b * N + c;
+        var ksq = ka * ka + kb * kb + kc * kc;
+        if (ksq > 0) {
+          invMuKsq[idx] = 1 / (mu0 * ksq);
+          var inv = 1 / Math.sqrt(ksq);
+          dirx[idx] = ka * inv; diry[idx] = kb * inv; dirz[idx] = kc * inv;
+        }
+      }
+    }
+  }
+  var bx = new Float64Array(2 * N3), by = new Float64Array(2 * N3), bz = new Float64Array(2 * N3);
+  var lb = new Float64Array(2 * N);
+  return function (flatIn, flatOut) {
+    for (var i = 0; i < N3; i++) {
+      bx[2 * i] = flatIn[i];          bx[2 * i + 1] = 0;
+      by[2 * i] = flatIn[N3 + i];     by[2 * i + 1] = 0;
+      bz[2 * i] = flatIn[2 * N3 + i]; bz[2 * i + 1] = 0;
+    }
+    fft3dCpu(bx, N, false, lb); fft3dCpu(by, N, false, lb); fft3dCpu(bz, N, false, lb);
+    for (var m2 = 0; m2 < N3; m2++) {
+      var f = invMuKsq[m2];
+      if (f === 0) { bx[2*m2]=0;bx[2*m2+1]=0; by[2*m2]=0;by[2*m2+1]=0; bz[2*m2]=0;bz[2*m2+1]=0; continue; }
+      var nx = dirx[m2], ny = diry[m2], nz = dirz[m2];
+      var ur = bx[2*m2],   uyr = by[2*m2],   uzr = bz[2*m2];
+      var ui = bx[2*m2+1], uyi = by[2*m2+1], uzi = bz[2*m2+1];
+      var dotR = nx*ur + ny*uyr + nz*uzr;
+      var dotI = nx*ui + ny*uyi + nz*uzi;
+      bx[2*m2]   = f*(ur  - beta*dotR*nx); by[2*m2]   = f*(uyr - beta*dotR*ny); bz[2*m2]   = f*(uzr - beta*dotR*nz);
+      bx[2*m2+1] = f*(ui  - beta*dotI*nx); by[2*m2+1] = f*(uyi - beta*dotI*ny); bz[2*m2+1] = f*(uzi - beta*dotI*nz);
+    }
+    fft3dCpu(bx, N, true, lb); fft3dCpu(by, N, true, lb); fft3dCpu(bz, N, true, lb);
+    for (var i2 = 0; i2 < N3; i2++) {
+      flatOut[i2]          = bx[2 * i2];
+      flatOut[N3 + i2]     = by[2 * i2];
+      flatOut[2 * N3 + i2] = bz[2 * i2];
+    }
+  };
+}
+
 /* Preconditioned CG: K·x = b on the zero-mean subspace with the Fourier
    preconditioner applyMinv.  Same output contract as bk_cgSolveK (which
    remains the un-preconditioned reference path). */
@@ -950,7 +1013,7 @@ function extractPrestressCPU(solid, C_s, C_v, N, axisVoigt, ws, opts) {
   var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   function applyKflat(xx, out) { bk_flatToField(xx, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); }
-  var applyMinv = bk_makePrecondScalar(N, C_s[21]);   /* μ₀ = solid shear modulus */
+  var applyMinv = (opts && opts.precond === "scalar") ? bk_makePrecondScalar(N, C_s[21]) : bk_makePrecondGamma0(N, C_s[21], C_s[1]);   /* Γ⁰ Christoffel reference (default) */
   var sol = bk_pcgSolveK(applyKflat, applyMinv, rhs, n, N3, opts.cgTol || 1e-10, opts.cgMaxiter || 3000);
 
   /* total strain ε = ε̄ + ε(u′); σ⁰ = C(x):ε */
@@ -1031,7 +1094,7 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
 
   var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
-  var applyMinv = bk_makePrecondScalar(N, C_s[21]);   /* μ₀ = solid shear modulus */
+  var applyMinv = (opts && opts.precond === "scalar") ? bk_makePrecondScalar(N, C_s[21]) : bk_makePrecondGamma0(N, C_s[21], C_s[1]);   /* Γ⁰ Christoffel reference (default) */
 
   var perAxis = [], lambdaCr = Infinity, critAxis = -1, critMode = null, critSbar = 0;
 
