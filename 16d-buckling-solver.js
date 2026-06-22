@@ -874,9 +874,9 @@ BucklingSolverGPU.prototype.pcgSolveK = async function(bBuf, opts) {
   var maxiter = opts.maxiter || 2000;
   var d = this.device;
 
-  /* x = 0 */
+  /* x = 0 — clearBuffer avoids aliasing one buffer as ro+rw in a dispatch */
   var encZ = d.createCommandEncoder();
-  this._axpy3(encZ, -1.0, this.pcgX, this.pcgX);    /* x -= x  ⇒ x = 0 */
+  encZ.clearBuffer(this.pcgX);
   d.queue.submit([encZ.finish()]);
 
   /* r = b; zeroMean(r) */
