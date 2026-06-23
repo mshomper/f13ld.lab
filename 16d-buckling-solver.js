@@ -289,6 +289,17 @@ var BK_XBPY3_WGSL =
 '  y_v4[i] = x_v4[i] + P.alpha * y_v4[i];\n' +
 '}\n';
 
+var BK_SCALE3_WGSL =
+'struct AxP { alpha: f32, total: u32, _p0: u32, _p1: u32 }\n' +
+'@group(0) @binding(0) var<storage, read_write> y_v4: array<vec4<f32>>;\n' +
+'@group(0) @binding(1) var<uniform>             P: AxP;\n' +
+'@compute @workgroup_size(64)\n' +
+'fn bk_scale3(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
+'  let i = gid.x;\n' +
+'  if (i >= P.total) { return; }\n' +
+'  y_v4[i] = P.alpha * y_v4[i];\n' +
+'}\n';
+
 /* bk_dot3_reduce: Σ dot(a.xyz, b.xyz) — one f32 partial per workgroup. */
 var BK_DOT3_WGSL =
 'struct SizeP { total: u32, _p0: u32, _p1: u32, _p2: u32 }\n' +
@@ -423,6 +434,7 @@ BucklingSolverGPU.prototype._buildPipelines = function() {
   this.scLayout  = d.createBindGroupLayout({ entries: [rw(0), uni(1)] });
   this.scPipe    = pipe(this.scLayout, BK_SUBCONST3_WGSL, 'bk_subconst3');
   this.alPipe    = pipe(this.scLayout, BK_ADDLANE_WGSL, 'bk_add_lane');
+  this.sclPipe   = pipe(this.scLayout, BK_SCALE3_WGSL, 'bk_scale3');
 };
 
 BucklingSolverGPU.prototype._allocateBuffers = function() {
@@ -519,6 +531,9 @@ BucklingSolverGPU.prototype._allocateUniforms = function() {
 
   /* add-lane uniform (val/lane written per call — setup-time, not hot path) */
   this.alBuf = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
+
+  /* scale3 uniform (alpha written per call) */
+  this.scaleBuf = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
 };
 
 
@@ -878,6 +893,24 @@ BucklingSolverGPU.prototype._addLane = function(enc, buf, lane, val) {
   this._dispatch(enc, this.alPipe, bg, this.N3, 64);
 };
 
+/* _scale3 — buf.xyz *= s  (own dispatch). */
+BucklingSolverGPU.prototype._scale3 = function(enc, buf, s) {
+  var ab = new ArrayBuffer(16);
+  new Float32Array(ab, 0, 1)[0] = s;
+  new Uint32Array(ab, 4, 1)[0] = this.N3;
+  this.device.queue.writeBuffer(this.scaleBuf, 0, ab);
+  var bg = this.device.createBindGroup({ layout: this.scLayout, entries: [
+    { binding: 0, resource: { buffer: buf } },
+    { binding: 1, resource: { buffer: this.scaleBuf } }
+  ] });
+  this._dispatch(enc, this.sclPipe, bg, this.N3, 64);
+};
+
+/* _norm3 — ‖buf‖₂ over xyz lanes (async). */
+BucklingSolverGPU.prototype._norm3 = async function(buf) {
+  return Math.sqrt(await this._dot3(buf, buf));
+};
+
 
 /* ── flat 3·N³ ↔ vec4 buffer transfer (host side) ────────────── */
 BucklingSolverGPU.prototype._upload3 = function(flat, dstBuf) {
@@ -1045,12 +1078,220 @@ BucklingSolverGPU.prototype.extractPrestressGPU = async function(axisVoigt, opts
 };
 
 
+/* ════════════════════════════════════════════════════════════
+   bucklingEigGPU — block subspace generalized eigensolver for
+   (−K_g) φ = θ K φ, mirroring bk_subspaceGen (16c).  Assumes the
+   pre-stress σ⁰ for the desired axis is already resident in s0{n,s}
+   (call extractPrestressGPU(axis) first).
+
+   GPU-resident: X, Z, V, AV, BV vectors and all matvecs/inner
+   products.  CPU: the small s×s SA/SB matrices and the reduced
+   generalized eigensolve (bk_jacobiSym, reused verbatim).
+
+     applyA(x) = −K_g x   (_applyKg + negate)
+     applyB(x) =  K x     (_applyK)
+     solveB(b) =  K⁻¹ b   (pcgSolveK)
+     project   =  zero-mean
+
+   Returns [{theta, vecBuf}] sorted by θ descending, plus _iters,
+   _converged.  Caller maps θ_max → λ_cr = 1/θ_max.
+   Note: one readback per inner product (correctness-first; batching
+   is a Step-7 optimization).
+   ════════════════════════════════════════════════════════════ */
+BucklingSolverGPU.prototype.bucklingEigGPU = async function(m, opts) {
+  opts = opts || {};
+  var d = this.device, N3 = this.N3, V4 = this.v4Size, BU = GPUBufferUsage;
+  var iters = opts.eigIters || 60;
+  var tol = (opts.eigTol != null) ? opts.eigTol : 1e-5;
+  var cgTol = (opts.cgTol != null) ? opts.cgTol : 1e-5;
+  var cgMaxiter = opts.cgMaxiter || 2000;
+  var self = this;
+
+  function vbuf() { return d.createBuffer({ size: V4, usage: BU.STORAGE | BU.COPY_SRC | BU.COPY_DST }); }
+  var pool = [];
+  function take() { var b = vbuf(); pool.push(b); return b; }
+  function freeAll() { for (var i = 0; i < pool.length; i++) pool[i].destroy(); pool = []; }
+
+  /* matvec wrappers (each its own encoder + submit, so results are
+     readable by the dot products that follow) */
+  async function applyA(inBuf, outBuf) {                 /* −K_g */
+    var e = d.createCommandEncoder();
+    self._applyKg(e, inBuf, outBuf);
+    self._scale3(e, outBuf, -1.0);
+    d.queue.submit([e.finish()]);
+  }
+  async function applyB(inBuf, outBuf) {                 /* K */
+    var e = d.createCommandEncoder();
+    self._applyK(e, inBuf, outBuf);
+    d.queue.submit([e.finish()]);
+  }
+  async function solveB(bBuf, outBuf) {                  /* K⁻¹ */
+    await self.pcgSolveK(bBuf, { tol: cgTol, maxiter: cgMaxiter });
+    var e = d.createCommandEncoder();
+    self._copy3(e, self.pcgX, outBuf);
+    d.queue.submit([e.finish()]);
+  }
+
+  /* GPU Gram-Schmidt: orthonormalize a list of buffers in place, return
+     the surviving subset (mirrors bk_orthonormalize). */
+  async function orthonormalize(vecs) {
+    var out = [];
+    for (var i = 0; i < vecs.length; i++) {
+      var v = vecs[i];
+      for (var j = 0; j < out.length; j++) {
+        var dd = await self._dot3(out[j], v);
+        var e = d.createCommandEncoder();
+        self._axpy3(e, -dd, out[j], v);                  /* v -= (out_j·v) out_j */
+        d.queue.submit([e.finish()]);
+      }
+      var nrm = await self._norm3(v);
+      if (nrm > 1e-10) {
+        var e2 = d.createCommandEncoder();
+        self._scale3(e2, v, 1.0 / nrm);
+        d.queue.submit([e2.finish()]);
+        out.push(v);
+      }
+    }
+    return out;
+  }
+
+  /* X = m random zero-mean vectors */
+  function mulberry32(seed) { return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }; }
+  var rng = mulberry32(20260622);
+  var X = [];
+  for (var c = 0; c < m; c++) {
+    var xb = take();
+    var flat = new Float64Array(3 * N3);
+    for (var fi = 0; fi < 3 * N3; fi++) flat[fi] = rng() * 2 - 1;
+    this._upload3(flat, xb);
+    await this._zeroMean3(xb);
+    X.push(xb);
+  }
+
+  var prevTheta = null, converged = false, lastIters = 0;
+
+  for (var it = 0; it < iters; it++) {
+    lastIters = it + 1;
+
+    /* power step Z = B⁻¹ A X */
+    var Z = [];
+    for (var cc = 0; cc < m; cc++) {
+      var tmp = take();
+      await applyA(X[cc], tmp);
+      var z = take();
+      await solveB(tmp, z);
+      await this._zeroMean3(z);
+      Z.push(z);
+      tmp.destroy(); pool.splice(pool.indexOf(tmp), 1);
+    }
+
+    /* trial subspace V = orthonormalize(X ∪ Z) */
+    var V = await orthonormalize(X.concat(Z));
+    var s = V.length;
+
+    /* AV, BV and the reduced SA, SB */
+    var AV = [], BV = [];
+    for (var j = 0; j < s; j++) { var av = take(); var bv = take(); await applyA(V[j], av); await applyB(V[j], bv); AV.push(av); BV.push(bv); }
+    var SA = new Float64Array(s * s), SB = new Float64Array(s * s);
+    for (var ii = 0; ii < s; ii++) for (var jj = 0; jj < s; jj++) {
+      SA[ii * s + jj] = await this._dot3(V[ii], AV[jj]);
+      SB[ii * s + jj] = await this._dot3(V[ii], BV[jj]);
+    }
+    for (var a2 = 0; a2 < s; a2++) for (var b2 = a2 + 1; b2 < s; b2++) {
+      var sma = 0.5 * (SA[a2 * s + b2] + SA[b2 * s + a2]); SA[a2 * s + b2] = sma; SA[b2 * s + a2] = sma;
+      var smb = 0.5 * (SB[a2 * s + b2] + SB[b2 * s + a2]); SB[a2 * s + b2] = smb; SB[b2 * s + a2] = smb;
+    }
+
+    /* reduced generalized eigensolve (CPU, reuses bk_jacobiSym) */
+    var eigB = bk_jacobiSym(SB, s, 200, 1e-15);
+    var maxB = 0; for (var db = 0; db < s; db++) if (eigB.values[db] > maxB) maxB = eigB.values[db];
+    var keep = []; for (var dk = 0; dk < s; dk++) if (eigB.values[dk] > 1e-9 * maxB) keep.push(dk);
+    var sk = keep.length;
+    if (sk === 0) { /* free iteration buffers */ for (var z0 = 0; z0 < Z.length; z0++) {} break; }
+    var T = new Float64Array(s * sk);
+    for (var ti = 0; ti < s; ti++) for (var tp = 0; tp < sk; tp++) T[ti * sk + tp] = eigB.vectors[ti * s + keep[tp]] / Math.sqrt(eigB.values[keep[tp]]);
+    var SAT = new Float64Array(s * sk);
+    for (var ri = 0; ri < s; ri++) for (var rp = 0; rp < sk; rp++) { var acc = 0; for (var rj = 0; rj < s; rj++) acc += SA[ri * s + rj] * T[rj * sk + rp]; SAT[ri * sk + rp] = acc; }
+    var SAr = new Float64Array(sk * sk);
+    for (var pp = 0; pp < sk; pp++) for (var qq = 0; qq < sk; qq++) { var acc2 = 0; for (var pi2 = 0; pi2 < s; pi2++) acc2 += T[pi2 * sk + pp] * SAT[pi2 * sk + qq]; SAr[pp * sk + qq] = acc2; }
+    for (var sa = 0; sa < sk; sa++) for (var sb2 = sa + 1; sb2 < sk; sb2++) { var sm = 0.5 * (SAr[sa * sk + sb2] + SAr[sb2 * sk + sa]); SAr[sa * sk + sb2] = sm; SAr[sb2 * sk + sa] = sm; }
+    var eigA = bk_jacobiSym(SAr, sk, 200, 1e-15);
+    var order = []; for (var o = 0; o < sk; o++) order.push(o);
+    order.sort(function (p, q) { return eigA.values[q] - eigA.values[p]; });
+
+    /* reconstruct top-m Ritz vectors:  xc = Σ_j (T·z)_j V[j] */
+    var take2 = Math.min(m, sk);
+    var newX = [], topThetas = [];
+    for (var c2 = 0; c2 < take2; c2++) {
+      var oc = order[c2];
+      topThetas.push(eigA.values[oc]);
+      var yv = new Float64Array(s);
+      for (var yi = 0; yi < s; yi++) { var acc3 = 0; for (var yp = 0; yp < sk; yp++) acc3 += T[yi * sk + yp] * eigA.vectors[yp * sk + oc]; yv[yi] = acc3; }
+      var xc = take();
+      var ez = d.createCommandEncoder(); ez.clearBuffer(xc); d.queue.submit([ez.finish()]);
+      for (var jv = 0; jv < s; jv++) {
+        var e3 = d.createCommandEncoder();
+        this._axpy3(e3, yv[jv], V[jv], xc);
+        d.queue.submit([e3.finish()]);
+      }
+      await this._zeroMean3(xc);
+      newX.push(xc);
+    }
+
+    /* recycle all per-iteration buffers except the new X.  V aliases
+       X/Z buffers in place (GS is in-place), so sweep the unique pool
+       rather than a concatenated list to avoid double-destroy. */
+    var keepSet = newX;
+    var newPool = [];
+    for (var pb = 0; pb < pool.length; pb++) {
+      if (keepSet.indexOf(pool[pb]) >= 0) newPool.push(pool[pb]);
+      else pool[pb].destroy();
+    }
+    pool = newPool;
+    X = newX;
+
+    if (prevTheta && prevTheta.length === topThetas.length) {
+      var maxd = 0;
+      for (var kk = 0; kk < topThetas.length; kk++) {
+        var rel = Math.abs(topThetas[kk] - prevTheta[kk]) / Math.max(Math.abs(topThetas[kk]), 1e-30);
+        if (rel > maxd) maxd = rel;
+      }
+      if (maxd < tol) { converged = true; prevTheta = topThetas; break; }
+    }
+    prevTheta = topThetas;
+  }
+
+  /* final Rayleigh quotients θ = ⟨x,Ax⟩/⟨x,Bx⟩ */
+  var outPairs = [];
+  var ta = take(), tb = take();
+  for (var cf = 0; cf < X.length; cf++) {
+    await applyA(X[cf], ta);
+    await applyB(X[cf], tb);
+    var num = await this._dot3(X[cf], ta);
+    var den = await this._dot3(X[cf], tb);
+    var theta = num / den;
+    var flatVec = await this._readback3(X[cf]);
+    outPairs.push({ theta: theta, vec: flatVec });
+  }
+  outPairs.sort(function (p, q) { return q.theta - p.theta; });
+  outPairs._iters = lastIters; outPairs._converged = converged;
+
+  freeAll();
+  return outPairs;
+};
+
+
 /* ── Cleanup (FFT plan owned externally — not destroyed here) ── */
 BucklingSolverGPU.prototype.destroy = function() {
   var bufs = [this.solidBuf, this.s0n, this.s0s, this.epsN, this.epsS, this.sigN, this.sigS,
               this.gV4, this.fV4, this.cA, this.ohat, this.pcgX, this.pcgR, this.pcgZ,
               this.pcgP, this.pcgAp, this.partF, this.rbF, this.part4, this.rb4,
-              this.stiffBuf, this.sizeBuf, this.gammaBuf, this.axBuf, this.xbBuf, this.subBuf, this.alBuf];
+              this.stiffBuf, this.sizeBuf, this.gammaBuf, this.axBuf, this.xbBuf, this.subBuf, this.alBuf, this.scaleBuf];
   bufs = bufs.concat(this.uhat, this.hat6, this.exBufs, this.wlPos, this.wlNeg, this.ikBufs);
   for (var i = 0; i < bufs.length; i++) { if (bufs[i] && bufs[i].destroy) bufs[i].destroy(); }
 };
@@ -1248,10 +1489,28 @@ async function runBucklingGPUTest(N) {
     pass: preFieldErr < 5e-3 && preSbarErr < 5e-3
   };
 
+  /* ── P6: buckling eigenvalue parity (zz axis) ──
+     λ_cr = 1/θ_max for the (−K_g, K) pencil.  GPU eigensolver vs the CPU
+     bucklingFromSolid on the same Schwarz-P cell.  Eigenvalues are the
+     hardest gate (f32 + iterative), so the band is looser (2%). */
+  var mBlk = 6;
+  var cpuBk = bucklingFromSolid(solid, C_s, C_v, N, { axes: [2], block: mBlk, eigIters: 80, eigTol: 1e-9, cgTol: 1e-9, cgMaxiter: 3000 });
+  var lamCpu = cpuBk.perAxis[0].lambda;
+  await solver.extractPrestressGPU(2, { cgTol: 1e-5, cgMaxiter: 3000 });
+  var pairs = await solver.bucklingEigGPU(mBlk, { eigIters: 60, eigTol: 1e-5, cgTol: 1e-5, cgMaxiter: 2000 });
+  var lamGpu = Infinity;
+  for (var pgi = 0; pgi < pairs.length; pgi++) { if (pairs[pgi].theta > 1e-9) { var lam = 1 / pairs[pgi].theta; if (lam < lamGpu) lamGpu = lam; } }
+  var lamErr = Math.abs(lamGpu - lamCpu) / Math.max(Math.abs(lamCpu), 1e-30);
+  gates.bucklingEig = {
+    lambdaGPU: lamGpu, lambdaCPU: lamCpu, relErr: lamErr,
+    eigItersGPU: pairs._iters, convergedGPU: pairs._converged,
+    pass: isFinite(lamErr) && lamErr < 2e-2
+  };
+
   solver.destroy();
 
   var passed = gates.applyK.pass && gates.applyKg.pass && gates.precondGamma0.pass &&
-               gates.pcgSolveK.pass && gates.prestress.pass;
+               gates.pcgSolveK.pass && gates.prestress.pass && gates.bucklingEig.pass;
   var report = { passed: passed, gates: gates, N: N };
   if (typeof console !== 'undefined') {
     console.log('[runBucklingGPUTest] N=' + N + ' → ' + (passed ? 'PASS' : 'FAIL'));
