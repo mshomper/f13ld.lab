@@ -124,7 +124,7 @@ function statsForDesign(d, mode){
     }
     var note = (bk && bk.skip_reason) ? bk.skip_reason : (bk && bk.error) ? bk.error : (LAB_STATE.runHasCompleted ? 'enable Buckling + Run' : 'not run');
     return [
-      { lbl:'Buckling Strength',       val:'—',   delta:[note, 'neut'] },
+      { lbl:'Buckling Strength',       val:'—',   delta:[note, (bk && bk.skip_reason) ? 'warn' : 'neut'] },
       { lbl:'Buckling-to-Yield Ratio', val:'—',   delta:['—', 'neut'] },
       loadCapacityCell(d),
       { lbl:'Critical Load Factor',    val:'—',   delta:['—', 'neut'] },

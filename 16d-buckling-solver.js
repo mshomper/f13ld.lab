@@ -2057,6 +2057,7 @@ async function computeBuckling(recipe, N, opts, onProgress) {
 
 /* Expose for the in-browser console / Push-2 wiring. */
 if (typeof window !== 'undefined') {
+  window.BUCKLE_GPU = true;   /* GPU buckling primary; set false in console to A/B against the CPU worker pool */
   window.BucklingSolverGPU = BucklingSolverGPU;
   window.runBucklingGPUTest = runBucklingGPUTest;
   window.runBucklingEigGPUTest = runBucklingEigGPUTest;

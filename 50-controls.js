@@ -20,7 +20,7 @@ var GRID_STATE = {
    than the GPU elastic/thermal path — ~per-axis seconds at N=8.  Its
    resolution is configured separately from the main Grid pill. */
 var BUCKLE_STATE = {
-  N: 32             // 8 (fast) | 16 | 32 (resolves thin struts)
+  N: 32             // 16 | 32 | 64 (resolves thin-wall shells); radix-2 FFT -> powers of two only
 };
 
 /* Transient per-design buckling results (id -> { lambda_cr, pcr, pcr_py,
@@ -123,7 +123,7 @@ function paintGridPill(){
    BUCKLE GRID PILL — cycles the CPU buckling resolution 8 ⇄ 16.
    ============================================================ */
 function onBucklePillClick(){
-  BUCKLE_STATE.N = (BUCKLE_STATE.N === 8) ? 16 : (BUCKLE_STATE.N === 16) ? 32 : 8;
+  BUCKLE_STATE.N = (BUCKLE_STATE.N === 16) ? 32 : (BUCKLE_STATE.N === 32) ? 64 : 16;
   paintBucklePill();
   recomputeEstimate();
 }
@@ -139,7 +139,7 @@ function paintBucklePill(){
    plus the load-axis dropdown handler.
    ============================================================ */
 function onNonlinPillClick(){
-  NONLIN_STATE.N = (NONLIN_STATE.N === 8) ? 16 : (NONLIN_STATE.N === 16) ? 32 : 8;
+  NONLIN_STATE.N = (NONLIN_STATE.N === 16) ? 32 : (NONLIN_STATE.N === 32) ? 64 : 16;
   paintNonlinPill();
   recomputeEstimate();
 }
@@ -546,7 +546,7 @@ async function runRealSweep(N, runToken){
       (function(design, recipe){
         RUN_STATE.activeWorkers++;            /* tie-up #3 — live-activity flag up while this axis-set is in flight */
         jobs.push(
-          computeBucklingCPU(recipe, bN, { pruneLargest: GEOM_STATE.pruneLargest }, function(p){
+          (typeof computeBuckling === 'function' ? computeBuckling : computeBucklingCPU)(recipe, bN, { pruneLargest: GEOM_STATE.pruneLargest }, function(p){
             doneUnits++; bumpProgress();
             paintRunStatus('<span class="v">Buckling</span> · ' + (design.label || design.id) +
                            ' · ' + p.axis + ' (' + p.done + '/' + p.total + ') · N=' + bN);
@@ -600,6 +600,15 @@ async function runRealSweep(N, runToken){
   var elapsed = ((performance.now()-t0)/1000).toFixed(1);
   var msg = '<span class="v">Run complete</span> · ' + elapsed + ' s';
   if (notWired.length) msg += ' · <span class="warn">' + notWired.join(' / ') + ' not yet wired</span>';
+  if (doBuckle && nBuckleDesigns > 0){
+    var bkSkipped = [];
+    for (var bsk = 0; bsk < nDesigns; bsk++){
+      if (!recipes[bsk]) continue;
+      var br = BUCKLE_BY_DESIGN[designs[bsk].id];
+      if (br && br.skip_reason) bkSkipped.push(designs[bsk].label || designs[bsk].id);
+    }
+    if (bkSkipped.length) msg += ' · <span class="warn">Buckling under-resolved — raise grid: ' + bkSkipped.join(', ') + '</span>';
+  }
   paintRunStatus(msg);
   finishRun(runToken);
 }
