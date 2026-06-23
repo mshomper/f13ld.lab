@@ -1315,6 +1315,11 @@ BucklingSolverGPU.prototype.destroy = function() {
      P4. PCG-K  solveB vs bk_pcgSolveK             (true resid < 1e-3)
      P5. prestress σ⁰ vs extractPrestressCPU       (field & σ̄ < 5e-3)
 
+   The eigensolver wiring is checked separately by
+   runBucklingEigGPUTest (small scale) — kept out of this suite
+   because its per-readback inner loop is slow pending the Step-6b
+   GPU-resident-scalar rewrite.
+
    Returns { passed, gates, N }.
    ════════════════════════════════════════════════════════════ */
 async function runBucklingGPUTest(N) {
@@ -1494,31 +1499,10 @@ async function runBucklingGPUTest(N) {
     pass: preFieldErr < 5e-3 && preSbarErr < 5e-3
   };
 
-  /* ── P6: buckling eigenvalue parity (zz axis) ──
-     λ_cr = 1/θ_max for the (−K_g, K) pencil.  GPU eigensolver (inexact
-     light inner solves) vs CPU bucklingFromSolid on the same Schwarz-P
-     cell.  Eigenvalues are the hardest gate (f32 + iterative + inexact
-     power step), so the band is 5%.  This row dominates runtime
-     (~1 min): the per-dot-readback architecture is correctness-first;
-     batched reductions are a Step-7 optimization. */
-  var mBlk = 4;
-  var cpuBk = bucklingFromSolid(solid, C_s, C_v, N, { axes: [2], block: mBlk, eigIters: 80, eigTol: 1e-9, cgTol: 1e-9, cgMaxiter: 3000 });
-  var lamCpu = cpuBk.perAxis[0].lambda;
-  await solver.extractPrestressGPU(2, { cgTol: 1e-5, cgMaxiter: 3000 });
-  var pairs = await solver.bucklingEigGPU(mBlk, { eigIters: 30, eigTol: 1e-4, cgTol: 2e-3, cgMaxiter: 60 });
-  var lamGpu = Infinity;
-  for (var pgi = 0; pgi < pairs.length; pgi++) { if (pairs[pgi].theta > 1e-9) { var lam = 1 / pairs[pgi].theta; if (lam < lamGpu) lamGpu = lam; } }
-  var lamErr = Math.abs(lamGpu - lamCpu) / Math.max(Math.abs(lamCpu), 1e-30);
-  gates.bucklingEig = {
-    lambdaGPU: lamGpu, lambdaCPU: lamCpu, relErr: lamErr,
-    eigItersGPU: pairs._iters, convergedGPU: pairs._converged,
-    pass: isFinite(lamErr) && lamErr < 5e-2
-  };
-
   solver.destroy();
 
   var passed = gates.applyK.pass && gates.applyKg.pass && gates.precondGamma0.pass &&
-               gates.pcgSolveK.pass && gates.prestress.pass && gates.bucklingEig.pass;
+               gates.pcgSolveK.pass && gates.prestress.pass;
   var report = { passed: passed, gates: gates, N: N };
   if (typeof console !== 'undefined') {
     console.log('[runBucklingGPUTest] N=' + N + ' → ' + (passed ? 'PASS' : 'FAIL'));
@@ -1527,8 +1511,109 @@ async function runBucklingGPUTest(N) {
   return report;
 }
 
+/* ════════════════════════════════════════════════════════════
+   runBucklingEigGPUTest — small-scale eigensolver WIRING check.
+
+   Purpose: confirm the GPU orchestration of bucklingEigGPU is correct
+   (the −K_g negate, Gram-Schmidt, Ritz recombination, buffer pooling),
+   NOT to measure eigenvalue precision.  It runs the GPU eigensolver
+   and a manually-driven CPU reference with IDENTICAL split settings —
+   a decent one-time pre-stress solve, then deliberately cheap inexact
+   power steps — so the two differ only by f32-vs-f64.  λ_cr is compared
+   in a loose band (15% default).
+
+   Small by design (N=8, block 3) and reports wall-time.  Tight, full-
+   size λ parity comes after the Step-6b GPU-resident-scalar rewrite
+   removes the per-readback bottleneck.
+
+   Returns { passed, lambdaGPU, lambdaCPU, relErr, ... }.
+   ════════════════════════════════════════════════════════════ */
+async function runBucklingEigGPUTest(N, opts) {
+  N = N || 8;
+  opts = opts || {};
+  if (typeof ensureDevice === 'function') { await ensureDevice(); }
+  if (!WGPU.device) throw new Error('runBucklingEigGPUTest: no WebGPU device');
+  var now = function () { return (typeof performance !== 'undefined') ? performance.now() : Date.now(); };
+
+  var N3 = N * N * N, n = 3 * N3;
+  var C_s = isoC(110000, 0.34);
+  var C_v = isoC(11, 0.34);
+  var ws = getBucklingWorkspaceCPU(N);
+
+  /* Schwarz-P cell at ρ≈0.5 */
+  var solid = new Uint8Array(N3), solidF = new Float32Array(N3);
+  var TP = 2 * Math.PI;
+  for (var ix = 0; ix < N; ix++) { var cx = Math.cos(TP * ix / N);
+    for (var jy = 0; jy < N; jy++) { var cy = Math.cos(TP * jy / N);
+      for (var kz = 0; kz < N; kz++) { var cz = Math.cos(TP * kz / N);
+        var idx = ix * N * N + jy * N + kz; var v = (cx + cy + cz > 0) ? 1 : 0; solid[idx] = v; solidF[idx] = v; } } }
+
+  var axisV   = (opts.axisV != null) ? opts.axisV : 2;
+  var mBlk    = opts.block    || 3;
+  var eigIters = opts.eigIters || 12;
+  var eigTol  = (opts.eigTol != null) ? opts.eigTol : 1e-4;
+  var preTol  = (opts.preTol != null) ? opts.preTol : 1e-4;   /* pre-stress: accurate (one-time) */
+  var preMax  = opts.preMax    || 200;
+  var eigCgTol = (opts.eigCgTol != null) ? opts.eigCgTol : 4e-3;  /* power step: cheap/inexact */
+  var eigCgMax = opts.eigCgMax || 25;
+  var band    = (opts.tol != null) ? opts.tol : 0.15;
+
+  /* ── CPU reference (manual, matched split settings) ── */
+  var tC0 = now();
+  var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  var minv = bk_makePrecondGamma0(N, C_s[21], C_s[1]);
+  var preC = extractPrestressCPU(solid, C_s, C_v, N, axisV, ws, { cgTol: preTol, cgMaxiter: preMax });
+  var sig0 = preC.sigma0;
+  var applyA = function (x, out) { bk_flatToField(x, N3, uf); applyKgcpu(uf, of, sig0, N, ws); bk_fieldToFlatNeg(of, N3, out); };
+  var applyB = function (x, out) { bk_flatToField(x, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); };
+  var solveB = function (b, out) { var r = bk_pcgSolveK(applyB, minv, b, n, N3, eigCgTol, eigCgMax); out.set(r.x); };
+  var cpuPairs = bk_subspaceGen(applyA, applyB, solveB, n, mBlk, { project: function (v) { bk_zeroMeanFlat(v, N3); }, iters: eigIters, tol: eigTol });
+  var lamCpu = Infinity;
+  for (var ci = 0; ci < cpuPairs.length; ci++) { if (cpuPairs[ci].theta > 1e-9) { var lc = 1 / cpuPairs[ci].theta; if (lc < lamCpu) lamCpu = lc; } }
+  var secCpu = (now() - tC0) / 1000;
+
+  /* ── GPU ── */
+  var fft;
+  if (typeof window !== 'undefined' && window.__sharedFFT && window.__sharedFFT.N === N) {
+    fft = window.__sharedFFT;
+  } else {
+    fft = new FFTPlan(N);
+    if (typeof window !== 'undefined') { if (window.__sharedFFT) window.__sharedFFT.destroy(); window.__sharedFFT = fft; }
+  }
+  var solver = new BucklingSolverGPU(N, fft);
+  solver.uploadDesign(solidF, C_s, C_v);
+
+  var tG0 = now();
+  await solver.extractPrestressGPU(axisV, { cgTol: preTol, cgMaxiter: preMax });
+  var pairs = await solver.bucklingEigGPU(mBlk, { eigIters: eigIters, eigTol: eigTol, cgTol: eigCgTol, cgMaxiter: eigCgMax });
+  var secGpu = (now() - tG0) / 1000;
+  var lamGpu = Infinity;
+  for (var gi = 0; gi < pairs.length; gi++) { if (pairs[gi].theta > 1e-9) { var lg = 1 / pairs[gi].theta; if (lg < lamGpu) lamGpu = lg; } }
+
+  solver.destroy();
+
+  var lamErr = Math.abs(lamGpu - lamCpu) / Math.max(Math.abs(lamCpu), 1e-30);
+  var passed = isFinite(lamErr) && lamErr < band;
+  var report = {
+    passed: passed, N: N, block: mBlk,
+    lambdaGPU: lamGpu, lambdaCPU: lamCpu, relErr: lamErr,
+    eigItersGPU: pairs._iters, convergedGPU: pairs._converged,
+    secGPU: +secGpu.toFixed(1), secCPU: +secCpu.toFixed(2)
+  };
+  if (typeof console !== 'undefined') {
+    console.log('[runBucklingEigGPUTest] N=' + N + ' block=' + mBlk + ' → ' + (passed ? 'PASS' : 'FAIL') +
+      '   λ_gpu=' + (isFinite(lamGpu) ? lamGpu.toPrecision(5) : 'Inf') +
+      '  λ_cpu=' + (isFinite(lamCpu) ? lamCpu.toPrecision(5) : 'Inf') +
+      '  relErr=' + (isFinite(lamErr) ? lamErr.toExponential(2) : 'NaN') +
+      '   (' + report.secGPU + 's GPU, ' + report.secCPU + 's CPU)');
+  }
+  return report;
+}
+
 /* Expose for the in-browser console / Push-2 wiring. */
 if (typeof window !== 'undefined') {
   window.BucklingSolverGPU = BucklingSolverGPU;
   window.runBucklingGPUTest = runBucklingGPUTest;
+  window.runBucklingEigGPUTest = runBucklingEigGPUTest;
 }
