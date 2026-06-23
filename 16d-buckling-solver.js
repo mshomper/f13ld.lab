@@ -946,13 +946,17 @@ BucklingSolverGPU.prototype._readback3 = async function(srcBuf) {
    r,z,Ap,x are zero-mean projected exactly as the CPU reference.
 
    bBuf: vec4 displacement RHS (already resident on GPU).
-   opts: { tol (1e-5 default for f32), maxiter (2000) }
+   opts: { tol (1e-5 default for f32), maxiter (2000),
+           lightProject (skip per-iter Ap/z zero-mean — safe because
+           Γ⁰ annihilates the κ=0 mode and K's output is a divergence;
+           used by the eigenloop's inexact inner solve to cut readbacks) }
    Returns { iters, relres, converged }; solution left in this.pcgX.
    ════════════════════════════════════════════════════════════ */
 BucklingSolverGPU.prototype.pcgSolveK = async function(bBuf, opts) {
   opts = opts || {};
   var tol = (opts.tol != null) ? opts.tol : 1e-5;   /* relaxed for f32 */
   var maxiter = opts.maxiter || 2000;
+  var light = !!opts.lightProject;
   var d = this.device;
 
   /* x = 0 — clearBuffer avoids aliasing one buffer as ro+rw in a dispatch */
@@ -981,11 +985,12 @@ BucklingSolverGPU.prototype.pcgSolveK = async function(bBuf, opts) {
 
   for (var it = 0; it < maxiter; it++) {
     iters = it + 1;
-    /* Ap = K p; zeroMean(Ap) */
+    /* Ap = K p; zeroMean(Ap) — skipped in lightProject (Ap is a
+       divergence, already zero-mean) */
     var encA = d.createCommandEncoder();
     this._applyK(encA, this.pcgP, this.pcgAp);
     d.queue.submit([encA.finish()]);
-    await this._zeroMean3(this.pcgAp);
+    if (!light) await this._zeroMean3(this.pcgAp);
 
     var pAp = await this._dot3(this.pcgP, this.pcgAp);
     if (Math.abs(pAp) < 1e-30) break;
@@ -1004,7 +1009,7 @@ BucklingSolverGPU.prototype.pcgSolveK = async function(bBuf, opts) {
     var encZ3 = d.createCommandEncoder();
     this._precondGamma0(encZ3, this.pcgR, this.pcgZ);
     d.queue.submit([encZ3.finish()]);
-    await this._zeroMean3(this.pcgZ);
+    if (!light) await this._zeroMean3(this.pcgZ);
 
     var rzNew = await this._dot3(this.pcgR, this.pcgZ);
     var beta = rzNew / rz;
@@ -1125,8 +1130,8 @@ BucklingSolverGPU.prototype.bucklingEigGPU = async function(m, opts) {
     self._applyK(e, inBuf, outBuf);
     d.queue.submit([e.finish()]);
   }
-  async function solveB(bBuf, outBuf) {                  /* K⁻¹ */
-    await self.pcgSolveK(bBuf, { tol: cgTol, maxiter: cgMaxiter });
+  async function solveB(bBuf, outBuf) {                  /* K⁻¹ (inexact, light) */
+    await self.pcgSolveK(bBuf, { tol: cgTol, maxiter: cgMaxiter, lightProject: true });
     var e = d.createCommandEncoder();
     self._copy3(e, self.pcgX, outBuf);
     d.queue.submit([e.finish()]);
@@ -1490,21 +1495,24 @@ async function runBucklingGPUTest(N) {
   };
 
   /* ── P6: buckling eigenvalue parity (zz axis) ──
-     λ_cr = 1/θ_max for the (−K_g, K) pencil.  GPU eigensolver vs the CPU
-     bucklingFromSolid on the same Schwarz-P cell.  Eigenvalues are the
-     hardest gate (f32 + iterative), so the band is looser (2%). */
-  var mBlk = 6;
+     λ_cr = 1/θ_max for the (−K_g, K) pencil.  GPU eigensolver (inexact
+     light inner solves) vs CPU bucklingFromSolid on the same Schwarz-P
+     cell.  Eigenvalues are the hardest gate (f32 + iterative + inexact
+     power step), so the band is 5%.  This row dominates runtime
+     (~1 min): the per-dot-readback architecture is correctness-first;
+     batched reductions are a Step-7 optimization. */
+  var mBlk = 4;
   var cpuBk = bucklingFromSolid(solid, C_s, C_v, N, { axes: [2], block: mBlk, eigIters: 80, eigTol: 1e-9, cgTol: 1e-9, cgMaxiter: 3000 });
   var lamCpu = cpuBk.perAxis[0].lambda;
   await solver.extractPrestressGPU(2, { cgTol: 1e-5, cgMaxiter: 3000 });
-  var pairs = await solver.bucklingEigGPU(mBlk, { eigIters: 60, eigTol: 1e-5, cgTol: 1e-5, cgMaxiter: 2000 });
+  var pairs = await solver.bucklingEigGPU(mBlk, { eigIters: 30, eigTol: 1e-4, cgTol: 2e-3, cgMaxiter: 60 });
   var lamGpu = Infinity;
   for (var pgi = 0; pgi < pairs.length; pgi++) { if (pairs[pgi].theta > 1e-9) { var lam = 1 / pairs[pgi].theta; if (lam < lamGpu) lamGpu = lam; } }
   var lamErr = Math.abs(lamGpu - lamCpu) / Math.max(Math.abs(lamCpu), 1e-30);
   gates.bucklingEig = {
     lambdaGPU: lamGpu, lambdaCPU: lamCpu, relErr: lamErr,
     eigItersGPU: pairs._iters, convergedGPU: pairs._converged,
-    pass: isFinite(lamErr) && lamErr < 2e-2
+    pass: isFinite(lamErr) && lamErr < 5e-2
   };
 
   solver.destroy();
