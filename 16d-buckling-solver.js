@@ -1074,12 +1074,20 @@ async function runBucklingGPUTest(N) {
   var eP = relErr(zPgpu, zPcpu);
   gates.precondGamma0 = { relErr: eP, pass: eP < 1e-3 };
 
-  /* ── P4: PCG-K solveB parity ── */
-  var bV = randField3(44);
+  /* ── P4: PCG-K solveB parity ──
+     Manufactured RHS: b = K·u_ref for random u_ref.  This guarantees b
+     is in the range of K and free of the Nyquist/checkerboard modes that
+     specDeriv annihilates — without it, an arbitrary random b leaves a
+     permanent un-reducible residual (CG plateaus at the annihilated-mode
+     energy fraction, regardless of geometry). */
   var applyKflat = function (xx, out) {
     var uf = flatToField(xx), of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
     applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out);
   };
+  var uRef = randField3(44);
+  var bV = new Float64Array(3 * N3);
+  applyKflat(uRef, bV);                                /* b = K·u_ref (in range) */
+  bk_zeroMeanFlat(bV, N3);
   var solCpu = bk_pcgSolveK(applyKflat, minv, bV, 3 * N3, N3, 1e-9, 2000);
   var bBufGpu = solver.gV4;                            /* reuse gV4 as RHS scratch */
   solver._upload3(bV, bBufGpu);
