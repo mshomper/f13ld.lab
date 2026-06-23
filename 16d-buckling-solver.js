@@ -300,6 +300,86 @@ var BK_SCALE3_WGSL =
 '  y_v4[i] = P.alpha * y_v4[i];\n' +
 '}\n';
 
+/* ─── GPU-resident scalar path (Step 6b) ─────────────────────
+   Scalars live in a small GPU buffer `sclr` (slots: 0=rz, 1=pAp,
+   2=rr, 3=alpha, 4=-alpha, 5=rzNew, 6=beta).  Dots write a slot,
+   a 1-thread kernel does the divisions, and the BLAS reads its
+   coefficient from a slot — so a CG iteration enqueues with no
+   CPU readback.  Convergence is checked by reading slot 2 only
+   every few iterations. */
+
+/* bk_dot3_r: single-workgroup grid-stride dot → sclr[slot]. */
+var BK_DOT3_R_WGSL =
+'struct DotRP { total: u32, slot: u32, _p0: u32, _p1: u32 }\n' +
+'@group(0) @binding(0) var<storage, read>       a_v4: array<vec4<f32>>;\n' +
+'@group(0) @binding(1) var<storage, read>       b_v4: array<vec4<f32>>;\n' +
+'@group(0) @binding(2) var<storage, read_write> sclr: array<f32>;\n' +
+'@group(0) @binding(3) var<uniform>             P: DotRP;\n' +
+'var<workgroup> sdata: array<f32, 256>;\n' +
+'@compute @workgroup_size(256)\n' +
+'fn bk_dot3_r(@builtin(local_invocation_id) lid: vec3<u32>) {\n' +
+'  let tid = lid.x;\n' +
+'  var s: f32 = 0.0;\n' +
+'  var i: u32 = tid;\n' +
+'  loop { if (i >= P.total) { break; } s = s + dot(a_v4[i].xyz, b_v4[i].xyz); i = i + 256u; }\n' +
+'  sdata[tid] = s;\n' +
+'  workgroupBarrier();\n' +
+'  var stride: u32 = 128u;\n' +
+'  loop {\n' +
+'    if (tid < stride) { sdata[tid] = sdata[tid] + sdata[tid + stride]; }\n' +
+'    workgroupBarrier();\n' +
+'    if (stride == 1u) { break; }\n' +
+'    stride = stride >> 1u;\n' +
+'  }\n' +
+'  if (tid == 0u) { sclr[P.slot] = sdata[0]; }\n' +
+'}\n';
+
+/* bk_scalar_op: 1-thread coefficient arithmetic on sclr.
+   op 0: alpha = rz/pAp, negAlpha = −alpha.
+   op 1: beta = rzNew/rz, then rz = rzNew. */
+var BK_SCALAR_OP_WGSL =
+'struct OpP { op: u32, _p0: u32, _p1: u32, _p2: u32 }\n' +
+'@group(0) @binding(0) var<storage, read_write> sclr: array<f32>;\n' +
+'@group(0) @binding(1) var<uniform>             P: OpP;\n' +
+'@compute @workgroup_size(1)\n' +
+'fn bk_scalar_op() {\n' +
+'  if (P.op == 0u) {\n' +
+'    let a = sclr[0] / sclr[1];\n' +
+'    sclr[3] = a; sclr[4] = -a;\n' +
+'  } else {\n' +
+'    let b = sclr[5] / sclr[0];\n' +
+'    sclr[6] = b; sclr[0] = sclr[5];\n' +
+'  }\n' +
+'}\n';
+
+/* bk_axpy3_r: y += sclr[slot]·x  (coefficient read from GPU buffer). */
+var BK_AXPY3_R_WGSL =
+'struct AxrP { slot: u32, total: u32, _p0: u32, _p1: u32 }\n' +
+'@group(0) @binding(0) var<storage, read>       x_v4: array<vec4<f32>>;\n' +
+'@group(0) @binding(1) var<storage, read_write> y_v4: array<vec4<f32>>;\n' +
+'@group(0) @binding(2) var<storage, read>       sclr: array<f32>;\n' +
+'@group(0) @binding(3) var<uniform>             P: AxrP;\n' +
+'@compute @workgroup_size(64)\n' +
+'fn bk_axpy3_r(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
+'  let i = gid.x;\n' +
+'  if (i >= P.total) { return; }\n' +
+'  y_v4[i] = y_v4[i] + sclr[P.slot] * x_v4[i];\n' +
+'}\n';
+
+/* bk_xbpy3_r: y = x + sclr[slot]·y. */
+var BK_XBPY3_R_WGSL =
+'struct AxrP { slot: u32, total: u32, _p0: u32, _p1: u32 }\n' +
+'@group(0) @binding(0) var<storage, read>       x_v4: array<vec4<f32>>;\n' +
+'@group(0) @binding(1) var<storage, read_write> y_v4: array<vec4<f32>>;\n' +
+'@group(0) @binding(2) var<storage, read>       sclr: array<f32>;\n' +
+'@group(0) @binding(3) var<uniform>             P: AxrP;\n' +
+'@compute @workgroup_size(64)\n' +
+'fn bk_xbpy3_r(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
+'  let i = gid.x;\n' +
+'  if (i >= P.total) { return; }\n' +
+'  y_v4[i] = x_v4[i] + sclr[P.slot] * y_v4[i];\n' +
+'}\n';
+
 /* bk_dot3_reduce: Σ dot(a.xyz, b.xyz) — one f32 partial per workgroup. */
 var BK_DOT3_WGSL =
 'struct SizeP { total: u32, _p0: u32, _p1: u32, _p2: u32 }\n' +
@@ -435,6 +515,13 @@ BucklingSolverGPU.prototype._buildPipelines = function() {
   this.scPipe    = pipe(this.scLayout, BK_SUBCONST3_WGSL, 'bk_subconst3');
   this.alPipe    = pipe(this.scLayout, BK_ADDLANE_WGSL, 'bk_add_lane');
   this.sclPipe   = pipe(this.scLayout, BK_SCALE3_WGSL, 'bk_scale3');
+
+  /* resident scalar path (Step 6b) */
+  this.dotRPipe   = pipe(this.dotLayout, BK_DOT3_R_WGSL, 'bk_dot3_r');     /* [ro,ro,rw,uni] */
+  this.opPipe     = pipe(this.scLayout, BK_SCALAR_OP_WGSL, 'bk_scalar_op'); /* [rw,uni] */
+  this.axrLayout  = d.createBindGroupLayout({ entries: [ro(0), rw(1), ro(2), uni(3)] });
+  this.axrPipe    = pipe(this.axrLayout, BK_AXPY3_R_WGSL, 'bk_axpy3_r');
+  this.xbrPipe    = pipe(this.axrLayout, BK_XBPY3_R_WGSL, 'bk_xbpy3_r');
 };
 
 BucklingSolverGPU.prototype._allocateBuffers = function() {
@@ -472,6 +559,10 @@ BucklingSolverGPU.prototype._allocateBuffers = function() {
   this.rbF   = d.createBuffer({ size: Math.max(this.partialCount * 4, 256),  usage: BU.COPY_DST | BU.MAP_READ });
   this.part4 = d.createBuffer({ size: Math.max(this.partialCount * 16, 256), usage: BU.STORAGE | BU.COPY_SRC });
   this.rb4   = d.createBuffer({ size: Math.max(this.partialCount * 16, 256), usage: BU.COPY_DST | BU.MAP_READ });
+
+  /* resident scalar buffer (16 f32 slots) + its readback */
+  this.sclr   = d.createBuffer({ size: 64, usage: BU.STORAGE | BU.COPY_SRC | BU.COPY_DST });
+  this.sclrRB = d.createBuffer({ size: 64, usage: BU.COPY_DST | BU.MAP_READ });
 };
 
 BucklingSolverGPU.prototype._allocateUniforms = function() {
@@ -534,6 +625,24 @@ BucklingSolverGPU.prototype._allocateUniforms = function() {
 
   /* scale3 uniform (alpha written per call) */
   this.scaleBuf = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
+
+  /* resident-path pre-baked uniforms (no per-iteration writeBuffer):
+     dotRBufs[slot] = {total, slot}; arBufs[slot] = {slot, total}; opBufs[op] = {op} */
+  this.dotRBufs = []; this.arBufs = [];
+  for (var sl = 0; sl < 16; sl++) {
+    var drb = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
+    d.queue.writeBuffer(drb, 0, new Uint32Array([N3, sl, 0, 0]));
+    this.dotRBufs.push(drb);
+    var arb = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
+    d.queue.writeBuffer(arb, 0, new Uint32Array([sl, N3, 0, 0]));
+    this.arBufs.push(arb);
+  }
+  this.opBufs = [];
+  for (var op = 0; op < 2; op++) {
+    var ob = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
+    d.queue.writeBuffer(ob, 0, new Uint32Array([op, 0, 0, 0]));
+    this.opBufs.push(ob);
+  }
 };
 
 
@@ -814,6 +923,59 @@ BucklingSolverGPU.prototype._copy3 = function(enc, srcBuf, dstBuf) {
   enc.copyBufferToBuffer(srcBuf, 0, dstBuf, 0, this.v4Size);
 };
 
+/* ─── resident-path dispatch helpers (enqueue only; no readback) ─── */
+BucklingSolverGPU.prototype._dotR = function(enc, aBuf, bBuf, slot) {
+  var bg = this.device.createBindGroup({ layout: this.dotLayout, entries: [
+    { binding: 0, resource: { buffer: aBuf } },
+    { binding: 1, resource: { buffer: bBuf } },
+    { binding: 2, resource: { buffer: this.sclr } },
+    { binding: 3, resource: { buffer: this.dotRBufs[slot] } }
+  ] });
+  var pass = enc.beginComputePass();
+  pass.setPipeline(this.dotRPipe); pass.setBindGroup(0, bg);
+  pass.dispatchWorkgroups(1, 1, 1);   /* single workgroup, grid-stride */
+  pass.end();
+};
+BucklingSolverGPU.prototype._scalarOp = function(enc, op) {
+  var bg = this.device.createBindGroup({ layout: this.scLayout, entries: [
+    { binding: 0, resource: { buffer: this.sclr } },
+    { binding: 1, resource: { buffer: this.opBufs[op] } }
+  ] });
+  var pass = enc.beginComputePass();
+  pass.setPipeline(this.opPipe); pass.setBindGroup(0, bg);
+  pass.dispatchWorkgroups(1, 1, 1);
+  pass.end();
+};
+BucklingSolverGPU.prototype._axpyR = function(enc, slot, xBuf, yBuf) {
+  var bg = this.device.createBindGroup({ layout: this.axrLayout, entries: [
+    { binding: 0, resource: { buffer: xBuf } },
+    { binding: 1, resource: { buffer: yBuf } },
+    { binding: 2, resource: { buffer: this.sclr } },
+    { binding: 3, resource: { buffer: this.arBufs[slot] } }
+  ] });
+  this._dispatch(enc, this.axrPipe, bg, this.N3, 64);
+};
+BucklingSolverGPU.prototype._xbpyR = function(enc, slot, xBuf, yBuf) {
+  var bg = this.device.createBindGroup({ layout: this.axrLayout, entries: [
+    { binding: 0, resource: { buffer: xBuf } },
+    { binding: 1, resource: { buffer: yBuf } },
+    { binding: 2, resource: { buffer: this.sclr } },
+    { binding: 3, resource: { buffer: this.arBufs[slot] } }
+  ] });
+  this._dispatch(enc, this.xbrPipe, bg, this.N3, 64);
+};
+/* read one scalar slot back (the only sync point in the resident PCG). */
+BucklingSolverGPU.prototype._readSclr = async function(slot) {
+  var d = this.device;
+  var enc = d.createCommandEncoder();
+  enc.copyBufferToBuffer(this.sclr, 0, this.sclrRB, 0, 64);
+  d.queue.submit([enc.finish()]);
+  await this.sclrRB.mapAsync(GPUMapMode.READ);
+  var v = new Float32Array(this.sclrRB.getMappedRange().slice(0));
+  this.sclrRB.unmap();
+  return v[slot];
+};
+
 /* dot3 — Σ (a.xyz · b.xyz).  Own encoder + readback (async). */
 BucklingSolverGPU.prototype._dot3 = async function(aBuf, bBuf) {
   var d = this.device;
@@ -1018,6 +1180,70 @@ BucklingSolverGPU.prototype.pcgSolveK = async function(bBuf, opts) {
     d.queue.submit([encPp.finish()]);
     rz = rzNew;
   }
+  await this._zeroMean3(this.pcgX);
+  return { iters: iters, relres: relres, converged: converged };
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   pcgSolveKResident — Step-6b GPU-resident PCG.  Identical math to
+   pcgSolveK, but α/β and the dot products live in the on-GPU scalar
+   buffer, so each CG iteration enqueues with NO readback.  A block
+   of `checkEvery` iterations is batched into one encoder; only the
+   residual (sclr slot 2) is read back, once per block, to test
+   convergence.  Uses lightProject (Γ⁰ kills the κ=0 mode, K's output
+   is a divergence — per-iter zero-mean is redundant).
+
+   Solution left in this.pcgX.  Returns { iters, relres, converged }.
+   ════════════════════════════════════════════════════════════ */
+BucklingSolverGPU.prototype.pcgSolveKResident = async function(bBuf, opts) {
+  opts = opts || {};
+  var tol = (opts.tol != null) ? opts.tol : 1e-5;
+  var maxiter = opts.maxiter || 2000;
+  var checkEvery = opts.checkEvery || 16;
+  var d = this.device;
+
+  /* setup: x=0; r=b (zero-meaned once); z=Minv r; p=z */
+  var encS = d.createCommandEncoder();
+  encS.clearBuffer(this.pcgX);
+  this._copy3(encS, bBuf, this.pcgR);
+  d.queue.submit([encS.finish()]);
+  await this._zeroMean3(this.pcgR);
+
+  var encS2 = d.createCommandEncoder();
+  this._precondGamma0(encS2, this.pcgR, this.pcgZ);
+  this._copy3(encS2, this.pcgZ, this.pcgP);
+  this._dotR(encS2, this.pcgR, this.pcgZ, 0);   /* rz  → slot 0 */
+  this._dotR(encS2, this.pcgR, this.pcgR, 2);   /* rr0 → slot 2 (= ‖b‖²) */
+  d.queue.submit([encS2.finish()]);
+  var bn = Math.sqrt(await this._readSclr(2)) + 1e-30;
+
+  var iters = 0, converged = false, relres = 1;
+
+  while (iters < maxiter) {
+    var enc = d.createCommandEncoder();
+    var blockEnd = Math.min(iters + checkEvery, maxiter);
+    for (var it = iters; it < blockEnd; it++) {
+      this._applyK(enc, this.pcgP, this.pcgAp);     /* Ap = K p            */
+      this._dotR(enc, this.pcgP, this.pcgAp, 1);    /* pAp → slot 1        */
+      this._scalarOp(enc, 0);                       /* alpha, -alpha       */
+      this._axpyR(enc, 3, this.pcgP, this.pcgX);    /* x += alpha p        */
+      this._axpyR(enc, 4, this.pcgAp, this.pcgR);   /* r -= alpha Ap       */
+      this._precondGamma0(enc, this.pcgR, this.pcgZ); /* z = Minv r        */
+      this._dotR(enc, this.pcgR, this.pcgZ, 5);     /* rzNew → slot 5      */
+      this._scalarOp(enc, 1);                       /* beta; rz = rzNew    */
+      this._xbpyR(enc, 6, this.pcgZ, this.pcgP);    /* p = z + beta p      */
+    }
+    this._dotR(enc, this.pcgR, this.pcgR, 2);       /* rr → slot 2         */
+    d.queue.submit([enc.finish()]);
+    iters = blockEnd;
+
+    var rr = await this._readSclr(2);
+    relres = Math.sqrt(rr) / bn;
+    if (!isFinite(relres)) break;                   /* breakdown guard     */
+    if (relres < tol) { converged = true; break; }
+  }
+
   await this._zeroMean3(this.pcgX);
   return { iters: iters, relres: relres, converged: converged };
 };
@@ -1296,8 +1522,9 @@ BucklingSolverGPU.prototype.destroy = function() {
   var bufs = [this.solidBuf, this.s0n, this.s0s, this.epsN, this.epsS, this.sigN, this.sigS,
               this.gV4, this.fV4, this.cA, this.ohat, this.pcgX, this.pcgR, this.pcgZ,
               this.pcgP, this.pcgAp, this.partF, this.rbF, this.part4, this.rb4,
-              this.stiffBuf, this.sizeBuf, this.gammaBuf, this.axBuf, this.xbBuf, this.subBuf, this.alBuf, this.scaleBuf];
-  bufs = bufs.concat(this.uhat, this.hat6, this.exBufs, this.wlPos, this.wlNeg, this.ikBufs);
+              this.stiffBuf, this.sizeBuf, this.gammaBuf, this.axBuf, this.xbBuf, this.subBuf, this.alBuf, this.scaleBuf,
+              this.sclr, this.sclrRB];
+  bufs = bufs.concat(this.uhat, this.hat6, this.exBufs, this.wlPos, this.wlNeg, this.ikBufs, this.dotRBufs, this.arBufs, this.opBufs);
   for (var i = 0; i < bufs.length; i++) { if (bufs[i] && bufs[i].destroy) bufs[i].destroy(); }
 };
 
@@ -1611,9 +1838,94 @@ async function runBucklingEigGPUTest(N, opts) {
   return report;
 }
 
+/* ════════════════════════════════════════════════════════════
+   runBucklingPCGResidentTest — Step-6b gate.  Confirms the GPU-
+   resident PCG (pcgSolveKResident) solves K x = b to the same true
+   residual as the frozen pcgSolveK, and times both to show the
+   readback savings.  Manufactured RHS b = K·u_ref (in-range).
+   ════════════════════════════════════════════════════════════ */
+async function runBucklingPCGResidentTest(N) {
+  N = N || 16;
+  if (typeof ensureDevice === 'function') { await ensureDevice(); }
+  if (!WGPU.device) throw new Error('runBucklingPCGResidentTest: no WebGPU device');
+  var now = function () { return (typeof performance !== 'undefined') ? performance.now() : Date.now(); };
+
+  var N3 = N * N * N;
+  var C_s = isoC(110000, 0.34), C_v = isoC(11, 0.34);
+  var ws = getBucklingWorkspaceCPU(N);
+
+  var solid = new Uint8Array(N3), solidF = new Float32Array(N3);
+  var TP = 2 * Math.PI;
+  for (var ix = 0; ix < N; ix++) { var cx = Math.cos(TP * ix / N);
+    for (var jy = 0; jy < N; jy++) { var cy = Math.cos(TP * jy / N);
+      for (var kz = 0; kz < N; kz++) { var cz = Math.cos(TP * kz / N);
+        var idx = ix * N * N + jy * N + kz; var v = (cx + cy + cz > 0) ? 1 : 0; solid[idx] = v; solidF[idx] = v; } } }
+
+  var fft;
+  if (typeof window !== 'undefined' && window.__sharedFFT && window.__sharedFFT.N === N) fft = window.__sharedFFT;
+  else { fft = new FFTPlan(N); if (typeof window !== 'undefined') { if (window.__sharedFFT) window.__sharedFFT.destroy(); window.__sharedFFT = fft; } }
+  var solver = new BucklingSolverGPU(N, fft);
+  solver.uploadDesign(solidF, C_s, C_v);
+
+  /* manufactured RHS b = K·u_ref */
+  function mulberry32(seed) { return function () { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; var t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  var rng = mulberry32(77), uRef = new Float64Array(3 * N3);
+  for (var i = 0; i < 3 * N3; i++) uRef[i] = rng() * 2 - 1;
+  bk_zeroMeanFlat(uRef, N3);
+  var uf = [uRef.subarray(0, N3), uRef.subarray(N3, 2 * N3), uRef.subarray(2 * N3, 3 * N3)];
+  var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+  applyKcpu(uf, of, solid, C_s, C_v, N, ws);
+  var bV = new Float64Array(3 * N3); bk_fieldToFlat(of, N3, bV); bk_zeroMeanFlat(bV, N3);
+  var bn = Math.sqrt(bV.reduce(function (s, v) { return s + v * v; }, 0)) + 1e-30;
+
+  function trueResidOf(xFlat) {
+    var xf = [xFlat.subarray(0, N3), xFlat.subarray(N3, 2 * N3), xFlat.subarray(2 * N3, 3 * N3)];
+    var kf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+    applyKcpu(xf, kf, solid, C_s, C_v, N, ws);
+    var kflat = new Float64Array(3 * N3); bk_fieldToFlat(kf, N3, kflat);
+    var r = new Float64Array(3 * N3);
+    for (var k = 0; k < 3 * N3; k++) r[k] = bV[k] - kflat[k];
+    bk_zeroMeanFlat(r, N3);
+    return Math.sqrt(r.reduce(function (s, v) { return s + v * v; }, 0)) / bn;
+  }
+
+  /* resident solve (timed) */
+  solver._upload3(bV, solver.gV4);
+  var tR0 = now();
+  var solR = await solver.pcgSolveKResident(solver.gV4, { tol: 1e-5, maxiter: 2000 });
+  var secR = (now() - tR0) / 1000;
+  var xR = await solver._readback3(solver.pcgX);
+  var residR = trueResidOf(xR);
+
+  /* frozen non-resident solve (timed, same RHS) */
+  solver._upload3(bV, solver.gV4);
+  var tN0 = now();
+  var solN = await solver.pcgSolveK(solver.gV4, { tol: 1e-5, maxiter: 2000 });
+  var secN = (now() - tN0) / 1000;
+
+  solver.destroy();
+
+  var passed = residR < 1e-3;
+  var report = {
+    passed: passed,
+    trueResidResident: residR,
+    itersResident: solR.iters, itersNonResident: solN.iters,
+    secResident: +secR.toFixed(2), secNonResident: +secN.toFixed(2),
+    speedup: +(secN / Math.max(secR, 1e-6)).toFixed(1)
+  };
+  if (typeof console !== 'undefined') {
+    console.log('[runBucklingPCGResidentTest] N=' + N + ' → ' + (passed ? 'PASS' : 'FAIL') +
+      '   trueResid=' + residR.toExponential(2) +
+      '   iters R/N=' + solR.iters + '/' + solN.iters +
+      '   time R/N=' + report.secResident + 's/' + report.secNonResident + 's  (' + report.speedup + '× faster)');
+  }
+  return report;
+}
+
 /* Expose for the in-browser console / Push-2 wiring. */
 if (typeof window !== 'undefined') {
   window.BucklingSolverGPU = BucklingSolverGPU;
   window.runBucklingGPUTest = runBucklingGPUTest;
   window.runBucklingEigGPUTest = runBucklingEigGPUTest;
+  window.runBucklingPCGResidentTest = runBucklingPCGResidentTest;
 }
