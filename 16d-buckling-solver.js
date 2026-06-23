@@ -1284,7 +1284,7 @@ BucklingSolverGPU.prototype.extractPrestressGPU = async function(axisVoigt, opts
   await this._zeroMean3(this.gV4);
 
   /* solve K u′ = RHS */
-  var sol = await this.pcgSolveK(this.gV4, {
+  var sol = await this.pcgSolveKResident(this.gV4, {
     tol: (opts.cgTol != null) ? opts.cgTol : 1e-5,
     maxiter: opts.cgMaxiter || 3000
   });
@@ -1776,16 +1776,19 @@ async function runBucklingEigGPUTest(N, opts) {
         var idx = ix * N * N + jy * N + kz; var v = (cx + cy + cz > 0) ? 1 : 0; solid[idx] = v; solidF[idx] = v; } } }
 
   var axisV   = (opts.axisV != null) ? opts.axisV : 2;
-  var mBlk    = opts.block    || 3;
-  var eigIters = opts.eigIters || 12;
-  var eigTol  = (opts.eigTol != null) ? opts.eigTol : 1e-4;
-  var preTol  = (opts.preTol != null) ? opts.preTol : 1e-4;   /* pre-stress: accurate (one-time) */
-  var preMax  = opts.preMax    || 200;
-  var eigCgTol = (opts.eigCgTol != null) ? opts.eigCgTol : 4e-3;  /* power step: cheap/inexact */
-  var eigCgMax = opts.eigCgMax || 25;
-  var band    = (opts.tol != null) ? opts.tol : 0.15;
+  var mBlk    = opts.block    || 4;
+  var preTol  = (opts.preTol != null) ? opts.preTol : 1e-6;     /* accurate σ⁰ (matched both sides) */
+  var preMax  = opts.preMax    || 600;
+  var band    = (opts.tol != null) ? opts.tol : 0.10;
+  /* CPU reference: well-converged → the TRUE dominant λ (init-independent
+     once converged, so stable run-to-run despite unseeded random start) */
+  var cEigIters = opts.cpuEigIters || 100, cEigTol = opts.cpuEigTol || 1e-10;
+  var cCgTol = opts.cpuCgTol || 1e-10, cCgMax = opts.cpuCgMax || 1000;
+  /* GPU: converged to the f32 floor (resident PCG makes the inner solve cheap) */
+  var gEigIters = opts.eigIters || 50, gEigTol = opts.eigTol || 1e-6;
+  var gCgTol = opts.eigCgTol || 1e-5, gCgMax = opts.eigCgMax || 300;
 
-  /* ── CPU reference (manual, matched split settings) ── */
+  /* ── CPU reference (well-converged true λ) ── */
   var tC0 = now();
   var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
@@ -1794,8 +1797,8 @@ async function runBucklingEigGPUTest(N, opts) {
   var sig0 = preC.sigma0;
   var applyA = function (x, out) { bk_flatToField(x, N3, uf); applyKgcpu(uf, of, sig0, N, ws); bk_fieldToFlatNeg(of, N3, out); };
   var applyB = function (x, out) { bk_flatToField(x, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); };
-  var solveB = function (b, out) { var r = bk_pcgSolveK(applyB, minv, b, n, N3, eigCgTol, eigCgMax); out.set(r.x); };
-  var cpuPairs = bk_subspaceGen(applyA, applyB, solveB, n, mBlk, { project: function (v) { bk_zeroMeanFlat(v, N3); }, iters: eigIters, tol: eigTol });
+  var solveB = function (b, out) { var r = bk_pcgSolveK(applyB, minv, b, n, N3, cCgTol, cCgMax); out.set(r.x); };
+  var cpuPairs = bk_subspaceGen(applyA, applyB, solveB, n, mBlk, { project: function (v) { bk_zeroMeanFlat(v, N3); }, iters: cEigIters, tol: cEigTol });
   var lamCpu = Infinity;
   for (var ci = 0; ci < cpuPairs.length; ci++) { if (cpuPairs[ci].theta > 1e-9) { var lc = 1 / cpuPairs[ci].theta; if (lc < lamCpu) lamCpu = lc; } }
   var secCpu = (now() - tC0) / 1000;
@@ -1813,7 +1816,7 @@ async function runBucklingEigGPUTest(N, opts) {
 
   var tG0 = now();
   await solver.extractPrestressGPU(axisV, { cgTol: preTol, cgMaxiter: preMax });
-  var pairs = await solver.bucklingEigGPU(mBlk, { eigIters: eigIters, eigTol: eigTol, cgTol: eigCgTol, cgMaxiter: eigCgMax });
+  var pairs = await solver.bucklingEigGPU(mBlk, { eigIters: gEigIters, eigTol: gEigTol, cgTol: gCgTol, cgMaxiter: gCgMax });
   var secGpu = (now() - tG0) / 1000;
   var lamGpu = Infinity;
   for (var gi = 0; gi < pairs.length; gi++) { if (pairs[gi].theta > 1e-9) { var lg = 1 / pairs[gi].theta; if (lg < lamGpu) lamGpu = lg; } }
@@ -1922,10 +1925,142 @@ async function runBucklingPCGResidentTest(N) {
   return report;
 }
 
+/* ════════════════════════════════════════════════════════════
+   Step 7 — recipe → buckling dispatch with silent CPU fallback.
+
+   _bucklingFrontEnd : recipe → solid + skip decision (mirrors the
+       rasterization/guard front-end of homogenizeBucklingCPU).
+   solveDesignBucklingGPU : full GPU solve, returns the same shape as
+       computeBucklingCPU (lambda_cr, pcr, critAxis, rho, perAxis,
+       modes, skip_reason).
+   computeBuckling : GPU-primary IFF window.BUCKLE_GPU (or opts.gpu)
+       AND WebGPU is available; otherwise — and on any GPU error —
+       silently falls back to computeBucklingCPU.  Default is CPU
+       until the Step-6b Gram-batching makes the GPU eigensolver
+       faster than the parallel CPU worker pool.
+   ════════════════════════════════════════════════════════════ */
+function _bucklingFrontEnd(recipe, N, opts) {
+  opts = opts || {};
+  var family = recipe.family;
+  var params = KERNELS[family].parseRecipe(recipe);
+  var args = resolveBuildArgs(recipe);
+  var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+  if (opts.pruneLargest && typeof pruneVoxels === 'function') solid = pruneVoxels(solid, N, family, opts);
+
+  var N3 = N * N * N, inside = 0;
+  for (var vb = 0; vb < N3; vb++) if (solid[vb]) inside++;
+  var skipReason = null;
+  if (inside === 0) {
+    skipReason = 'empty at N=' + N;
+  } else if (typeof checkVoxelConnectivity === 'function') {
+    var interior = 0, Nm1 = N - 1;
+    for (var a = 0; a < N; a++) {
+      var am = (a === 0) ? Nm1 : a - 1, ap = (a === Nm1) ? 0 : a + 1;
+      for (var b = 0; b < N; b++) {
+        var bm = (b === 0) ? Nm1 : b - 1, bp = (b === Nm1) ? 0 : b + 1;
+        for (var c = 0; c < N; c++) {
+          var idx = (a * N + b) * N + c;
+          if (!solid[idx]) continue;
+          var cm = (c === 0) ? Nm1 : c - 1, cp = (c === Nm1) ? 0 : c + 1;
+          if (solid[(am * N + b) * N + c] && solid[(ap * N + b) * N + c] &&
+              solid[(a * N + bm) * N + c] && solid[(a * N + bp) * N + c] &&
+              solid[(a * N + b) * N + cm] && solid[(a * N + b) * N + cp]) interior++;
+        }
+      }
+    }
+    var conn = checkVoxelConnectivity(solid, N);
+    if (interior / inside < 0.04) skipReason = 'under-resolved at N=' + N + ' — raise the buckle grid';
+    else if (conn.numComponents > 1) skipReason = 'multi-component (' + conn.numComponents + ' disconnected pieces) — per-component buckling not yet implemented';
+  }
+
+  var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
+  return {
+    solid: solid, skipReason: skipReason, rho: inside / N3,
+    C_s: isoC(mat.Es_MPa, mat.nu), C_v: isoC(mat.Es_MPa * 1e-4, mat.nu)
+  };
+}
+
+async function solveDesignBucklingGPU(recipe, N, opts, onProgress) {
+  opts = opts || {}; N = N || 8;
+  var anames = ['xx', 'yy', 'zz'];
+  var axes = (opts.axes && opts.axes.length) ? opts.axes : [0, 1, 2];
+
+  var fe = _bucklingFrontEnd(recipe, N, opts);
+  if (fe.skipReason) {
+    var paStub = [];
+    for (var si = 0; si < axes.length; si++) paStub.push({ axis: anames[axes[si]], lambda: Infinity, sBar: 0, cgIters: 0, mWave: 0 });
+    return { lambda_cr: Infinity, pcr: Infinity, critAxis: null, rho: fe.rho, perAxis: paStub, modes: {}, skip_reason: fe.skipReason };
+  }
+
+  var N3 = N * N * N, solid = fe.solid;
+  var solidF = new Float32Array(N3);
+  for (var fi = 0; fi < N3; fi++) solidF[fi] = solid[fi] ? 1 : 0;
+
+  var fft;
+  if (typeof window !== 'undefined' && window.__sharedFFT && window.__sharedFFT.N === N) fft = window.__sharedFFT;
+  else { fft = new FFTPlan(N); if (typeof window !== 'undefined') { if (window.__sharedFFT) window.__sharedFFT.destroy(); window.__sharedFFT = fft; } }
+  var solver = new BucklingSolverGPU(N, fft);
+  solver.uploadDesign(solidF, fe.C_s, fe.C_v);
+
+  var block   = opts.block     || 6;
+  var eigIters = opts.eigIters  || 40;
+  var eigTol  = (opts.eigTol != null) ? opts.eigTol : 1e-5;
+  var cgTol   = (opts.cgTol  != null) ? opts.cgTol  : 1e-4;
+  var cgMax   = opts.cgMaxiter  || 300;
+  var preTol  = (opts.preTol != null) ? opts.preTol : 1e-5;
+  var preMax  = opts.preMaxiter || 600;
+
+  var perAxis = [], modes = {}, lambdaCr = Infinity, critAxis = null, critSbar = 0;
+  try {
+    for (var ai = 0; ai < axes.length; ai++) {
+      var axis = axes[ai];
+      var pre = await solver.extractPrestressGPU(axis, { cgTol: preTol, cgMaxiter: preMax });
+      var pairs = await solver.bucklingEigGPU(block, { eigIters: eigIters, eigTol: eigTol, cgTol: cgTol, cgMaxiter: cgMax });
+      var lamAxis = Infinity, modeAxis = null;
+      for (var pi = 0; pi < pairs.length; pi++) { if (pairs[pi].theta > 1e-9) { var lam = 1 / pairs[pi].theta; if (lam < lamAxis) { lamAxis = lam; modeAxis = pairs[pi].vec; } } }
+      var sBarAxis = pre.sBar[axis];
+      var mWave = (typeof bk_modeLocalization === 'function' && modeAxis) ? bk_modeLocalization(modeAxis, solid, N) : 0;
+      perAxis.push({ axis: anames[axis], lambda: lamAxis, sBar: sBarAxis, cgIters: pre.cgIters, mWave: mWave });
+      if (modeAxis) {
+        var ux = new Float32Array(N3), uy = new Float32Array(N3), uz = new Float32Array(N3), mag = new Float32Array(N3);
+        for (var iv = 0; iv < N3; iv++) { var vx = modeAxis[iv], vy = modeAxis[N3 + iv], vz = modeAxis[2 * N3 + iv]; ux[iv] = vx; uy[iv] = vy; uz[iv] = vz; mag[iv] = Math.sqrt(vx * vx + vy * vy + vz * vz); }
+        modes[anames[axis]] = { u_prime: [ux, uy, uz], sigma_vm: mag, N: N, eps_bar: [0, 0, 0] };
+      }
+      if (isFinite(lamAxis) && lamAxis < lambdaCr) { lambdaCr = lamAxis; critAxis = anames[axis]; critSbar = sBarAxis; }
+      if (onProgress) onProgress({ done: ai + 1, total: axes.length, axis: anames[axis], lambda: lamAxis });
+    }
+  } finally {
+    solver.destroy();
+  }
+
+  var orderM = { xx: 0, yy: 1, zz: 2 };
+  perAxis.sort(function (p, q) { return (orderM[p.axis] || 0) - (orderM[q.axis] || 0); });
+  var pcr = isFinite(lambdaCr) ? lambdaCr * Math.abs(critSbar) : Infinity;
+  var res = { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: fe.rho, perAxis: perAxis, modes: modes, skip_reason: null };
+  if (!isFinite(lambdaCr)) res.skip_reason = 'no positive critical mode found';
+  return res;
+}
+
+async function computeBuckling(recipe, N, opts, onProgress) {
+  opts = opts || {};
+  var useGPU = (opts.gpu != null) ? opts.gpu : (typeof window !== 'undefined' && window.BUCKLE_GPU);
+  if (useGPU) {
+    var ok = false;
+    try { if (typeof ensureDevice === 'function') await ensureDevice(); ok = !!(typeof WGPU !== 'undefined' && WGPU.device); } catch (e) { ok = false; }
+    if (ok) {
+      try { return await solveDesignBucklingGPU(recipe, N, opts, onProgress); }
+      catch (e) { if (typeof console !== 'undefined') console.warn('[buckling] GPU path failed; falling back to CPU:', (e && e.message) || e); }
+    }
+  }
+  return computeBucklingCPU(recipe, N, opts, onProgress);
+}
+
 /* Expose for the in-browser console / Push-2 wiring. */
 if (typeof window !== 'undefined') {
   window.BucklingSolverGPU = BucklingSolverGPU;
   window.runBucklingGPUTest = runBucklingGPUTest;
   window.runBucklingEigGPUTest = runBucklingEigGPUTest;
   window.runBucklingPCGResidentTest = runBucklingPCGResidentTest;
+  window.solveDesignBucklingGPU = solveDesignBucklingGPU;
+  window.computeBuckling = computeBuckling;
 }
