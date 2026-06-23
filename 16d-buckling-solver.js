@@ -135,6 +135,22 @@ var BK_WRITE_LANE_WGSL =
 '  out_v4[i] = o;\n' +
 '}\n';
 
+/* bk_add_lane: x_v4[i].lane += val  (read-modify-write).  Used to build
+   the constant macro strain ε̄ = val·e_lane (after clearBuffer) and to add
+   ε̄ back into the fluctuation strain ε(u′) during pre-stress. */
+var BK_ADDLANE_WGSL =
+'struct AddLaneP { val: f32, total: u32, lane: u32, _p1: u32 }\n' +
+'@group(0) @binding(0) var<storage, read_write> x_v4: array<vec4<f32>>;\n' +
+'@group(0) @binding(1) var<uniform>             P: AddLaneP;\n' +
+'@compute @workgroup_size(64)\n' +
+'fn bk_add_lane(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
+'  let i = gid.x;\n' +
+'  if (i >= P.total) { return; }\n' +
+'  var o = x_v4[i];\n' +
+'  switch (P.lane) { case 0u: { o.x = o.x + P.val; } case 1u: { o.y = o.y + P.val; } case 2u: { o.z = o.z + P.val; } default: {} }\n' +
+'  x_v4[i] = o;\n' +
+'}\n';
+
 /* Spectral first derivative: out_c = i·κ_dir · in_c  (Nyquist-zeroed).
    κ_dir is the signed integer wavenumber along `dir`; the N/2 bin is
    zeroed (derivative of a real field is ill-defined there).  Mirrors
@@ -406,6 +422,7 @@ BucklingSolverGPU.prototype._buildPipelines = function() {
 
   this.scLayout  = d.createBindGroupLayout({ entries: [rw(0), uni(1)] });
   this.scPipe    = pipe(this.scLayout, BK_SUBCONST3_WGSL, 'bk_subconst3');
+  this.alPipe    = pipe(this.scLayout, BK_ADDLANE_WGSL, 'bk_add_lane');
 };
 
 BucklingSolverGPU.prototype._allocateBuffers = function() {
@@ -499,6 +516,9 @@ BucklingSolverGPU.prototype._allocateUniforms = function() {
 
   /* subconst uniform (mean written per zero-mean call) */
   this.subBuf = d.createBuffer({ size: 32, usage: BU.UNIFORM | BU.COPY_DST });
+
+  /* add-lane uniform (val/lane written per call — setup-time, not hot path) */
+  this.alBuf = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
 };
 
 
@@ -620,13 +640,14 @@ BucklingSolverGPU.prototype._localStress = function(enc) {
      5. σ̂ = FFT(σ)                                   (6 fwd FFT)
      6. out_i = −IFFT(i·κ_j σ̂_ij)                    (3 inv FFT)
    ════════════════════════════════════════════════════════════ */
-BucklingSolverGPU.prototype._applyK = function(enc, inV4, outV4) {
-  /* 1. û_k */
+/* _strainFromU — ε(u) → eps{n,s}.  Steps 1–3 of K: forward-FFT each
+   displacement component, build the engineering-Voigt strain in spectral
+   space (i·κ combos), inverse-FFT into the eps{n,s} split. */
+BucklingSolverGPU.prototype._strainFromU = function(enc, inV4) {
   for (var k = 0; k < 3; k++) {
     this._extractLane(enc, inV4, k, this.cA);
     this._fftFwd(enc, this.cA, this.uhat[k]);
   }
-  /* 2. spectral strain ê (engineering Voigt) */
   this._specIk(enc, this.uhat[0], 0, this.hat6[0], false);                              /* ε_xx = ∂x u_x */
   this._specIk(enc, this.uhat[1], 1, this.hat6[1], false);                              /* ε_yy = ∂y u_y */
   this._specIk(enc, this.uhat[2], 2, this.hat6[2], false);                              /* ε_zz = ∂z u_z */
@@ -636,21 +657,22 @@ BucklingSolverGPU.prototype._applyK = function(enc, inV4, outV4) {
   this._specIk(enc, this.uhat[0], 2, this.hat6[4], true);
   this._specIk(enc, this.uhat[1], 0, this.hat6[5], false);                              /* γ_xy = ∂x u_y + ∂y u_x */
   this._specIk(enc, this.uhat[0], 1, this.hat6[5], true);
-  /* 3. ε = IFFT(ê) → eps{n,s} */
   for (var P = 0; P < 6; P++) {
     this._fftInv(enc, this.hat6[P], this.cA);
     var dst = (P < 3) ? this.epsN : this.epsS;
     this._writeLane(enc, this.cA, P % 3, false, dst);
   }
-  /* 4. σ = C(x):ε */
-  this._localStress(enc);
-  /* 5. σ̂ = FFT(σ) */
+};
+
+/* _divStress — outV4 = −∂_j σ_ij, reading the stress in sig{n,s}.
+   Steps 5–6 of K (also the prestress RHS = −div(sb)).  σ tensor index
+   map: [[0,5,4],[5,1,3],[4,3,2]]. */
+BucklingSolverGPU.prototype._divStress = function(enc, outV4) {
   for (var Q = 0; Q < 6; Q++) {
     var src = (Q < 3) ? this.sigN : this.sigS;
     this._extractLane(enc, src, Q % 3, this.cA);
     this._fftFwd(enc, this.cA, this.hat6[Q]);
   }
-  /* 6. out_i = −∂_j σ_ij.  σ tensor: [[0,5,4],[5,1,3],[4,3,2]] */
   /* out_x = −(∂x ŝ0 + ∂y ŝ5 + ∂z ŝ4) */
   this._specIk(enc, this.hat6[0], 0, this.ohat, false);
   this._specIk(enc, this.hat6[5], 1, this.ohat, true);
@@ -669,6 +691,12 @@ BucklingSolverGPU.prototype._applyK = function(enc, inV4, outV4) {
   this._specIk(enc, this.hat6[2], 2, this.ohat, true);
   this._fftInv(enc, this.ohat, this.cA);
   this._writeLane(enc, this.cA, 2, true, outV4);
+};
+
+BucklingSolverGPU.prototype._applyK = function(enc, inV4, outV4) {
+  this._strainFromU(enc, inV4);   /* 1–3: ε(u) → eps{n,s} */
+  this._localStress(enc);         /* 4:   σ = C(x):ε        */
+  this._divStress(enc, outV4);    /* 5–6: out = −div(σ)     */
 };
 
 
@@ -794,9 +822,9 @@ BucklingSolverGPU.prototype._dot3 = async function(aBuf, bBuf) {
   return s;
 };
 
-/* zero-mean projection — subtract the per-component mean (matches
-   bk_zeroMeanFlat).  Own encoders + one readback. */
-BucklingSolverGPU.prototype._zeroMean3 = async function(buf) {
+/* _laneSums3 — per-component sums [Σx, Σy, Σz] of a vec4 buffer.
+   Own encoder + one readback. */
+BucklingSolverGPU.prototype._laneSums3 = async function(buf) {
   var d = this.device;
   var enc = d.createCommandEncoder();
   var bg = d.createBindGroup({ layout: this.sumLayout, entries: [
@@ -815,8 +843,15 @@ BucklingSolverGPU.prototype._zeroMean3 = async function(buf) {
   this.rb4.unmap();
   var s0 = 0, s1 = 0, s2 = 0;
   for (var i = 0; i < this.partialCount; i++) { var b = 4 * i; s0 += v[b]; s1 += v[b + 1]; s2 += v[b + 2]; }
-  var m0 = s0 / this.N3, m1 = s1 / this.N3, m2 = s2 / this.N3;
+  return [s0, s1, s2];
+};
 
+/* zero-mean projection — subtract the per-component mean (matches
+   bk_zeroMeanFlat). */
+BucklingSolverGPU.prototype._zeroMean3 = async function(buf) {
+  var d = this.device;
+  var sums = await this._laneSums3(buf);
+  var m0 = sums[0] / this.N3, m1 = sums[1] / this.N3, m2 = sums[2] / this.N3;
   var sb = new ArrayBuffer(32);
   new Float32Array(sb, 0, 3).set([m0, m1, m2]);
   new Uint32Array(sb, 16, 1)[0] = this.N3;
@@ -828,6 +863,19 @@ BucklingSolverGPU.prototype._zeroMean3 = async function(buf) {
   ] });
   this._dispatch(enc2, this.scPipe, bg2, this.N3, 64);
   d.queue.submit([enc2.finish()]);
+};
+
+/* _addLane — buf[i].lane += val  (own encoder; setup-time op). */
+BucklingSolverGPU.prototype._addLane = function(enc, buf, lane, val) {
+  var ab = new ArrayBuffer(16);
+  new Float32Array(ab, 0, 1)[0] = val;
+  new Uint32Array(ab, 4, 2).set([this.N3, lane]);
+  this.device.queue.writeBuffer(this.alBuf, 0, ab);
+  var bg = this.device.createBindGroup({ layout: this.scLayout, entries: [
+    { binding: 0, resource: { buffer: buf } },
+    { binding: 1, resource: { buffer: this.alBuf } }
+  ] });
+  this._dispatch(enc, this.alPipe, bg, this.N3, 64);
 };
 
 
@@ -937,12 +985,72 @@ BucklingSolverGPU.prototype.pcgSolveK = async function(bBuf, opts) {
 };
 
 
+/* ════════════════════════════════════════════════════════════
+   extractPrestressGPU — microscopic pre-stress σ⁰(x) under unit
+   compression along Voigt axis `axisVoigt` (0=xx,1=yy,2=zz).
+   Mirrors extractPrestressCPU (16c):
+
+     ε̄ = −e_axisVoigt                 (unit compression)
+     sb = C(x):ε̄                       (constant-strain stress)
+     RHS = −div(sb)                    (zero-meaned)
+     K u′ = RHS                        (Γ⁰-preconditioned PCG)
+     ε = ε̄ + ε(u′);  σ⁰ = C(x):ε
+     σ̄_P = ⟨σ⁰_P⟩                      (volume average)
+
+   On return, σ⁰ lives in sig{n,s} AND is copied into s0{n,s} so the
+   Step-6 eigensolver's _applyKg can consume it directly.
+   Returns { sBar[6], cgIters, cgConverged }.
+   ════════════════════════════════════════════════════════════ */
+BucklingSolverGPU.prototype.extractPrestressGPU = async function(axisVoigt, opts) {
+  opts = opts || {};
+  var d = this.device;
+  var epsBarVal = -1.0;
+  var laneBuf = (axisVoigt < 3) ? this.epsN : this.epsS;
+  var lane = axisVoigt % 3;
+
+  /* sb = C:ε̄  — build constant macro strain, then local stress */
+  var enc1 = d.createCommandEncoder();
+  enc1.clearBuffer(this.epsN);
+  enc1.clearBuffer(this.epsS);
+  this._addLane(enc1, laneBuf, lane, epsBarVal);     /* ε̄ = −e_axisVoigt */
+  this._localStress(enc1);                            /* sig{n,s} = sb     */
+  /* RHS = −div(sb) → gV4 */
+  this._divStress(enc1, this.gV4);
+  d.queue.submit([enc1.finish()]);
+  await this._zeroMean3(this.gV4);
+
+  /* solve K u′ = RHS */
+  var sol = await this.pcgSolveK(this.gV4, {
+    tol: (opts.cgTol != null) ? opts.cgTol : 1e-5,
+    maxiter: opts.cgMaxiter || 3000
+  });
+
+  /* ε = ε̄ + ε(u′);  σ⁰ = C:ε */
+  var enc2 = d.createCommandEncoder();
+  this._strainFromU(enc2, this.pcgX);                 /* eps{n,s} = ε(u′)  */
+  this._addLane(enc2, laneBuf, lane, epsBarVal);      /* + ε̄              */
+  this._localStress(enc2);                            /* sig{n,s} = σ⁰     */
+  /* stash σ⁰ for the eigensolver's K_g */
+  this._copy3(enc2, this.sigN, this.s0n);
+  this._copy3(enc2, this.sigS, this.s0s);
+  d.queue.submit([enc2.finish()]);
+
+  /* σ̄ = ⟨σ⁰⟩ */
+  var sn = await this._laneSums3(this.sigN);
+  var ss = await this._laneSums3(this.sigS);
+  var inv = 1 / this.N3;
+  var sBar = [sn[0] * inv, sn[1] * inv, sn[2] * inv, ss[0] * inv, ss[1] * inv, ss[2] * inv];
+
+  return { sBar: sBar, cgIters: sol.iters, cgConverged: sol.converged };
+};
+
+
 /* ── Cleanup (FFT plan owned externally — not destroyed here) ── */
 BucklingSolverGPU.prototype.destroy = function() {
   var bufs = [this.solidBuf, this.s0n, this.s0s, this.epsN, this.epsS, this.sigN, this.sigS,
               this.gV4, this.fV4, this.cA, this.ohat, this.pcgX, this.pcgR, this.pcgZ,
               this.pcgP, this.pcgAp, this.partF, this.rbF, this.part4, this.rb4,
-              this.stiffBuf, this.sizeBuf, this.gammaBuf, this.axBuf, this.xbBuf, this.subBuf];
+              this.stiffBuf, this.sizeBuf, this.gammaBuf, this.axBuf, this.xbBuf, this.subBuf, this.alBuf];
   bufs = bufs.concat(this.uhat, this.hat6, this.exBufs, this.wlPos, this.wlNeg, this.ikBufs);
   for (var i = 0; i < bufs.length; i++) { if (bufs[i] && bufs[i].destroy) bufs[i].destroy(); }
 };
@@ -958,8 +1066,8 @@ BucklingSolverGPU.prototype.destroy = function() {
      P1. applyK   parity vs applyKcpu              (rel < 1e-3)
      P2. applyKg  parity vs applyKgcpu             (rel < 1e-3)
      P3. Γ⁰ precond parity vs bk_makePrecondGamma0 (rel < 1e-3)
-     P4. PCG-K  solveB vs bk_pcgSolveK             (rel < 5e-3,
-         comparable iteration count)
+     P4. PCG-K  solveB vs bk_pcgSolveK             (true resid < 1e-3)
+     P5. prestress σ⁰ vs extractPrestressCPU       (field & σ̄ < 5e-3)
 
    Returns { passed, gates, N }.
    ════════════════════════════════════════════════════════════ */
@@ -1117,9 +1225,33 @@ async function runBucklingGPUTest(N) {
     pass: trueResid < 1e-3
   };
 
+  /* ── P5: pre-stress extraction parity (zz unit compression) ──
+     σ⁰ = C:(ε̄+ε(u′)) is dominated by the exact macro strain ε̄, so it
+     matches CPU well even though u′ converges only to f32 tol. */
+  var axisV = 2;
+  var preCpu = extractPrestressCPU(solid, C_s, C_v, N, axisV, ws, { cgTol: 1e-9, cgMaxiter: 3000 });
+  var preGpu = await solver.extractPrestressGPU(axisV, { cgTol: 1e-5, cgMaxiter: 3000 });
+  var sgN = await solver._readback3(solver.sigN);     /* σ⁰_xx, σ⁰_yy, σ⁰_zz */
+  var sgS = await solver._readback3(solver.sigS);     /* σ⁰_yz, σ⁰_xz, σ⁰_xy */
+  var fnum = 0, fden = 0;
+  for (var p = 0; p < 6; p++) {
+    var gArr = (p < 3) ? sgN : sgS, off = (p % 3) * N3, cArr = preCpu.sigma0[p];
+    for (var fi = 0; fi < N3; fi++) { var dd = gArr[off + fi] - cArr[fi]; fnum += dd * dd; fden += cArr[fi] * cArr[fi]; }
+  }
+  var preFieldErr = Math.sqrt(fnum) / (Math.sqrt(fden) + 1e-30);
+  var snum = 0, sden = 0;
+  for (var sp = 0; sp < 6; sp++) { var ds = preGpu.sBar[sp] - preCpu.sBar[sp]; snum += ds * ds; sden += preCpu.sBar[sp] * preCpu.sBar[sp]; }
+  var preSbarErr = Math.sqrt(snum) / (Math.sqrt(sden) + 1e-30);
+  gates.prestress = {
+    fieldErr: preFieldErr, sBarErr: preSbarErr,
+    cgItersGPU: preGpu.cgIters, cgItersCPU: preCpu.cgIters,
+    pass: preFieldErr < 5e-3 && preSbarErr < 5e-3
+  };
+
   solver.destroy();
 
-  var passed = gates.applyK.pass && gates.applyKg.pass && gates.precondGamma0.pass && gates.pcgSolveK.pass;
+  var passed = gates.applyK.pass && gates.applyKg.pass && gates.precondGamma0.pass &&
+               gates.pcgSolveK.pass && gates.prestress.pass;
   var report = { passed: passed, gates: gates, N: N };
   if (typeof console !== 'undefined') {
     console.log('[runBucklingGPUTest] N=' + N + ' → ' + (passed ? 'PASS' : 'FAIL'));
