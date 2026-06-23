@@ -546,7 +546,7 @@ async function runRealSweep(N, runToken){
       (function(design, recipe){
         RUN_STATE.activeWorkers++;            /* tie-up #3 — live-activity flag up while this axis-set is in flight */
         jobs.push(
-          (typeof computeBuckling === 'function' ? computeBuckling : computeBucklingCPU)(recipe, bN, { pruneLargest: GEOM_STATE.pruneLargest }, function(p){
+          computeBucklingCPU(recipe, bN, { pruneLargest: GEOM_STATE.pruneLargest }, function(p){
             doneUnits++; bumpProgress();
             paintRunStatus('<span class="v">Buckling</span> · ' + (design.label || design.id) +
                            ' · ' + p.axis + ' (' + p.done + '/' + p.total + ') · N=' + bN);
