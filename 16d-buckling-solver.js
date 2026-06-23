@@ -1343,6 +1343,61 @@ BucklingSolverGPU.prototype.bucklingEigGPU = async function(m, opts) {
   function take() { var b = vbuf(); pool.push(b); return b; }
   function freeAll() { for (var i = 0; i < pool.length; i++) pool[i].destroy(); pool = []; }
 
+  /* ── Gram batching (Step-6b) ───────────────────────────────────────────
+     The Rayleigh-Ritz reduction needs SA[i,j]=V[i]·AV[j] and SB[i,j]=V[i]·BV[j],
+     an s×s pair.  The old path awaited 2·s² separate _dot3 readbacks PER SWEEP
+     — at browser mapAsync latency that was the eigensolver's dominant cost.
+     Here every dot runs resident via the single-workgroup dotR kernel (the
+     same one the PCG uses), scattering into distinct slots of two Gram buffers
+     in ONE compute pass, then a SINGLE readback returns both matrices.
+     Readbacks per sweep: 2·s²  →  1. */
+  var maxS = 2 * m, maxSlots = maxS * maxS;
+  var gramA = d.createBuffer({ size: maxSlots * 4, usage: BU.STORAGE | BU.COPY_SRC });
+  var gramB = d.createBuffer({ size: maxSlots * 4, usage: BU.STORAGE | BU.COPY_SRC });
+  var gramRB = d.createBuffer({ size: 2 * maxSlots * 4, usage: BU.COPY_DST | BU.MAP_READ });
+  var gramUni = [];
+  for (var gk = 0; gk < maxSlots; gk++) {
+    var gu = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
+    d.queue.writeBuffer(gu, 0, new Uint32Array([N3, gk, 0, 0]));   /* {total:N3, slot:gk} */
+    gramUni.push(gu);
+  }
+  function destroyGram() {
+    gramA.destroy(); gramB.destroy(); gramRB.destroy();
+    for (var gi = 0; gi < gramUni.length; gi++) gramUni[gi].destroy();
+  }
+  /* SA[i·s+j]=V[i]·AV[j], SB[i·s+j]=V[i]·BV[j] — resident, single readback. */
+  async function gramAB(Vv, AVv, BVv, s) {
+    var enc = d.createCommandEncoder();
+    var pass = enc.beginComputePass();
+    pass.setPipeline(self.dotRPipe);
+    var ii, jj, k;
+    for (ii = 0; ii < s; ii++) for (jj = 0; jj < s; jj++) {
+      k = ii * s + jj;
+      pass.setBindGroup(0, d.createBindGroup({ layout: self.dotLayout, entries: [
+        { binding: 0, resource: { buffer: Vv[ii] } },
+        { binding: 1, resource: { buffer: AVv[jj] } },
+        { binding: 2, resource: { buffer: gramA } },
+        { binding: 3, resource: { buffer: gramUni[k] } } ] }));
+      pass.dispatchWorkgroups(1, 1, 1);
+      pass.setBindGroup(0, d.createBindGroup({ layout: self.dotLayout, entries: [
+        { binding: 0, resource: { buffer: Vv[ii] } },
+        { binding: 1, resource: { buffer: BVv[jj] } },
+        { binding: 2, resource: { buffer: gramB } },
+        { binding: 3, resource: { buffer: gramUni[k] } } ] }));
+      pass.dispatchWorkgroups(1, 1, 1);
+    }
+    pass.end();
+    enc.copyBufferToBuffer(gramA, 0, gramRB, 0, s * s * 4);
+    enc.copyBufferToBuffer(gramB, 0, gramRB, s * s * 4, s * s * 4);
+    d.queue.submit([enc.finish()]);
+    await gramRB.mapAsync(GPUMapMode.READ);
+    var v = new Float32Array(gramRB.getMappedRange());
+    var SAo = new Float64Array(s * s), SBo = new Float64Array(s * s);
+    for (var q = 0; q < s * s; q++) { SAo[q] = v[q]; SBo[q] = v[s * s + q]; }
+    gramRB.unmap();
+    return { SA: SAo, SB: SBo };
+  }
+
   /* matvec wrappers (each its own encoder + submit, so results are
      readable by the dot products that follow) */
   async function applyA(inBuf, outBuf) {                 /* −K_g */
@@ -1428,11 +1483,8 @@ BucklingSolverGPU.prototype.bucklingEigGPU = async function(m, opts) {
     /* AV, BV and the reduced SA, SB */
     var AV = [], BV = [];
     for (var j = 0; j < s; j++) { var av = take(); var bv = take(); await applyA(V[j], av); await applyB(V[j], bv); AV.push(av); BV.push(bv); }
-    var SA = new Float64Array(s * s), SB = new Float64Array(s * s);
-    for (var ii = 0; ii < s; ii++) for (var jj = 0; jj < s; jj++) {
-      SA[ii * s + jj] = await this._dot3(V[ii], AV[jj]);
-      SB[ii * s + jj] = await this._dot3(V[ii], BV[jj]);
-    }
+    var _g = await gramAB(V, AV, BV, s);
+    var SA = _g.SA, SB = _g.SB;
     for (var a2 = 0; a2 < s; a2++) for (var b2 = a2 + 1; b2 < s; b2++) {
       var sma = 0.5 * (SA[a2 * s + b2] + SA[b2 * s + a2]); SA[a2 * s + b2] = sma; SA[b2 * s + a2] = sma;
       var smb = 0.5 * (SB[a2 * s + b2] + SB[b2 * s + a2]); SB[a2 * s + b2] = smb; SB[b2 * s + a2] = smb;
@@ -1512,6 +1564,7 @@ BucklingSolverGPU.prototype.bucklingEigGPU = async function(m, opts) {
   outPairs.sort(function (p, q) { return q.theta - p.theta; });
   outPairs._iters = lastIters; outPairs._converged = converged;
 
+  destroyGram();
   freeAll();
   return outPairs;
 };
