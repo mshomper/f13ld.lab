@@ -1356,8 +1356,8 @@ BucklingSolverGPU.prototype.bucklingEigGPU = async function(m, opts) {
     self._applyK(e, inBuf, outBuf);
     d.queue.submit([e.finish()]);
   }
-  async function solveB(bBuf, outBuf) {                  /* K⁻¹ (inexact, light) */
-    await self.pcgSolveK(bBuf, { tol: cgTol, maxiter: cgMaxiter, lightProject: true });
+  async function solveB(bBuf, outBuf) {                  /* K⁻¹ (resident, inexact) */
+    await self.pcgSolveKResident(bBuf, { tol: cgTol, maxiter: cgMaxiter, checkEvery: 8 });
     var e = d.createCommandEncoder();
     self._copy3(e, self.pcgX, outBuf);
     d.queue.submit([e.finish()]);
