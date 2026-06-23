@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.7.0 · alpha · **Phase 6 complete** · Nonlinear J2 + adaptive crush + σ–ε comparison + α field tab + connectivity prune + plain-language readouts
+**Status:** v0.7.1 · alpha · **Phase 6 complete** · buckling shipped on CPU (GPU port validated, shelved) · Buckle/Nonlin grids 16/32/64 · Nonlinear J2 + adaptive crush + σ–ε + α field + connectivity prune + plain-language readouts
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -36,9 +36,26 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 † Full-Voigt runs ≈2× the Phase 3 normal-only figures (6 load cases vs 3); N=64 timing is predicted, not yet measured — validated at N=16 and N=32. 10-minute ceiling for default tier. F13LD = FAST.
 
-**Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above (it does not use the N=64 path). Measured on an 8-core desktop, Schwarz P: **N=8 three-axis ≈ 18 s per design** (vs ~62 s serial); N=16 is opt-in. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
+**Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.7.1
+
+Buckling resolution raised, and a full GPU buckling port built, validated end-to-end, and then deliberately shelved.
+
+### Buckle + Nonlinear grids → 16 / 32 / 64
+
+- Both the Buckle and Nonlin pills now cycle **16³ → 32³ → 64³** (8³ removed). 8³ under-resolves thin-wall shells; N=64 resolves a 0.3 mm wall in a 5 mm cell (~3.8 voxels). All options are powers of two — the radix-2 FFT (`fft3dCpu`) hard-requires it, so 48³ is intentionally not offered.
+
+### Under-resolved designs now say so
+
+- When the cell-periodic buckling guard skips a design (sub-voxel features → too few interior voxels, or a disconnected/multi-component solid), the design card turns **amber with the reason** ("under-resolved at N=… — raise grid") and the run-complete banner names the skipped designs, instead of rendering a silent blank that read as "buckling didn't run."
+
+### GPU buckling solver — validated, not shipped
+
+- A complete WebGPU buckling solver (`16d-buckling-solver.js`) was built and validated against the CPU oracle: operators (applyK, applyKg, Γ⁰ preconditioner) to ~1e-7, a GPU-resident PCG at 6.8× the per-readback path, prestress extraction, and a block subspace eigensolver with **batched Gram reductions** (2·s² readbacks/sweep → 1). A recipe→λ_cr dispatcher (`computeBuckling`) routes GPU-or-CPU with automatic CPU fallback.
+- **It is off by default** (`window.BUCKLE_GPU = false`). At the grids the tool actually uses (N ≤ 64) the eigensolver is latency-bound: thousands of small `mapAsync` readbacks dominate and the problem is too small for GPU compute to amortize that overhead, so it runs slower than the CPU worker pool (which parallelizes designs/axes across cores). The path is retained and console-toggleable (`window.BUCKLE_GPU = true`); it is worth revisiting only at N ≥ 128 with a batched-resident rearchitecture. See [`NEXT_STEPS.md`](./NEXT_STEPS.md).
 
 ## What's new in v0.7.0
 
@@ -137,7 +154,7 @@ Phase 4 takes the solver from Phase 3's normal-only 3×3 to the full Voigt 6×6 
 - **Phase 2** · WebGPU foundation, WGSL 3D FFT kernel ✓
 - **Phase 3** · SDF rasterizer, linear elastic FFT-CG, field extraction, viz stack ✓
 - **Phase 4** · Full Voigt 6×6 with shear cases, stiffness directional surface viz, connectivity gating, six-axis toggle ✓
-- **Phase 5** · Linear buckling — CPU oracle + worker pool, animated mode-shape viz, local/global localization ✓ *(GPU LOBPCG solver deferred as a follow-on)*
+- **Phase 5** · Linear buckling — CPU oracle + worker pool, animated mode-shape viz, local/global localization ✓ *(GPU port built + validated (`16d`) but shelved — latency-bound, slower than the CPU pool at N≤64; CPU LOBPCG is the planned acceleration path, see [`NEXT_STEPS.md`](./NEXT_STEPS.md))*
 - **Phase 6** · Nonlinear (Newton + J2 plasticity) — solver + σ–ε comparison, α field tab, connectivity prune, plain-language readouts ✓
 - **Phase 7** · ~~Deformed-geometry domain warp, stress field overlay~~ — landed early in Phase 3
 - **Phase 8** ← *next* · Thermal κ tensor, remaining view modes
