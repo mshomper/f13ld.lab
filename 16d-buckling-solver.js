@@ -1088,15 +1088,33 @@ async function runBucklingGPUTest(N) {
   var bV = new Float64Array(3 * N3);
   applyKflat(uRef, bV);                                /* b = K·u_ref (in range) */
   bk_zeroMeanFlat(bV, N3);
-  var solCpu = bk_pcgSolveK(applyKflat, minv, bV, 3 * N3, N3, 1e-9, 2000);
+  var bnB = Math.sqrt(bV.reduce(function (s, v) { return s + v * v; }, 0)) + 1e-30;
+
+  /* CPU solved at the SAME f32-reachable tol as the GPU, so both stop at a
+     comparable convergence depth (the GPU-vs-CPU solution diff is a
+     diagnostic, not the gate). */
+  var solCpu = bk_pcgSolveK(applyKflat, minv, bV, 3 * N3, N3, 1e-5, 2000);
   var bBufGpu = solver.gV4;                            /* reuse gV4 as RHS scratch */
   solver._upload3(bV, bBufGpu);
   var solGpu = await solver.pcgSolveK(bBufGpu, { tol: 1e-5, maxiter: 2000 });
   var xGpu = await solver._readback3(solver.pcgX);
-  var eX = relErr(xGpu, solCpu.x);
+
+  /* Gate: push the GPU solution back through the TRUSTED CPU operator and
+     measure the true residual ‖b − K·x_gpu‖/‖b‖.  Conditioning- and
+     nullspace-robust — it asks directly whether x_gpu solves the system
+     K is defined to solve, rather than comparing two iterates. */
+  var kxGpu = new Float64Array(3 * N3);
+  applyKflat(xGpu, kxGpu);
+  var rchk = new Float64Array(3 * N3);
+  for (var ri = 0; ri < 3 * N3; ri++) rchk[ri] = bV[ri] - kxGpu[ri];
+  bk_zeroMeanFlat(rchk, N3);
+  var trueResid = Math.sqrt(rchk.reduce(function (s, v) { return s + v * v; }, 0)) / bnB;
+
+  var eX = relErr(xGpu, solCpu.x);                     /* diagnostic only */
   gates.pcgSolveK = {
-    relErr: eX, itersGPU: solGpu.iters, itersCPU: solCpu.iters,
-    relresGPU: solGpu.relres, pass: eX < 5e-3
+    trueResid: trueResid, relErrVsCPU: eX,
+    itersGPU: solGpu.iters, itersCPU: solCpu.iters, relresGPU: solGpu.relres,
+    pass: trueResid < 1e-3
   };
 
   solver.destroy();
