@@ -692,11 +692,13 @@ ElasticSolverFull.prototype._applyA = function(enc, epsIn, out) {
       ]
     });
     this._dispatchEncoded(enc, this.pcPipeline, pcBg, this.N3, 64);
-
-    this.fft.loadFromBuffer(enc, this.tauCmplx[Q]);
-    this.fft.forwardEncoded(enc);
-    this.fft.storeToBuffer(enc, this.tauHat[Q]);
   }
+
+  /* Batched forward FFT — all 6 Voigt components in ONE stage-set (6 FFTs
+     -> 1).  Packs above filled tauCmplx[0..5]; gather, transform, scatter. */
+  this.fft.loadFromBuffers(enc, this.tauCmplx);
+  this.fft.forwardEncoded(enc);
+  this.fft.storeToBuffers(enc, this.tauHat);
 
   /* 4. Seed out ← epsIn so the per-row deAccumLane (read-modify-write
         on out_v4) starts from the input strain on every lane. Without
@@ -740,23 +742,26 @@ ElasticSolverFull.prototype._applyA = function(enc, epsIn, out) {
       ]
     });
     this._dispatchEncoded(enc, this.gaAddPipeline, gaABg, this.N3, 64);
+  }
 
-    /* IFFT depsHat[P] → depsC[P] */
-    this.fft.loadFromBuffer(enc, this.depsHat[P]);
-    this.fft.inverseEncoded(enc);
-    this.fft.storeToBuffer(enc, this.depsC[P]);
+  /* Batched inverse FFT — all 6 rows of depsHat in ONE stage-set (12 IFFTs
+     -> 1).  Every row's gammaAccum is finished above (rows are independent),
+     so the single batched IFFT is order-safe; deAccum then runs per row. */
+  this.fft.loadFromBuffers(enc, this.depsHat);
+  this.fft.inverseEncoded(enc);
+  this.fft.storeToBuffers(enc, this.depsC);
 
-    /* deAccumLane: out.{n,s}[lane(P)] += Re(depsC[P]).  Read-modify-write
-       on out — out was pre-seeded with epsIn above, so the lane updated
-       here lands on top of the input-strain baseline.
-       For P < 3 we update lane (P) of {n}; for P >= 3 we update lane (P-3) of {s}. */
-    var destBuf = (P < 3) ? out.n : out.s;
-    var laneBuf2 = this.laneParamsBufs[P];
+  for (var P2 = 0; P2 < 6; P2++) {
+    /* deAccumLane: out.{n,s}[lane(P2)] += Re(depsC[P2]).  Read-modify-write
+       on out (pre-seeded with epsIn above).  P2 < 3 -> lane P2 of {n};
+       P2 >= 3 -> lane (P2-3) of {s}.  Rows write distinct lanes -> order-free. */
+    var destBuf = (P2 < 3) ? out.n : out.s;
+    var laneBuf2 = this.laneParamsBufs[P2];
     var daBg = d.createBindGroup({
       layout: this.daLayout,
       entries: [
         { binding: 0, resource: { buffer: destBuf } },
-        { binding: 1, resource: { buffer: this.depsC[P] } },
+        { binding: 1, resource: { buffer: this.depsC[P2] } },
         { binding: 2, resource: { buffer: laneBuf2 } }
       ]
     });
@@ -1509,14 +1514,16 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var Gamma = buildGammaFull(N, C_0[21], C_0[1]);
   var tGamma = performance.now() - t1;
 
-  /* Reuse the global FFT plan (matches solveDesignElastic's pattern) */
+  /* Batched FFT plan (batch = 6 Voigt components) — cached separately
+     from the single-transform __sharedFFT that the buckling / Stokes
+     solvers share, so neither path clobbers the other. */
   var fft;
-  if (window.__sharedFFT && window.__sharedFFT.N === N) {
-    fft = window.__sharedFFT;
+  if (window.__sharedFFTBatched && window.__sharedFFTBatched.N === N && window.__sharedFFTBatched.batch === 6) {
+    fft = window.__sharedFFTBatched;
   } else {
-    if (window.__sharedFFT) window.__sharedFFT.destroy();
-    fft = new FFTPlan(N);
-    window.__sharedFFT = fft;
+    if (window.__sharedFFTBatched) window.__sharedFFTBatched.destroy();
+    fft = new FFTPlan(N, 6);
+    window.__sharedFFTBatched = fft;
   }
   var solver = new ElasticSolverFull(N, fft);
   solver.uploadDesign(solid, Gamma, C_s, C_v, C_0);

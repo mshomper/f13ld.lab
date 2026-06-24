@@ -21,7 +21,7 @@
 var FFT_WGSL = [
 'struct FftParams {',
 '  N: u32, log_N: u32, stage: u32, sign_neg: u32,',
-'  axis: u32, pad0: u32, pad1: u32, pad2: u32,',
+'  axis: u32, batch: u32, wg_x: u32, pad2: u32,',
 '}',
 '',
 '@group(0) @binding(0) var<storage, read>       src: array<vec2<f32>>;',
@@ -36,12 +36,15 @@ var FFT_WGSL = [
 'fn fft_pass(@builtin(global_invocation_id) gid: vec3<u32>) {',
 '  let N = params.N;',
 '  let half_N = N >> 1u;',
-'  let total = half_N * N * N;',
-'  let tid = gid.x;',
+'  let per_slot = half_N * N * N;',
+'  let total = params.batch * per_slot;',
+'  let tid = gid.x + gid.y * params.wg_x * 64u;',
 '  if (tid >= total) { return; }',
 '',
-'  let butterfly_id = tid % half_N;',
-'  let rest         = tid / half_N;',
+'  let slot         = tid / per_slot;',
+'  let local        = tid % per_slot;',
+'  let butterfly_id = local % half_N;',
+'  let rest         = local / half_N;',
 '  let pencil_a     = rest % N;',
 '  let pencil_b     = rest / N;',
 '',
@@ -79,6 +82,12 @@ var FFT_WGSL = [
 '    d_hi = buf_index(pencil_a, pencil_b, dst_hi_pos, N);',
 '  }',
 '',
+'  let slot_off = slot * N * N * N;',
+'  s_lo = s_lo + slot_off;',
+'  s_hi = s_hi + slot_off;',
+'  d_lo = d_lo + slot_off;',
+'  d_hi = d_hi + slot_off;',
+'',
 '  let a     = src[s_lo];',
 '  let b_raw = src[s_hi];',
 '',
@@ -95,7 +104,7 @@ var FFT_WGSL = [
 /* WGSL: in-place 1/N³ scale, used after inverse FFT --------- */
 var NORM_WGSL = [
 'struct NormParams {',
-'  total: u32, scale: f32, pad0: u32, pad1: u32,',
+'  total: u32, scale: f32, wg_x: u32, pad1: u32,',
 '}',
 '',
 '@group(0) @binding(0) var<storage, read_write> data: array<vec2<f32>>;',
@@ -103,7 +112,7 @@ var NORM_WGSL = [
 '',
 '@compute @workgroup_size(64)',
 'fn normalize(@builtin(global_invocation_id) gid: vec3<u32>) {',
-'  let idx = gid.x;',
+'  let idx = gid.x + gid.y * params.wg_x * 64u;',
 '  if (idx >= params.total) { return; }',
 '  data[idx] = data[idx] * params.scale;',
 '}'
@@ -113,14 +122,16 @@ var NORM_WGSL = [
 /* ============================================================
    FFTPlan — encapsulates buffers + pipelines + bind groups
    ============================================================ */
-function FFTPlan(N){
+function FFTPlan(N, batch){
   this.N = N;
+  this.batch = (batch && batch > 0) ? (batch | 0) : 1;
   this.logN = Math.log2(N);
   if (this.logN !== Math.floor(this.logN)){
     throw new Error('FFT size must be a power of 2 — got ' + N);
   }
-  this.totalElements = N * N * N;
-  this.bufferSize    = this.totalElements * 8;
+  this.slotElements  = N * N * N;                       /* complex elements in one N³ transform */
+  this.totalElements = this.slotElements * this.batch;  /* across every batched slot */
+  this.bufferSize    = this.totalElements * 8;          /* vec2<f32> = 8 bytes/element */
   this.totalStages   = 3 * this.logN;
 
   this.device = WGPU.device;
@@ -128,12 +139,35 @@ function FFTPlan(N){
     throw new Error('FFTPlan requires WebGPU device — call ensureDevice() first');
   }
 
+  this._computeDispatchDims();
   this._buildPipelines();
   this._allocateBuffers();
   this._prebakeStageParams();
 
   this.lastResultBuffer = this.bufA;
 }
+
+/* _computeDispatchDims — batch×N³ threads can exceed the 1D workgroup cap, so
+   both the FFT stages and the norm pass dispatch on a 2D grid (wg_x × wg_y) and
+   the kernels linearize tid = gid.x + gid.y·wg_x·64.  wg_x is constant for the
+   plan's lifetime, so it is baked into the prebaked params.  For batch = 1 this
+   reduces to wg_x = wgCount, wg_y = 1, gid.y = 0 → identical to the 1D path. */
+FFTPlan.prototype._computeDispatchDims = function(){
+  var maxWG = (this.device.limits && this.device.limits.maxComputeWorkgroupsPerDimension) || 65535;
+
+  var fftThreads = this.batch * (this.N / 2) * this.N * this.N;
+  var fftWg      = Math.ceil(fftThreads / 64);
+  this._fftWgX   = Math.min(fftWg, maxWG);
+  this._fftWgY   = Math.ceil(fftWg / this._fftWgX);
+  if (this._fftWgY > maxWG){
+    throw new Error('FFTPlan: batch ' + this.batch + ' at N=' + this.N +
+                    ' exceeds the 2D workgroup grid — tile the batch into smaller groups.');
+  }
+
+  var normWg    = Math.ceil(this.totalElements / 64);
+  this._normWgX = Math.min(normWg, maxWG);
+  this._normWgY = Math.ceil(normWg / this._normWgX);
+};
 
 FFTPlan.prototype._buildPipelines = function(){
   var d = this.device;
@@ -172,8 +206,9 @@ FFTPlan.prototype._allocateBuffers = function(){
   this.normParamsBuffer = d.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
 
   var npBuf = new ArrayBuffer(16);
-  new Uint32Array(npBuf, 0, 1)[0]  = this.totalElements;
-  new Float32Array(npBuf, 4, 1)[0] = 1.0 / this.totalElements;
+  new Uint32Array(npBuf, 0, 1)[0]  = this.totalElements;        /* normalize every slot's elements */
+  new Float32Array(npBuf, 4, 1)[0] = 1.0 / this.slotElements;   /* per-slot 1/N³ — NOT divided by batch */
+  new Uint32Array(npBuf, 8, 1)[0]  = this._normWgX;             /* 2D linearization stride */
   d.queue.writeBuffer(this.normParamsBuffer, 0, npBuf);
 
   this.normBgA = d.createBindGroup({
@@ -209,8 +244,8 @@ FFTPlan.prototype._prebakeStageParams = function(){
       var fwdParamsBuf = d.createBuffer({ size: 32, usage: BU.UNIFORM | BU.COPY_DST });
       var invParamsBuf = d.createBuffer({ size: 32, usage: BU.UNIFORM | BU.COPY_DST });
 
-      d.queue.writeBuffer(fwdParamsBuf, 0, new Uint32Array([N, logN, stage, 1, axis, 0, 0, 0]));
-      d.queue.writeBuffer(invParamsBuf, 0, new Uint32Array([N, logN, stage, 0, axis, 0, 0, 0]));
+      d.queue.writeBuffer(fwdParamsBuf, 0, new Uint32Array([N, logN, stage, 1, axis, this.batch, this._fftWgX, 0]));
+      d.queue.writeBuffer(invParamsBuf, 0, new Uint32Array([N, logN, stage, 0, axis, this.batch, this._fftWgX, 0]));
 
       var fwdBg = d.createBindGroup({
         layout:  this.fftLayout,
@@ -272,6 +307,34 @@ FFTPlan.prototype.storeToBuffer = function(encoder, dstBuffer){
   encoder.copyBufferToBuffer(this.lastResultBuffer, 0, dstBuffer, 0, this.bufferSize);
 };
 
+/* loadFromBuffers(encoder, srcBuffers) — gather an array of per-slot complex
+   buffers (each slotElements·8 bytes) into the batched bufA: slot s lands at
+   byte offset s·slotElements·8.  A single forwardEncoded/inverseEncoded then
+   transforms all slots in one set of stage dispatches.  copyBufferToBuffer
+   offsets are multiples of 8 here, satisfying the 4-byte copy alignment. */
+FFTPlan.prototype.loadFromBuffers = function(encoder, srcBuffers){
+  if (srcBuffers.length > this.batch){
+    throw new Error('loadFromBuffers: ' + srcBuffers.length + ' buffers exceed batch ' + this.batch);
+  }
+  var slotBytes = this.slotElements * 8;
+  for (var s = 0; s < srcBuffers.length; s++){
+    encoder.copyBufferToBuffer(srcBuffers[s], 0, this.bufA, s * slotBytes, slotBytes);
+  }
+  this.lastResultBuffer = this.bufA;
+};
+
+/* storeToBuffers(encoder, dstBuffers) — scatter the most recent batched FFT
+   result back out, slot s → dstBuffers[s].  Mirror of loadFromBuffers. */
+FFTPlan.prototype.storeToBuffers = function(encoder, dstBuffers){
+  if (dstBuffers.length > this.batch){
+    throw new Error('storeToBuffers: ' + dstBuffers.length + ' buffers exceed batch ' + this.batch);
+  }
+  var slotBytes = this.slotElements * 8;
+  for (var s = 0; s < dstBuffers.length; s++){
+    encoder.copyBufferToBuffer(this.lastResultBuffer, s * slotBytes, dstBuffers[s], 0, slotBytes);
+  }
+};
+
 /* forward() / inverse() — standalone variants that submit their own encoder.
    Used by the FFT self-test and other one-shot consumers. */
 FFTPlan.prototype.forward = function(){
@@ -298,12 +361,9 @@ FFTPlan.prototype._encodeFFT = function(encoder, forward){
   var pass = encoder.beginComputePass();
   pass.setPipeline(this.fftPipeline);
 
-  var totalThreads = (this.N / 2) * this.N * this.N;
-  var wgCount      = Math.ceil(totalThreads / 64);
-
   for (var i = 0; i < this.stages.length; i++){
     pass.setBindGroup(0, forward ? this.stages[i].fwdBg : this.stages[i].invBg);
-    pass.dispatchWorkgroups(wgCount, 1, 1);
+    pass.dispatchWorkgroups(this._fftWgX, this._fftWgY, 1);
   }
   pass.end();
 
@@ -312,8 +372,7 @@ FFTPlan.prototype._encodeFFT = function(encoder, forward){
     pass.setPipeline(this.normPipeline);
     var resultBuf = this.invResultBuf;
     pass.setBindGroup(0, (resultBuf === this.bufA) ? this.normBgA : this.normBgB);
-    var normWg = Math.ceil(this.totalElements / 64);
-    pass.dispatchWorkgroups(normWg, 1, 1);
+    pass.dispatchWorkgroups(this._normWgX, this._normWgY, 1);
     pass.end();
   }
 
