@@ -675,6 +675,139 @@ function bk_subspaceGen(applyA, applyB, solveB, n, m, opts) {
 
 
 /* ════════════════════════════════════════════════════════════
+   bk_lobpcgGen — block LOBPCG for the largest eigenpairs of the
+   generalized pencil  A·φ = θ·B·φ  with B SPD (here A = −K_g,
+   B = K; θ_max → smallest buckling factor λ = 1/θ_max).
+
+   Unlike bk_subspaceGen — which forms B⁻¹·A·X via an exact inner
+   CG solve of K per block vector (the cost bottleneck) — LOBPCG
+   never solves B.  It applies a fixed preconditioner T ≈ B⁻¹ (the
+   Γ⁰ Christoffel operator, applyT) ONCE to the block residual and
+   accelerates with a conjugate-direction block P.  Same Rayleigh–
+   Ritz reduction and near-null drop as bk_subspaceGen, so it
+   converges to the identical θ (head-to-head: validate-buckling-
+   lobpcg.js; dense oracle: E4 gate).
+
+   applyA(x,out), applyB(x,out): flat 3N³ matvecs.
+   applyT(r,out):                flat preconditioner (Γ⁰), NOT a solve.
+   Returns [{theta, vec}] sorted desc, plus _iters, _converged. */
+function bk_lobpcgGen(applyA, applyB, applyT, n, m, opts) {
+  opts = opts || {};
+  var iters = opts.iters || 50;
+  var tol   = opts.tol != null ? opts.tol : 1e-6;
+  var proj  = opts.project || null;
+
+  var X = [];
+  for (var c = 0; c < m; c++) {
+    var v = new Float64Array(n);
+    for (var i = 0; i < n; i++) v[i] = Math.random() * 2 - 1;
+    if (proj) proj(v);
+    X.push(v);
+  }
+
+  var P = [];                    /* conjugate-direction block (empty on iter 0) */
+  var prevTheta = null, converged = false, lastIters = 0;
+
+  for (var it = 0; it < iters; it++) {
+    lastIters = it + 1;
+
+    /* A·X, B·X, Rayleigh quotients, preconditioned residuals W = T·(A·X − θ·B·X) */
+    var AX = [], BX = [], W = [];
+    for (var cc = 0; cc < m; cc++) {
+      var ax = new Float64Array(n); applyA(X[cc], ax);
+      var bx = new Float64Array(n); applyB(X[cc], bx);
+      var xbx = bk_dot(X[cc], bx, n);
+      var theta = (Math.abs(xbx) > 1e-300) ? bk_dot(X[cc], ax, n) / xbx : 0;
+      var w = new Float64Array(n);
+      for (var i2 = 0; i2 < n; i2++) w[i2] = ax[i2] - theta * bx[i2];
+      var tw = new Float64Array(n); applyT(w, tw);
+      if (proj) proj(tw);
+      AX.push(ax); BX.push(bx); W.push(tw);
+    }
+
+    /* raw trial basis V = [X | W | P]  (block identity kept for the P update) */
+    var V = X.concat(W); if (P.length) V = V.concat(P);
+    var s = V.length, mX = m;
+
+    /* A·V, B·V  (reuse A·X, B·X for the first mX columns) */
+    var AV = [], BV = [];
+    for (var j = 0; j < s; j++) {
+      if (j < mX) { AV.push(AX[j]); BV.push(BX[j]); }
+      else { var av = new Float64Array(n), bv = new Float64Array(n); applyA(V[j], av); applyB(V[j], bv); AV.push(av); BV.push(bv); }
+    }
+
+    /* Gram matrices SA = Vᵀ A V, SB = Vᵀ B V (symmetrized) */
+    var SA = new Float64Array(s * s), SB = new Float64Array(s * s);
+    for (var ii = 0; ii < s; ii++) for (var jj = 0; jj < s; jj++) {
+      SA[ii * s + jj] = bk_dot(V[ii], AV[jj], n);
+      SB[ii * s + jj] = bk_dot(V[ii], BV[jj], n);
+    }
+    for (var a2 = 0; a2 < s; a2++) for (var b2 = a2 + 1; b2 < s; b2++) {
+      var sma = 0.5 * (SA[a2 * s + b2] + SA[b2 * s + a2]); SA[a2 * s + b2] = sma; SA[b2 * s + a2] = sma;
+      var smb = 0.5 * (SB[a2 * s + b2] + SB[b2 * s + a2]); SB[a2 * s + b2] = smb; SB[b2 * s + a2] = smb;
+    }
+
+    /* B-orthonormalize the trial space, drop K-null / near-null directions */
+    var eigB = bk_jacobiSym(SB, s, 200, 1e-15);
+    var maxB = 0; for (var db = 0; db < s; db++) if (eigB.values[db] > maxB) maxB = eigB.values[db];
+    var keep = []; for (var dk = 0; dk < s; dk++) if (eigB.values[dk] > 1e-9 * maxB) keep.push(dk);
+    var sk = keep.length;
+    if (sk === 0) break;
+    var Tr = new Float64Array(s * sk);
+    for (var ti = 0; ti < s; ti++) for (var tp = 0; tp < sk; tp++) Tr[ti * sk + tp] = eigB.vectors[ti * s + keep[tp]] / Math.sqrt(eigB.values[keep[tp]]);
+    var SAT = new Float64Array(s * sk);
+    for (var ri = 0; ri < s; ri++) for (var rp = 0; rp < sk; rp++) { var acc = 0; for (var rj = 0; rj < s; rj++) acc += SA[ri * s + rj] * Tr[rj * sk + rp]; SAT[ri * sk + rp] = acc; }
+    var SAr = new Float64Array(sk * sk);
+    for (var pp = 0; pp < sk; pp++) for (var qq = 0; qq < sk; qq++) { var acc2 = 0; for (var pi2 = 0; pi2 < s; pi2++) acc2 += Tr[pi2 * sk + pp] * SAT[pi2 * sk + qq]; SAr[pp * sk + qq] = acc2; }
+    for (var sa = 0; sa < sk; sa++) for (var sb2 = sa + 1; sb2 < sk; sb2++) { var sm = 0.5 * (SAr[sa * sk + sb2] + SAr[sb2 * sk + sa]); SAr[sa * sk + sb2] = sm; SAr[sb2 * sk + sa] = sm; }
+
+    var eigA = bk_jacobiSym(SAr, sk, 200, 1e-15);
+    var order = []; for (var o = 0; o < sk; o++) order.push(o);
+    order.sort(function (p, q) { return eigA.values[q] - eigA.values[p]; });   /* largest θ first */
+
+    var take = Math.min(m, sk);
+    var newX = [], newP = [], topThetas = [];
+    for (var c2 = 0; c2 < take; c2++) {
+      var oc = order[c2];
+      topThetas.push(eigA.values[oc]);
+      var yv = new Float64Array(s);                          /* Ritz coords in V: y = Tr·z */
+      for (var yi = 0; yi < s; yi++) { var acc3 = 0; for (var yp = 0; yp < sk; yp++) acc3 += Tr[yi * sk + yp] * eigA.vectors[yp * sk + oc]; yv[yi] = acc3; }
+      var xc = new Float64Array(n), pc = new Float64Array(n);
+      for (var jv = 0; jv < s; jv++) {
+        var coef = yv[jv], Vj = V[jv];
+        for (var iv = 0; iv < n; iv++) xc[iv] += coef * Vj[iv];
+        if (jv >= mX) { for (var iv2 = 0; iv2 < n; iv2++) pc[iv2] += coef * Vj[iv2]; }   /* P_{k+1} = (W,P) part */
+      }
+      if (proj) { proj(xc); proj(pc); }
+      newX.push(xc); newP.push(pc);
+    }
+    X = newX; P = newP;
+
+    if (prevTheta && prevTheta.length === topThetas.length) {
+      var maxd = 0;
+      for (var kk = 0; kk < topThetas.length; kk++) {
+        var rel = Math.abs(topThetas[kk] - prevTheta[kk]) / Math.max(Math.abs(topThetas[kk]), 1e-30);
+        if (rel > maxd) maxd = rel;
+      }
+      if (maxd < tol) { converged = true; break; }
+    }
+    prevTheta = topThetas;
+  }
+
+  var out = [];
+  var tmpA = new Float64Array(n), tmpB = new Float64Array(n);
+  for (var cf = 0; cf < X.length; cf++) {
+    applyA(X[cf], tmpA); applyB(X[cf], tmpB);
+    var num = bk_dot(X[cf], tmpA, n), den = bk_dot(X[cf], tmpB, n);
+    out.push({ theta: num / den, vec: X[cf] });
+  }
+  out.sort(function (p, q) { return q.theta - p.theta; });
+  out._iters = lastIters; out._converged = converged;
+  return out;
+}
+
+
+/* ════════════════════════════════════════════════════════════
    runBucklingEigSelfTest — Push 2a validation (no physics yet).
 
      E1. Cholesky: ‖L·Lᵀ − A‖∞ on a random SPD A           (< 1e-10)
@@ -1086,7 +1219,7 @@ function bk_modeLocalization(modeFlat, solid, N) {
 
 function bucklingFromSolid(solid, C_s, C_v, N, opts) {
   opts = opts || {};
-  var m = opts.block || 8;
+  var m = opts.block || 4;   /* comparative ranking: a small block is enough for the critical mode */
   var axes = opts.axes || [0, 1, 2];
   var axisName = ['xx', 'yy', 'zz'];
   var ws = getBucklingWorkspaceCPU(N);
@@ -1107,10 +1240,21 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
     var applyB = function (x, out) { bk_flatToField(x, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); };
     var solveB = function (b, out) { var r = bk_pcgSolveK(applyB, applyMinv, b, n, N3, opts.cgTol || 1e-9, opts.cgMaxiter || 2000); out.set(r.x); };
 
-    var pairs = bk_subspaceGen(applyA, applyB, solveB, n, m, {
-      project: function (v) { bk_zeroMeanFlat(v, N3); },
-      iters: opts.eigIters || 80, tol: opts.eigTol || 1e-8
-    });
+    /* LOBPCG (default) preconditions with Γ⁰ and never solves K — the fast path.
+       eigMethod:'subspace' keeps the exact-inner-solve reference for the
+       head-to-head drift check (validate-buckling-lobpcg.js). */
+    var pairs;
+    if (opts.eigMethod === 'subspace') {
+      pairs = bk_subspaceGen(applyA, applyB, solveB, n, m, {
+        project: function (v) { bk_zeroMeanFlat(v, N3); },
+        iters: opts.eigIters || 80, tol: opts.eigTol || 1e-8
+      });
+    } else {
+      pairs = bk_lobpcgGen(applyA, applyB, applyMinv, n, m, {
+        project: function (v) { bk_zeroMeanFlat(v, N3); },
+        iters: opts.eigIters || 60, tol: opts.eigTol || 1e-6
+      });
+    }
 
     /* smallest positive λ = 1/(largest positive θ) */
     var lamAxis = Infinity, modeAxis = null;
