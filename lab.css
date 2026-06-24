@@ -185,10 +185,20 @@ html, body {
 }
 .dc-viewport svg { width:100%; height:100%; display:block }
 
-.vp-axis {
-  position:absolute; top:10px; right:10px; pointer-events:none;
-  font-family:'JetBrains Mono', monospace; font-size:9px; color:var(--ink-dim);
-  letter-spacing:0.1em; opacity:0.7; line-height:1.4;
+/* #5 — rotating axis-gimbal overlay.  Neutral slate triad (kept clear of the
+   metric green/red/amber and the design blue/violet/magenta) so it reads as
+   pure orientation; the X/Y/Z letters carry the identity and depth-opacity is
+   set per-frame by labGimbalSetAxis(). */
+.vp-gimbal {
+  position:absolute; top:8px; right:8px; width:46px; height:46px;
+  pointer-events:none; opacity:0.9;
+}
+.vp-gimbal svg { width:100%; height:100%; overflow:visible; display:block; }
+.vp-gimbal .gax { stroke:#8fa3b3; stroke-width:1.6; stroke-linecap:round; }
+.vp-gimbal .gctr { fill:#8fa3b3; opacity:0.65; }
+.vp-gimbal .glb {
+  fill:#cdd9e2; font-family:'JetBrains Mono', monospace; font-size:9px;
+  font-weight:600; text-anchor:middle; dominant-baseline:middle;
 }
 .vp-readout {
   position:absolute; bottom:10px; left:10px;

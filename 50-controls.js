@@ -307,13 +307,12 @@ function startRun(){
   paintSolverPill('solving', 'warn');
   setSolverSpinner(true);            /* tie-up #2 — branded "still working" mark */
 
-  /* Pick run resolution.  For real CPU/GPU elastic, N=32 is the sweet spot
-     for interactive use (~2-5 sec/design on most hardware).  N=64 is 8× more
-     work; N=128 is 64× more.  If the user explicitly picked a manual N via
-     the grid pill, respect it.  Auto mode → cap at 32 for real runs because
-     autoPickGrid's default of 64 was tuned for the mock and is too slow. */
+  /* Pick run resolution.  Whatever the Grid pill shows is what we solve —
+     Auto resolves to autoPickGrid()'s hardware-tier choice at load (128 on
+     high-tier, 64 otherwise); Manual respects the user's pick.  Keeping a
+     single source of truth means the pill label, the time estimate, and the
+     N reported in the run status all agree with the grid passed to the solver. */
   var runN = GRID_STATE.N;
-  if (GRID_STATE.mode === 'auto') runN = 32;
 
   /* Kick off the real sweep.  Don't await here — we let the function run in
      the background while the UI stays responsive (each design's compute is

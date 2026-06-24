@@ -134,7 +134,7 @@ function _buildIcosphere(subdivisions) {
   return { positions: positions, indices: indices, nVerts: verts.length, nTris: faces.length };
 }
 
-var LAB_SV_MESH = _buildIcosphere(3);   /* 642 verts, 1280 tris */
+var LAB_SV_MESH = _buildIcosphere(4);   /* 2562 verts, 5120 tris — subdivision bumped from 3 (642) so high-anisotropy lobes resolve smoothly instead of faceting */
 
 
 /* ════════════════════════════════════════════════════════════
@@ -178,6 +178,31 @@ var LAB_SV_VS = [
   'out float vColor;',             /* color stretch input — for cividis */
   'out vec3 vNormal;',             /* radial direction — diffuse approx */
 
+  /* Directional inverse Young's modulus 1/E(n̂) = v^T S v (engineering Voigt). */
+  'float invEdir(vec3 nd) {',
+  '  float v0 = nd.x*nd.x;',
+  '  float v1 = nd.y*nd.y;',
+  '  float v2 = nd.z*nd.z;',
+  '  float v3 = nd.y*nd.z;',
+  '  float v4 = nd.x*nd.z;',
+  '  float v5 = nd.x*nd.y;',
+  '  float vv[6];',
+  '  vv[0]=v0; vv[1]=v1; vv[2]=v2; vv[3]=v3; vv[4]=v4; vv[5]=v5;',
+  '  float ie = 0.0;',
+  '  for (int i = 0; i < 6; i++) {',
+  '    for (int j = 0; j < 6; j++) {',
+  '      ie += uS[i*6 + j] * vv[i] * vv[j];',
+  '    }',
+  '  }',
+  '  return ie;',
+  '}',
+  /* Clamped radial scale r(n̂) = E/uREmax for the displaced vertex (shared by
+     the vertex position and the tangent finite-differences that build the normal). */
+  'float radiusFor(vec3 nd) {',
+  '  float ie = invEdir(nd);',
+  '  float E = (ie > 1e-30) ? (1.0 / ie) : 0.0;',
+  '  return clamp(E / max(uREmax, 1e-30), 0.0, 1.0);',
+  '}',
   'void main() {',
   /* Voigt v vector for ENGINEERING-VOIGT compliance.  S returned by the
      solver has S_44 = 1/G (engineering convention; verified against Schwarz P
@@ -198,25 +223,7 @@ var LAB_SV_VS = [
      Verified on near-isotropic gyroid (Zener ≈ 0.96):
        E_max/E_min ≈ 1.05  (previously read 3.29 with the buggy v) */
   '  vec3 n = aPos;',              /* aPos is already unit-length from icosphere */
-  '  float v0 = n.x*n.x;',
-  '  float v1 = n.y*n.y;',
-  '  float v2 = n.z*n.z;',
-  '  float v3 = n.y * n.z;',
-  '  float v4 = n.x * n.z;',
-  '  float v5 = n.x * n.y;',
-  '  float vv[6];',
-  '  vv[0]=v0; vv[1]=v1; vv[2]=v2; vv[3]=v3; vv[4]=v4; vv[5]=v5;',
-  /* inv_E = v^T S v.  S is symmetric, so we sum all 36 terms;
-     equivalent to 2× off-diagonal summation but cleaner. */
-  '  float inv_E = 0.0;',
-  '  for (int i = 0; i < 6; i++) {',
-  '    for (int j = 0; j < 6; j++) {',
-  '      inv_E += uS[i*6 + j] * vv[i] * vv[j];',
-  '    }',
-  '  }',
-  /* Clamp guards against pathological negative inv_E (would mean a
-     non-positive-definite S — solver should never produce that, but
-     belt-and-suspenders for the visual). */
+  '  float inv_E = invEdir(n);',
   '  float E = (inv_E > 1e-30) ? (1.0 / inv_E) : 0.0;',
 
   /* Push 5.3 — radius and color use independent normalizations:
@@ -238,12 +245,23 @@ var LAB_SV_VS = [
      a flat camera.  uAspect adjusts X to keep the surface circular. */
   '  gl_Position = vec4(world.x * uZoom / uAspect, world.y * uZoom, world.z * 0.5, 1.0);',
 
-  /* Approximate normal with the radial direction.  True normal would
-     require the gradient of r over the sphere (more involved).  For
-     diffuse-only shading this is visually fine — the surface gradient
-     contribution is dominated by the radial slope, and the cividis
-     colormap carries the actual data. */
-  '  vNormal = uRot * normalize(aPos);',
+  /* Analytic surface normal of the displaced surface r(n̂)·n̂ via two
+     tangent finite-differences.  Replaces the old radial approximation so
+     anisotropic lobes shade as smooth surfaces rather than faceted spikes. */
+  '  vec3 nn = normalize(aPos);',
+  '  vec3 ref = (abs(nn.y) < 0.99) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);',
+  '  vec3 t1 = normalize(cross(nn, ref));',
+  '  vec3 t2 = cross(nn, t1);',
+  '  float e = 0.035;',
+  '  vec3 nA = normalize(nn + e * t1);',
+  '  vec3 nB = normalize(nn + e * t2);',
+  '  vec3 P0 = nn * r;',
+  '  vec3 PA = nA * radiusFor(nA);',
+  '  vec3 PB = nB * radiusFor(nB);',
+  '  vec3 sn = cross(PA - P0, PB - P0);',
+  '  if (dot(sn, nn) < 0.0) sn = -sn;',
+  '  sn = (length(sn) > 1e-12) ? normalize(sn) : nn;',
+  '  vNormal = uRot * sn;',
   '}'
 ].join('\n');
 
@@ -363,6 +381,8 @@ function StiffnessViz() {
   this._dirty      = true;
   this._rotY       = 0;
   this._rotX       = 0.3;                    /* slight tilt — same default as raymarcher */
+  this._gimbal     = null;                   /* #5 — axis-gimbal overlay refs */
+  this._gimbalLast = null;
   this._lastTickMs = 0;
   /* Push 5.3 — once the user has touched the canvas, auto-rotate stops
      permanently for this tile.  The initial auto-rotate stays so the
@@ -551,6 +571,16 @@ StiffnessViz.prototype.setVizParams = function(REmax, Cmin, Cmax) {
   this._dirty = true;
 };
 
+/* #5 — axis gimbal (shares the raymarcher's helpers; same rotation convention). */
+StiffnessViz.prototype.setGimbal = function(el) {
+  this._gimbal = (typeof labGimbalRefs === 'function') ? labGimbalRefs(el) : null;
+  this._gimbalLast = null;
+};
+StiffnessViz.prototype._updateGimbal = function() {
+  if (!this._gimbal || typeof labGimbalUpdate !== 'function') return;
+  labGimbalUpdate(this._gimbal, this._rotX, this._rotY, this);
+};
+
 StiffnessViz.prototype.getStats = function() {
   /* Returns a copy so callers can't mutate internal state. */
   return {
@@ -626,6 +656,7 @@ StiffnessViz.prototype._render = function() {
      sx * sy,    cx,     sx * cy,
      cx * sy,   -sx,     cx * cy
   ]);
+  this._updateGimbal();   /* #5 — keep the axis triad in sync with the surface */
 
   gl.useProgram(this._prog);
   gl.uniform1fv(this._uloc['uS[0]'], this._S);
@@ -820,6 +851,11 @@ function mountStiffnessTiles() {
     if (!sv) continue;
     if (sv.canvas && sv.canvas.parentNode !== mount) {
       mount.appendChild(sv.canvas);
+    }
+    /* #5 — wire the axis-gimbal overlay (sibling of the mount in the viewport). */
+    if (sv.setGimbal) {
+      var vp = mount.parentNode;
+      sv.setGimbal(vp ? vp.querySelector('.vp-gimbal') : null);
     }
     if (io) io.observe(mount);
   }

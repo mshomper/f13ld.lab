@@ -17,7 +17,7 @@ var MOCK_DESIGNS = [
     rho_rel:0.42,
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
-    color:'#2dd4bf',
+    color:'#4f86f7',
     slot:0,
     /* mock results (populated by mock run, in real Phase 3+ these
        come from solver output) */
@@ -44,7 +44,7 @@ var MOCK_DESIGNS = [
     rho_rel:0.38,
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
-    color:'#fbbf24',
+    color:'#a78bfa',
     slot:1,
     results:{
       E11:0.89, E22:0.89, E33:0.89,
@@ -69,7 +69,7 @@ var MOCK_DESIGNS = [
     rho_rel:0.40,
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
-    color:'#fb7185',
+    color:'#e879c9',
     slot:2,
     results:{
       E11:1.05, E22:1.05, E33:1.05,
@@ -161,7 +161,7 @@ function fmtForceN(n){
   return n.toFixed(1) + ' N';
 }
 
-var DESIGN_PALETTE = ['#2dd4bf', '#fbbf24', '#fb7185'];   /* A=teal-cyan (cyan reserved for section labels) */
+var DESIGN_PALETTE = ['#4f86f7', '#a78bfa', '#e879c9'];   /* A=azure blue, B=violet, C=magenta — chosen clear of metric green/amber/red, lab accent (#fbbf24), neon, and section-label cyan (#22d3ee) */
 function reconcileDesignSlots(){
   var ds = LAB_STATE.designs, used = [false, false, false], i;
   for (i = 0; i < ds.length; i++){

@@ -442,7 +442,7 @@ function renderDesignGrid(){
       '<div class="dc-viewport">' +
         viewportInner +
         buckleChip +
-        '<div class="vp-axis">+Z<br>↑ +Y<br>→ +X</div>' +
+        ((useRM || useSV) ? buildGimbalOverlay() : '') +
         (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
         (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +
         (showBuckleBar ? buildBuckleColorbar() : '') +
@@ -838,11 +838,11 @@ function readoutForDesign(d, mode){
        multiplier) and the user multiplier value.  When sat ≠ 1.0 the
        cap is what the colorbar yellow actually represents on this design. */
     if (r._fieldsByAxis) {
-      var p95 = computeStressP95AcrossAxes(r._fieldsByAxis);
-      var trueMax = computeStressMaxAcrossAxes(r._fieldsByAxis);
       var satMul = (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0;
-      var effCap = p95 * satMul;
-      if (p95 > 0 || trueMax > 0) {
+      var sd = (typeof resolveStressDisplay === 'function') ? resolveStressDisplay(d, LAB_STATE.designs) : { cap: 0 };
+      var effCap = sd.cap;   /* #3 — displayed-axis (per) or global (shared) cap, already × sat */
+      var trueMax = computeStressMaxAcrossAxes(r._fieldsByAxis);
+      if (effCap > 0 || trueMax > 0) {
         function fmt(v){
           if (v >= 1000) return (v/1000).toFixed(2) + ' GPa';
           if (v >= 1) return v.toFixed(1) + ' MPa';
@@ -976,14 +976,14 @@ function computeStressMaxAcrossAxes(fieldsByAxis){
    floats), ~20-50 ms at N=32.  Replaces the separate
    computeStressP95AcrossAxes call.
    ---------------------------------------------------------- */
-function computeStressStatsAcrossAxes(fieldsByAxis){
+function computeStressStatsForAxes(fieldsByAxis, axes){
   var noData = { p95: 0, median: 0, max: 0, autoGamma: 1.0 };
   if (!fieldsByAxis) return noData;
   /* Piece B — pools σ_VM across all six Voigt axes for per-design stats.
      This makes p95/median sensitive to shear-LC stress concentrations,
      which is correct: per-design auto-cap should reflect the full
      loading envelope, not just the normal-axis subset. */
-  var axes = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
+  if (!axes || !axes.length) axes = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
 
   /* Pass 1: global max */
   var globalMax = 0;
@@ -1039,6 +1039,12 @@ function computeStressStatsAcrossAxes(fieldsByAxis){
   }
 
   return { p95: p95, median: median, max: globalMax, autoGamma: autoGamma };
+}
+
+/* Pool across all six Voigt axes (shared mode + honest readout max).  Kept as
+   a thin wrapper so existing callers are unchanged. */
+function computeStressStatsAcrossAxes(fieldsByAxis){
+  return computeStressStatsForAxes(fieldsByAxis, ['xx', 'yy', 'zz', 'yz', 'xz', 'xy']);
 }
 
 
@@ -1136,6 +1142,47 @@ function computeGlobalStressP95(designs){
 
    Returns { cap, gamma, mode } in MPa / unitless / string.
    ---------------------------------------------------------- */
+/* #5 — rotating axis-gimbal overlay markup.  Neutral slate triad with X/Y/Z
+   letters; the viewer's _updateGimbal() rewrites the line endpoints + label
+   positions each frame via the shared labGimbal* helpers.  Replaces the old
+   static corner label so the axes actually track the rendered rotation. */
+function buildGimbalOverlay(){
+  return '<div class="vp-gimbal" aria-hidden="true">' +
+    '<svg viewBox="-22 -22 44 44">' +
+      '<line class="gax gx" x1="0" y1="0" x2="15" y2="0"></line>' +
+      '<line class="gax gy" x1="0" y1="0" x2="0" y2="-15"></line>' +
+      '<line class="gax gz" x1="0" y1="0" x2="0" y2="0"></line>' +
+      '<circle class="gctr" cx="0" cy="0" r="1.6"></circle>' +
+      '<text class="glb glx" x="21" y="3">X</text>' +
+      '<text class="glb gly" x="0" y="-19">Y</text>' +
+      '<text class="glb glz" x="0" y="3">Z</text>' +
+    '</svg></div>';
+}
+
+/* #6b — p99 cap for the nonlinear plastic-strain (alpha) colormap.  Using the
+   raw max lets a single hot voxel pin the scale and wash the body to one color;
+   clipping at the 99th percentile of the fully-crushed (final-step) significant
+   alpha distributes color across the whole cell.  Cached on nl._p99cap. */
+function nlAlphaCap(nl){
+  if (!nl || !nl.alphaSteps || !nl.alphaSteps.length) return 0;
+  if (nl._p99cap !== undefined) return nl._p99cap;
+  var last = nl.alphaSteps[nl.alphaSteps.length - 1].alpha;
+  var fallback = (nl.alphaMax && nl.alphaMax > 0) ? nl.alphaMax : 0;
+  if (!last || !last.length){ nl._p99cap = fallback; return fallback; }
+  var i, mx = 0;
+  for (i = 0; i < last.length; i++){ if (last[i] > mx) mx = last[i]; }
+  if (mx <= 0){ nl._p99cap = 0; return 0; }
+  var thr = mx * 0.001, n = 0;
+  for (i = 0; i < last.length; i++){ if (last[i] > thr) n++; }
+  if (n === 0){ nl._p99cap = mx; return mx; }
+  var arr = new Float32Array(n), k = 0;
+  for (i = 0; i < last.length; i++){ if (last[i] > thr) arr[k++] = last[i]; }
+  arr.sort();
+  var cap = arr[Math.floor(0.99 * (n - 1))];
+  nl._p99cap = (cap > 0) ? cap : (fallback > 0 ? fallback : mx);
+  return nl._p99cap;
+}
+
 function resolveStressDisplay(design, allDesigns){
   var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
   var sat  = (typeof getStressSat === 'function') ? getStressSat(design.id) : 1.0;
@@ -1143,8 +1190,12 @@ function resolveStressDisplay(design, allDesigns){
     var globalP95 = computeGlobalStressP95(allDesigns);
     return { cap: globalP95 * sat, gamma: 1.0, mode: 'shared' };
   }
-  /* per-design */
-  var stats = computeStressStatsAcrossAxes(design.results && design.results._fieldsByAxis);
+  /* per-design, per-DISPLAYED-axis (#3): cap/gamma reflect only the axis
+     currently shown, so low-magnitude shear axes (yz/xz/xy) are no longer
+     washed out by a cap pooled from the larger normal-axis stresses.  The
+     'shared' toggle (handled above) still pools globally across axes/designs. */
+  var axis = (typeof getStressAxis === 'function') ? getStressAxis(design.id) : 'zz';
+  var stats = computeStressStatsForAxes(design.results && design.results._fieldsByAxis, [axis]);
   return { cap: stats.p95 * sat, gamma: stats.autoGamma, mode: 'per' };
 }
 
@@ -1383,13 +1434,14 @@ function renderNonlinearViz(){
     var Nd = (eq.elastic && eq.elastic.N) ? eq.elastic.N : eq.nl.N;
     var uPrime = (eq.elastic && eq.elastic.u_prime) ? eq.elastic.u_prime : null;
     var a0 = upsampleScalarTrilinear(eq.nl.alphaSteps[0].alpha, eq.nl.N, Nd);
-    var cap = (eq.nl.alphaMax && eq.nl.alphaMax > 0) ? eq.nl.alphaMax : 0;
+    var cap = nlAlphaCap(eq.nl);   /* #6b — p99 cap */
     if (rm.uploadFields) rm.uploadFields({ u_prime: uPrime, sigma_vm: a0, N: Nd,
                                            eps_bar: (eq.elastic && eq.elastic.eps_bar) ? eq.elastic.eps_bar : null }, cap);
     if (rm.setBuckleMap)   rm.setBuckleMap(true);     /* turbo ramp for α */
     if (rm.setPulse)       rm.setPulse(false);
     if (rm.setStressGamma) rm.setStressGamma(1.0);
     if (rm.setViewMode)    rm.setViewMode('stress');
+    if (rm.setDeformSign)  rm.setDeformSign(-1);   /* #6a — crush compresses, not expands */
     if (rm.setDeformAmp)   rm.setDeformAmp(0);
     if (rm.setActive)      rm.setActive(true);   /* render now; IO will manage it thereafter */
     eq._Nd = Nd;
@@ -1445,7 +1497,7 @@ function nlvizApply(frac){
     if (si !== NLVIZ.lastInt[e.id]){
       var Nd = e._Nd || ((e.elastic && e.elastic.N) ? e.elastic.N : e.nl.N);
       var aUp = upsampleScalarTrilinear(e.nl.alphaSteps[si].alpha, e.nl.N, Nd);
-      var cap = (e.nl.alphaMax && e.nl.alphaMax > 0) ? e.nl.alphaMax : 0;
+      var cap = nlAlphaCap(e.nl);   /* #6b — p99 cap */
       if (rm.updateScalarField) rm.updateScalarField(aUp, Nd, cap);
       NLVIZ.lastInt[e.id] = si;
     }

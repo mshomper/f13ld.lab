@@ -93,6 +93,14 @@ function buildLabRaymarcherFS(stepCount) {
     'uniform float uBuckleMap;',
     /* 4b — texture resolution for cubic kernel offset math.  Set at upload time. */
     'uniform float uTexN;',
+    /* #6 crush sign: +1 = tension (default, elastic +unit-strain corrector),
+       -1 = compression.  Multiplies the warp amplitude so a crush renders the
+       cube shrinking instead of expanding. */
+    'uniform float uDeformSign;',
+    /* #7 per-design surface tint for geom/deform views.  uTintStrength=0 is the
+       untinted default; stress/buckling colormap branches ignore it. */
+    'uniform vec3 uTint;',
+    'uniform float uTintStrength;',
 
     'const float H = 3.141593;',
 
@@ -300,8 +308,9 @@ function buildLabRaymarcherFS(stepCount) {
     'float implicit(vec3 p) {',
     '  vec3 p_eval = p;',
     '  if (uViewMode > 0.5 && uViewMode < 2.5) {',
-    '    vec3 p_unstretched = p / (vec3(1.0) + uDeformAmp * uEpsBar);',
-    '    p_eval = p_unstretched - uDeformAmp * sampleDisp(p_unstretched);',
+    '    float sAmp = uDeformAmp * uDeformSign;',
+    '    vec3 p_unstretched = p / (vec3(1.0) + sAmp * uEpsBar);',
+    '    p_eval = p_unstretched - sAmp * sampleDisp(p_unstretched);',
     '  }',
     '  if (uTopoMode > 2.5) {',
     /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
@@ -422,8 +431,9 @@ function buildLabRaymarcherFS(stepCount) {
        the larger interface-contamination issue. */
     '  vec3 col;',
     '  if (uViewMode > 1.5 && uViewMode < 2.5 && uStressUploaded > 0.5) {',
-    '    vec3 pos_unstretched = pos / (vec3(1.0) + uDeformAmp * uEpsBar);',
-    '    vec3 p_eval_stress = pos_unstretched - uDeformAmp * sampleDisp(pos_unstretched);',
+    '    float sAmpS = uDeformAmp * uDeformSign;',
+    '    vec3 pos_unstretched = pos / (vec3(1.0) + sAmpS * uEpsBar);',
+    '    vec3 p_eval_stress = pos_unstretched - sAmpS * sampleDisp(pos_unstretched);',
     '    float sv = sampleStress(p_eval_stress);',
     /* A.3.3 — gamma correction: t -> t^γ.  γ<1 brightens the low end of the
        colormap, γ=1 is linear (used in shared mode for cross-comparison). */
@@ -438,6 +448,7 @@ function buildLabRaymarcherFS(stepCount) {
     '    float dz = dot(n, vec3(0.0,0.0,1.0));',
     '    float hue = dy*dy*0.33 + dz*dz*0.67;',
     '    vec3 iridBase = palette(hue);',
+    '    iridBase = mix(iridBase, uTint, uTintStrength);',
     '    float spec1 = pow(max(dot(reflect(-l1, n), -rd), 0.0), 120.0) * 0.7;',
     '    float spec2 = pow(max(dot(reflect(-l1, n), -rd), 0.0),  20.0) * 0.2;',
     '    float rim   = pow(1.0 - max(dot(n, -rd), 0.0), 2.5) * 0.8;',
@@ -520,6 +531,62 @@ function dilateSigmaVMByOneVoxel(sv, N) {
 /* ════════════════════════════════════════════════════════════
    LabRaymarcher class
    ════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════
+   #5 — Axis gimbal overlay helpers (shared by the raymarcher and the
+   stiffness viz).  labGimbalRefs() caches the SVG nodes inside a .vp-gimbal
+   container; labGimbalUpdate() projects the X/Y/Z unit axes through the
+   viewer's current rotation (same column-major Rx·Ry convention as the GL
+   shaders) and moves the line endpoints + labels.  Axes are drawn in a
+   neutral slate (no metric/design color collision); the X/Y/Z letters carry
+   the identity, and depth fades the away-facing axis.
+   ════════════════════════════════════════════════════════════ */
+function labGimbalRefs(el) {
+  if (!el) return null;
+  var gx = el.querySelector('.gx'), gy = el.querySelector('.gy'), gz = el.querySelector('.gz');
+  var lx = el.querySelector('.glx'), ly = el.querySelector('.gly'), lz = el.querySelector('.glz');
+  if (!gx || !gy || !gz || !lx || !ly || !lz) return null;
+  return { gx: gx, gy: gy, gz: gz, lx: lx, ly: ly, lz: lz };
+}
+
+function labGimbalSetAxis(line, label, v, R) {
+  var px = v[0] * R, py = -v[1] * R;   /* SVG y-down */
+  line.setAttribute('x2', px.toFixed(1));
+  line.setAttribute('y2', py.toFixed(1));
+  label.setAttribute('x', (px * 1.42).toFixed(1));
+  label.setAttribute('y', (py * 1.42 + 3.2).toFixed(1));
+  /* depth cue: axis tip facing the camera is brightest */
+  var d = Math.max(-1, Math.min(1, v[2]));
+  var op = (0.45 + 0.55 * (0.5 - 0.5 * d)).toFixed(2);
+  line.setAttribute('opacity', op);
+  label.setAttribute('opacity', op);
+}
+
+function labGimbalUpdate(refs, rotX, rotY, viewer) {
+  if (!refs) return;
+  if (viewer) {
+    var last = viewer._gimbalLast;
+    if (last && Math.abs(last.x - rotX) < 1e-4 && Math.abs(last.y - rotY) < 1e-4) return;
+    viewer._gimbalLast = { x: rotX, y: rotY };
+  }
+  var cy = Math.cos(rotY), sy = Math.sin(rotY);
+  var cx = Math.cos(rotX), sx = Math.sin(rotX);
+  var R = 15;
+  /* columns of Rx·Ry — match 'uRot * axis' in the shaders */
+  labGimbalSetAxis(refs.gx, refs.lx, [cy,        0,    -sy   ], R);   /* +X */
+  labGimbalSetAxis(refs.gy, refs.ly, [sx*sy,    cx,    sx*cy ], R);   /* +Y */
+  labGimbalSetAxis(refs.gz, refs.lz, [cx*sy,   -sx,    cx*cy ], R);   /* +Z */
+}
+
+/* #7 — parse a #rrggbb design color into a [r,g,b] triple in 0..1 for uTint. */
+function labHexToRgb01(hex) {
+  if (!hex || hex[0] !== '#' || hex.length < 7) return [1, 1, 1];
+  var r = parseInt(hex.slice(1, 3), 16);
+  var g = parseInt(hex.slice(3, 5), 16);
+  var b = parseInt(hex.slice(5, 7), 16);
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return [1, 1, 1];
+  return [r / 255, g / 255, b / 255];
+}
+
 function LabRaymarcher() {
   this.canvas = document.createElement('canvas');
   this.canvas.width  = 400;
@@ -546,6 +613,8 @@ function LabRaymarcher() {
   this._rafId = null;
   this._rotY = 0.7;
   this._rotX = -0.4;
+  this._gimbal = null;            /* #5 — axis-gimbal overlay refs (set by setGimbal) */
+  this._gimbalLast = null;
   this._lastFrame = 0;
   this._fieldUploaded = false;
   this._dispUploaded = false;     /* A.2 — set by uploadFields() */
@@ -591,7 +660,10 @@ function LabRaymarcher() {
     stressGamma: 1.0,
     /* 4b — Texture resolution N for cubic kernel offset math.  Set at upload
        time to match the actual 3D texture size (the solver's grid N). */
-    texN: 32
+    texN: 32,
+    deformSign: 1.0,               /* #6 — +1 tension / -1 compression (crush) */
+    tint: [1, 1, 1],               /* #7 — per-design surface tint (geom/deform) */
+    tintStrength: 0.0
   };
 
   /* 4b — Maximum |u'| component encountered at upload time, in world units
@@ -662,7 +734,9 @@ LabRaymarcher.prototype._compileShader = function() {
    /* A.3.3 — Gamma correction for non-linear σ_VM colormap remapping */
    'uStressGamma','uBuckleMap',
    /* 4b — texture resolution for cubic kernel offsets */
-   'uTexN'].forEach(function(name){
+   'uTexN',
+   /* #6 crush sign · #7 per-design surface tint */
+   'uDeformSign','uTint','uTintStrength'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -1160,6 +1234,40 @@ LabRaymarcher.prototype.setStressGamma = function(gamma) {
   this._dirty = true;
 };
 
+/* #6 — crush sign.  +1 = tension (default), -1 = compression.  The nonlinear
+   crush viz reuses the elastic +unit-strain corrector field (which expands),
+   so it sets -1 to render the cube being crushed rather than pulled apart. */
+LabRaymarcher.prototype.setDeformSign = function(sign) {
+  if (this.failed) return;
+  this._u.deformSign = (sign < 0) ? -1.0 : 1.0;
+  this._dirty = true;
+};
+
+/* #7 — per-design surface tint for the geom/deform iridescent surface. */
+LabRaymarcher.prototype.setTint = function(rgb, strength) {
+  if (this.failed) return;
+  if (rgb && rgb.length === 3) {
+    this._u.tint = [rgb[0], rgb[1], rgb[2]];
+    this._u.tintStrength = Math.max(0, Math.min(1, (strength == null) ? 0.4 : strength));
+  } else {
+    this._u.tint = [1, 1, 1];
+    this._u.tintStrength = 0.0;
+  }
+  this._dirty = true;
+};
+
+/* #5 — attach (or clear) the rotating axis-gimbal overlay. */
+LabRaymarcher.prototype.setGimbal = function(el) {
+  this._gimbal = labGimbalRefs(el);
+  this._gimbalLast = null;
+};
+
+/* #5 — project X/Y/Z through the current rotation and update the overlay. */
+LabRaymarcher.prototype._updateGimbal = function() {
+  if (!this._gimbal) return;
+  labGimbalUpdate(this._gimbal, this._rotX, this._rotY, this);
+};
+
 
 /* ════════════════════════════════════════════════════════════
    A.2 — Pointer/wheel handlers for user-controlled rotation
@@ -1254,6 +1362,7 @@ LabRaymarcher.prototype._render = function(t) {
     sx*sy,    cx,    sx*cy,
     cx*sy,   -sx,    cx*cy
   ]);
+  this._updateGimbal();   /* #5 — keep the axis triad in sync with the cube */
 
   /* Resize viewport to canvas backbuffer if needed */
   var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -1304,6 +1413,10 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uBuckleMap,      S.buckleMap);
   /* 4b — texture resolution for cubic kernel offsets */
   gl.uniform1f(u.uTexN,           S.texN);
+  /* #6 crush sign · #7 surface tint */
+  gl.uniform1f(u.uDeformSign,     S.deformSign);
+  gl.uniform3f(u.uTint,           S.tint[0], S.tint[1], S.tint[2]);
+  gl.uniform1f(u.uTintStrength,   S.tintStrength);
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
@@ -1514,6 +1627,24 @@ function mountRaymarcherTiles() {
     /* Move canvas into the mount tile */
     if (rm.canvas && rm.canvas.parentNode !== mount) {
       mount.appendChild(rm.canvas);
+    }
+    /* #5 — wire the axis-gimbal overlay (sibling of the mount in the viewport;
+       nonlinear cube tiles have none, so this clears to null there). */
+    if (rm.setGimbal) {
+      var vp = mount.parentNode;
+      rm.setGimbal(vp ? vp.querySelector('.vp-gimbal') : null);
+    }
+    /* #6 — reset to tension by default; the nonlinear crush viz re-sets -1
+       on its cubes after this mount pass. */
+    if (rm.setDeformSign) rm.setDeformSign(1);
+    /* #7 — tint the iridescent surface with the design color in geom/deform;
+       colormap modes (stress/buckle/nonlinear) clear the tint. */
+    if (rm.setTint) {
+      var dsn = null, dl = (typeof LAB_STATE !== 'undefined') ? LAB_STATE.designs : [];
+      for (var di = 0; di < dl.length; di++){ if (dl[di].id === id){ dsn = dl[di]; break; } }
+      var vm = (typeof VIEW_STATE !== 'undefined') ? VIEW_STATE.mode : 'geom';
+      if ((vm === 'geom' || vm === 'deform') && dsn && dsn.color) rm.setTint(labHexToRgb01(dsn.color), 0.4);
+      else rm.setTint(null);
     }
     if (io) io.observe(mount);
   }
