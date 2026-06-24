@@ -648,6 +648,12 @@ ElasticSolverFull.prototype._dispatchEncoded = function(enc, pipeline, bg, threa
 ElasticSolverFull.prototype._applyA = function(enc, epsIn, out) {
   var d = this.device;
 
+  /* Plan-batch-aware: the elastic standalone hands _applyA a batched plan
+     (batch >= 6) -> collapsed 6->1 FFT path.  Consumers that borrow
+     ElasticSolverFull with a single-transform plan (e.g. the nonlinear
+     solver's es) -> original per-component path.  Identical math. */
+  var batched = (this.fft.batch >= 6);
+
   /* 1. localStressFull — sig = C(x):eps */
   var lsBg = d.createBindGroup({
     layout: this.lsLayout,
@@ -680,25 +686,45 @@ ElasticSolverFull.prototype._applyA = function(enc, epsIn, out) {
   /* 3. Pack each Voigt component of tau (6 total) and forward-FFT.
         Component Q ∈ {0..2} pulls from tau.n at lane Q;
         component Q ∈ {3..5} pulls from tau.s at lane (Q-3). */
-  for (var Q = 0; Q < 6; Q++) {
-    var srcBuf = (Q < 3) ? this.tau.n : this.tau.s;
-    var laneBuf = this.laneParamsBufs[Q];
-    var pcBg = d.createBindGroup({
-      layout: this.pcLayout,
-      entries: [
-        { binding: 0, resource: { buffer: srcBuf } },
-        { binding: 1, resource: { buffer: this.tauCmplx[Q] } },
-        { binding: 2, resource: { buffer: laneBuf } }
-      ]
-    });
-    this._dispatchEncoded(enc, this.pcPipeline, pcBg, this.N3, 64);
-  }
+  if (batched) {
+    for (var Q = 0; Q < 6; Q++) {
+      var srcBuf = (Q < 3) ? this.tau.n : this.tau.s;
+      var laneBuf = this.laneParamsBufs[Q];
+      var pcBg = d.createBindGroup({
+        layout: this.pcLayout,
+        entries: [
+          { binding: 0, resource: { buffer: srcBuf } },
+          { binding: 1, resource: { buffer: this.tauCmplx[Q] } },
+          { binding: 2, resource: { buffer: laneBuf } }
+        ]
+      });
+      this._dispatchEncoded(enc, this.pcPipeline, pcBg, this.N3, 64);
+    }
 
-  /* Batched forward FFT — all 6 Voigt components in ONE stage-set (6 FFTs
-     -> 1).  Packs above filled tauCmplx[0..5]; gather, transform, scatter. */
-  this.fft.loadFromBuffers(enc, this.tauCmplx);
-  this.fft.forwardEncoded(enc);
-  this.fft.storeToBuffers(enc, this.tauHat);
+    /* Batched forward FFT — all 6 Voigt components in ONE stage-set (6 FFTs
+       -> 1).  Packs above filled tauCmplx[0..5]; gather, transform, scatter. */
+    this.fft.loadFromBuffers(enc, this.tauCmplx);
+    this.fft.forwardEncoded(enc);
+    this.fft.storeToBuffers(enc, this.tauHat);
+  } else {
+    for (var Q = 0; Q < 6; Q++) {
+      var srcBuf = (Q < 3) ? this.tau.n : this.tau.s;
+      var laneBuf = this.laneParamsBufs[Q];
+      var pcBg = d.createBindGroup({
+        layout: this.pcLayout,
+        entries: [
+          { binding: 0, resource: { buffer: srcBuf } },
+          { binding: 1, resource: { buffer: this.tauCmplx[Q] } },
+          { binding: 2, resource: { buffer: laneBuf } }
+        ]
+      });
+      this._dispatchEncoded(enc, this.pcPipeline, pcBg, this.N3, 64);
+
+      this.fft.loadFromBuffer(enc, this.tauCmplx[Q]);
+      this.fft.forwardEncoded(enc);
+      this.fft.storeToBuffer(enc, this.tauHat[Q]);
+    }
+  }
 
   /* 4. Seed out ← epsIn so the per-row deAccumLane (read-modify-write
         on out_v4) starts from the input strain on every lane. Without
@@ -710,62 +736,119 @@ ElasticSolverFull.prototype._applyA = function(enc, epsIn, out) {
   /* 5. For each output Voigt row P (0..5):
           two sub-dispatches accumulate Σ_Q Γ_PQ · tauHat_Q into depsHat[P],
           IFFT to depsC[P], then deAccumLane writes lane P back into out vec4. */
-  for (var P = 0; P < 6; P++) {
-    /* Write pass: depsHat[P] = Γ[P][0]·tauHat[0] + Γ[P][1]·tauHat[1] + Γ[P][2]·tauHat[2] */
-    var gaWBg = d.createBindGroup({
-      layout: this.gaLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.tauHat[0] } },
-        { binding: 1, resource: { buffer: this.tauHat[1] } },
-        { binding: 2, resource: { buffer: this.tauHat[2] } },
-        { binding: 3, resource: { buffer: this.gamma[P][0] } },
-        { binding: 4, resource: { buffer: this.gamma[P][1] } },
-        { binding: 5, resource: { buffer: this.gamma[P][2] } },
-        { binding: 6, resource: { buffer: this.depsHat[P] } },
-        { binding: 7, resource: { buffer: this.sizeParamsBuf } }
-      ]
-    });
-    this._dispatchEncoded(enc, this.gaWritePipeline, gaWBg, this.N3, 64);
+  if (batched) {
+    for (var P = 0; P < 6; P++) {
+      /* Write pass: depsHat[P] = Γ[P][0]·tauHat[0] + Γ[P][1]·tauHat[1] + Γ[P][2]·tauHat[2] */
+      var gaWBg = d.createBindGroup({
+        layout: this.gaLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.tauHat[0] } },
+          { binding: 1, resource: { buffer: this.tauHat[1] } },
+          { binding: 2, resource: { buffer: this.tauHat[2] } },
+          { binding: 3, resource: { buffer: this.gamma[P][0] } },
+          { binding: 4, resource: { buffer: this.gamma[P][1] } },
+          { binding: 5, resource: { buffer: this.gamma[P][2] } },
+          { binding: 6, resource: { buffer: this.depsHat[P] } },
+          { binding: 7, resource: { buffer: this.sizeParamsBuf } }
+        ]
+      });
+      this._dispatchEncoded(enc, this.gaWritePipeline, gaWBg, this.N3, 64);
 
-    /* Add pass: depsHat[P] += Γ[P][3]·tauHat[3] + Γ[P][4]·tauHat[4] + Γ[P][5]·tauHat[5] */
-    var gaABg = d.createBindGroup({
-      layout: this.gaLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.tauHat[3] } },
-        { binding: 1, resource: { buffer: this.tauHat[4] } },
-        { binding: 2, resource: { buffer: this.tauHat[5] } },
-        { binding: 3, resource: { buffer: this.gamma[P][3] } },
-        { binding: 4, resource: { buffer: this.gamma[P][4] } },
-        { binding: 5, resource: { buffer: this.gamma[P][5] } },
-        { binding: 6, resource: { buffer: this.depsHat[P] } },
-        { binding: 7, resource: { buffer: this.sizeParamsBuf } }
-      ]
-    });
-    this._dispatchEncoded(enc, this.gaAddPipeline, gaABg, this.N3, 64);
-  }
+      /* Add pass: depsHat[P] += Γ[P][3]·tauHat[3] + Γ[P][4]·tauHat[4] + Γ[P][5]·tauHat[5] */
+      var gaABg = d.createBindGroup({
+        layout: this.gaLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.tauHat[3] } },
+          { binding: 1, resource: { buffer: this.tauHat[4] } },
+          { binding: 2, resource: { buffer: this.tauHat[5] } },
+          { binding: 3, resource: { buffer: this.gamma[P][3] } },
+          { binding: 4, resource: { buffer: this.gamma[P][4] } },
+          { binding: 5, resource: { buffer: this.gamma[P][5] } },
+          { binding: 6, resource: { buffer: this.depsHat[P] } },
+          { binding: 7, resource: { buffer: this.sizeParamsBuf } }
+        ]
+      });
+      this._dispatchEncoded(enc, this.gaAddPipeline, gaABg, this.N3, 64);
+    }
 
-  /* Batched inverse FFT — all 6 rows of depsHat in ONE stage-set (12 IFFTs
-     -> 1).  Every row's gammaAccum is finished above (rows are independent),
-     so the single batched IFFT is order-safe; deAccum then runs per row. */
-  this.fft.loadFromBuffers(enc, this.depsHat);
-  this.fft.inverseEncoded(enc);
-  this.fft.storeToBuffers(enc, this.depsC);
+    /* Batched inverse FFT — all 6 rows of depsHat in ONE stage-set (12 IFFTs
+       -> 1).  Every row's gammaAccum is finished above (rows are independent),
+       so the single batched IFFT is order-safe; deAccum then runs per row. */
+    this.fft.loadFromBuffers(enc, this.depsHat);
+    this.fft.inverseEncoded(enc);
+    this.fft.storeToBuffers(enc, this.depsC);
 
-  for (var P2 = 0; P2 < 6; P2++) {
-    /* deAccumLane: out.{n,s}[lane(P2)] += Re(depsC[P2]).  Read-modify-write
-       on out (pre-seeded with epsIn above).  P2 < 3 -> lane P2 of {n};
-       P2 >= 3 -> lane (P2-3) of {s}.  Rows write distinct lanes -> order-free. */
-    var destBuf = (P2 < 3) ? out.n : out.s;
-    var laneBuf2 = this.laneParamsBufs[P2];
-    var daBg = d.createBindGroup({
-      layout: this.daLayout,
-      entries: [
-        { binding: 0, resource: { buffer: destBuf } },
-        { binding: 1, resource: { buffer: this.depsC[P2] } },
-        { binding: 2, resource: { buffer: laneBuf2 } }
-      ]
-    });
-    this._dispatchEncoded(enc, this.daPipeline, daBg, this.N3, 64);
+    for (var P2 = 0; P2 < 6; P2++) {
+      /* deAccumLane: out.{n,s}[lane(P2)] += Re(depsC[P2]).  Read-modify-write
+         on out (pre-seeded with epsIn above).  P2 < 3 -> lane P2 of {n};
+         P2 >= 3 -> lane (P2-3) of {s}.  Rows write distinct lanes -> order-free. */
+      var destBuf = (P2 < 3) ? out.n : out.s;
+      var laneBuf2 = this.laneParamsBufs[P2];
+      var daBg = d.createBindGroup({
+        layout: this.daLayout,
+        entries: [
+          { binding: 0, resource: { buffer: destBuf } },
+          { binding: 1, resource: { buffer: this.depsC[P2] } },
+          { binding: 2, resource: { buffer: laneBuf2 } }
+        ]
+      });
+      this._dispatchEncoded(enc, this.daPipeline, daBg, this.N3, 64);
+    }
+  } else {
+    for (var P = 0; P < 6; P++) {
+      /* Write pass: depsHat[P] = Γ[P][0]·tauHat[0] + Γ[P][1]·tauHat[1] + Γ[P][2]·tauHat[2] */
+      var gaWBg = d.createBindGroup({
+        layout: this.gaLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.tauHat[0] } },
+          { binding: 1, resource: { buffer: this.tauHat[1] } },
+          { binding: 2, resource: { buffer: this.tauHat[2] } },
+          { binding: 3, resource: { buffer: this.gamma[P][0] } },
+          { binding: 4, resource: { buffer: this.gamma[P][1] } },
+          { binding: 5, resource: { buffer: this.gamma[P][2] } },
+          { binding: 6, resource: { buffer: this.depsHat[P] } },
+          { binding: 7, resource: { buffer: this.sizeParamsBuf } }
+        ]
+      });
+      this._dispatchEncoded(enc, this.gaWritePipeline, gaWBg, this.N3, 64);
+
+      /* Add pass: depsHat[P] += Γ[P][3]·tauHat[3] + Γ[P][4]·tauHat[4] + Γ[P][5]·tauHat[5] */
+      var gaABg = d.createBindGroup({
+        layout: this.gaLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.tauHat[3] } },
+          { binding: 1, resource: { buffer: this.tauHat[4] } },
+          { binding: 2, resource: { buffer: this.tauHat[5] } },
+          { binding: 3, resource: { buffer: this.gamma[P][3] } },
+          { binding: 4, resource: { buffer: this.gamma[P][4] } },
+          { binding: 5, resource: { buffer: this.gamma[P][5] } },
+          { binding: 6, resource: { buffer: this.depsHat[P] } },
+          { binding: 7, resource: { buffer: this.sizeParamsBuf } }
+        ]
+      });
+      this._dispatchEncoded(enc, this.gaAddPipeline, gaABg, this.N3, 64);
+
+      /* IFFT depsHat[P] → depsC[P] */
+      this.fft.loadFromBuffer(enc, this.depsHat[P]);
+      this.fft.inverseEncoded(enc);
+      this.fft.storeToBuffer(enc, this.depsC[P]);
+
+      /* deAccumLane: out.{n,s}[lane(P)] += Re(depsC[P]).  Read-modify-write
+         on out — out was pre-seeded with epsIn above, so the lane updated
+         here lands on top of the input-strain baseline.
+         For P < 3 we update lane (P) of {n}; for P >= 3 we update lane (P-3) of {s}. */
+      var destBuf = (P < 3) ? out.n : out.s;
+      var laneBuf2 = this.laneParamsBufs[P];
+      var daBg = d.createBindGroup({
+        layout: this.daLayout,
+        entries: [
+          { binding: 0, resource: { buffer: destBuf } },
+          { binding: 1, resource: { buffer: this.depsC[P] } },
+          { binding: 2, resource: { buffer: laneBuf2 } }
+        ]
+      });
+      this._dispatchEncoded(enc, this.daPipeline, daBg, this.N3, 64);
+    }
   }
 };
 
