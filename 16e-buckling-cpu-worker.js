@@ -57,6 +57,11 @@ var BUCKLE_WORKER_FILES = [
   '16c-buckling-cpu-ref.js'
 ];
 
+/* Bump on any solver-file change so the worker's importScripts refetches
+   instead of serving a stale cached copy (the blob worker has its own cache,
+   separate from the main page). */
+var BUCKLE_SOLVER_VERSION = 'lobpcg-willot-1';
+
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes
    the task id so the pool can route the reply.  Ships the mode field as
@@ -86,7 +91,9 @@ function makeBucklingWorker(){
   var base = (typeof document !== 'undefined' && document.baseURI) ? document.baseURI : location.href;
   var urls = [];
   for (var i = 0; i < BUCKLE_WORKER_FILES.length; i++){
-    urls.push(JSON.stringify(new URL(BUCKLE_WORKER_FILES[i], base).href));
+    var u = new URL(BUCKLE_WORKER_FILES[i], base);
+    u.search = '?v=' + BUCKLE_SOLVER_VERSION;   /* cache-bust: worker reloads updated solver files */
+    urls.push(JSON.stringify(u.href));
   }
   var body = 'importScripts(' + urls.join(',') + ');\n' + BUCKLE_WORKER_ONMESSAGE;
   var blob = new Blob([body], { type: 'application/javascript' });

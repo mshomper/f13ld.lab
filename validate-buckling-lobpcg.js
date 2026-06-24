@@ -52,9 +52,21 @@
     }
     var sub = timed('subspace');
     var lob = timed('lobpcg');
-    var drift = (isFinite(sub.r.lambda_cr) && isFinite(lob.r.lambda_cr)) ? rel(sub.r.lambda_cr, lob.r.lambda_cr) : Infinity;
+    /* per-axis drift is the true solver-agreement metric — immune to the
+       symmetric-structure min/critAxis tie-break (degenerate axes flip freely). */
+    function perAxisDrift(ra, rb) {
+      var mx = 0;
+      for (var i = 0; i < ra.perAxis.length; i++) {
+        var a = ra.perAxis[i], bx = null;
+        for (var j = 0; j < rb.perAxis.length; j++) if (rb.perAxis[j].axis === a.axis) { bx = rb.perAxis[j]; break; }
+        if (bx && isFinite(a.lambda) && isFinite(bx.lambda)) { var r = rel(a.lambda, bx.lambda); if (r > mx) mx = r; }
+      }
+      return mx;
+    }
+    var drift = perAxisDrift(sub.r, lob.r);
     var speedup = lob.ms > 0 ? sub.ms / lob.ms : Infinity;
-    var pass = drift < 1e-3 && sub.r.critAxis === lob.r.critAxis && lob.ms <= sub.ms;
+    var axisFlip = sub.r.critAxis !== lob.r.critAxis;
+    var pass = drift < 1e-3 && lob.ms <= sub.ms;   /* axis flip on near-degenerate axes is cosmetic */
 
     console.log('\n=== ' + label + '  (N=' + N + ', ρ=' + rho(solid).toFixed(3) + ', block=' + base.block + ') ===');
     console.log('  subspace (ref) : λ_cr=' + sub.r.lambda_cr.toExponential(3) +
@@ -65,7 +77,9 @@
                 '  σ_cr=' + (isFinite(lob.r.pcr) ? lob.r.pcr.toFixed(2) + ' MPa' : '—') +
                 '  crit=' + lob.r.critAxis + '  m̄=' + critM(lob.r).toFixed(1) +
                 '  ' + lob.ms.toFixed(0) + ' ms');
-    console.log('  drift(λ_cr rel)=' + drift.toExponential(2) + '   speedup=' + speedup.toFixed(1) + '×   ' + (pass ? '✓ PASS' : '✗ FAIL'));
+    console.log('  per-axis drift=' + drift.toExponential(2) + '   speedup=' + speedup.toFixed(1) + '×' +
+                (axisFlip ? '   (critAxis tie-break: ' + sub.r.critAxis + '/' + lob.r.critAxis + ', cosmetic)' : '') +
+                '   ' + (pass ? '✓ PASS' : '✗ FAIL'));
     return pass;
   }
 
@@ -84,12 +98,18 @@
         var t0 = now(); var rs = homogenizeBucklingCPU(des.recipe, Nlive, { block: 4, eigMethod: 'subspace' }); var t1 = now();
         var t2 = now(); var rl = homogenizeBucklingCPU(des.recipe, Nlive, { block: 4, eigMethod: 'lobpcg' }); var t3 = now();
         if (rs.skip_reason || rl.skip_reason) { console.log('\n[live] ' + (des.name || des.id) + ' skipped: ' + (rs.skip_reason || rl.skip_reason)); continue; }
-        var dr = rel(rs.lambda_cr, rl.lambda_cr), sp = (t3 - t2) > 0 ? (t1 - t0) / (t3 - t2) : Infinity;
-        var p = dr < 1e-3 && rs.critAxis === rl.critAxis;
+        var dr = 0;
+        for (var ax = 0; ax < rs.perAxis.length; ax++) {
+          var sa = rs.perAxis[ax], la = null;
+          for (var bx = 0; bx < rl.perAxis.length; bx++) if (rl.perAxis[bx].axis === sa.axis) { la = rl.perAxis[bx]; break; }
+          if (la && isFinite(sa.lambda) && isFinite(la.lambda)) { var rr = rel(sa.lambda, la.lambda); if (rr > dr) dr = rr; }
+        }
+        var sp = (t3 - t2) > 0 ? (t1 - t0) / (t3 - t2) : Infinity;
+        var p = dr < 1e-3;
         console.log('\n=== live · ' + (des.name || des.id) + ' (N=' + Nlive + ', ρ=' + (rl.rho || 0).toFixed(3) + ') ===');
-        console.log('  subspace λ_cr=' + rs.lambda_cr.toExponential(3) + '  ' + (t1 - t0).toFixed(0) + ' ms');
-        console.log('  lobpcg   λ_cr=' + rl.lambda_cr.toExponential(3) + '  ' + (t3 - t2).toFixed(0) + ' ms');
-        console.log('  drift=' + dr.toExponential(2) + '  speedup=' + sp.toFixed(1) + '×  ' + (p ? '✓' : '✗'));
+        console.log('  subspace λ_cr=' + rs.lambda_cr.toExponential(3) + '  crit=' + rs.critAxis + '  ' + (t1 - t0).toFixed(0) + ' ms');
+        console.log('  lobpcg   λ_cr=' + rl.lambda_cr.toExponential(3) + '  crit=' + rl.critAxis + '  ' + (t3 - t2).toFixed(0) + ' ms');
+        console.log('  per-axis drift=' + dr.toExponential(2) + '  speedup=' + sp.toFixed(1) + '×  ' + (p ? '✓' : '✗'));
         ok = p && ok;
       } catch (e) { console.warn('[live] ' + (des.name || des.id) + ' error:', e); }
     }

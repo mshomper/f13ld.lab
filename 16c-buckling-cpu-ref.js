@@ -120,6 +120,8 @@ function specDeriv(fin, dir, N, out, ws) {
   var N3 = N * N * N;
   var cb = ws.cbuf, lb = ws.lineBuf;
   var nyq = N >> 1;
+  var willot = !(ws && ws.scheme === 'continuous');   /* default: Willot rotated scheme */
+  var PI_N = Math.PI / N;
 
   for (var i = 0; i < N3; i++) { cb[2 * i] = fin[i]; cb[2 * i + 1] = 0; }
   fft3dCpu(cb, N, false, lb);
@@ -130,16 +132,28 @@ function specDeriv(fin, dir, N, out, ws) {
       var kb = (b <= N / 2) ? b : b - N;
       for (var c = 0; c < N; c++) {
         var kc = (c <= N / 2) ? c : c - N;
-        var kappa = (dir === 0) ? ka : (dir === 1) ? kb : kc;
-        /* Nyquist: zero the derivative of a real field */
-        if ((dir === 0 && a === nyq) ||
-            (dir === 1 && b === nyq) ||
-            (dir === 2 && c === nyq)) kappa = 0;
+        var fac;
+        if (willot) {
+          /* Willot (2015) rotated finite-difference frequency, matching
+             buildGammaFull in 16a:  ξ̃_dir = sin(π·k_dir/N)·∏_{β≠dir}cos(π·k_β/N).
+             Rolls off toward Nyquist and annihilates the checkerboard, so K
+             has no spurious near-null modes for K_g to exploit. */
+          var sx = Math.sin(PI_N * ka), cx = Math.cos(PI_N * ka);
+          var sy = Math.sin(PI_N * kb), cy = Math.cos(PI_N * kb);
+          var sz = Math.sin(PI_N * kc), cz = Math.cos(PI_N * kc);
+          fac = (dir === 0) ? sx * cy * cz : (dir === 1) ? cx * sy * cz : cx * cy * sz;
+        } else {
+          fac = (dir === 0) ? ka : (dir === 1) ? kb : kc;
+          /* Nyquist: zero the derivative of a real field */
+          if ((dir === 0 && a === nyq) ||
+              (dir === 1 && b === nyq) ||
+              (dir === 2 && c === nyq)) fac = 0;
+        }
         var idx = (a * N * N + b * N + c) * 2;
         var re = cb[idx], im = cb[idx + 1];
-        /* i·κ·(re + i·im) = (−κ·im) + i·(κ·re) */
-        cb[idx]     = -kappa * im;
-        cb[idx + 1] =  kappa * re;
+        /* i·fac·(re + i·im) = (−fac·im) + i·(fac·re) */
+        cb[idx]     = -fac * im;
+        cb[idx + 1] =  fac * re;
       }
     }
   }
@@ -275,6 +289,7 @@ function runBucklingOperatorSelfTest(N) {
   N = N || 8;
   var N3 = N * N * N;
   var ws = getBucklingWorkspaceCPU(N);
+  ws.scheme = 'continuous';            /* analytic gates G1–G3/G6 assume continuous-κ eigenvalues */
 
   var Es = 110000, nu = 0.30;
   var C_s = isoC(Es, nu);
@@ -366,6 +381,7 @@ function runBucklingOperatorSelfTest(N) {
   /* G8 — dense assembly symmetry at small N */
   var Nd = 4, Nd3 = Nd*Nd*Nd, dof = 3*Nd3;
   var wsd = getBucklingWorkspaceCPU(Nd);
+  wsd.scheme = 'continuous';
   var solidD = new Uint8Array(Nd3); solidD.fill(1);
   var sig0d = []; for (var c3=0;c3<6;c3++){ var a=new Float64Array(Nd3); for (var i5=0;i5<Nd3;i5++) a[i5]=Math.sin(i5*0.7+c3)*100; sig0d.push(a); }
   function assemble(applyFn){
@@ -1021,23 +1037,37 @@ function bk_makePrecondScalar(N, mu0) {
    converges in one step.  Same integer-κ, per-axis-Nyquist-zero, DC-zero
    convention as specDeriv (so it is matched to K, NOT Willot-rotated).
    Does NOT change the converged eigenvalue — only the path. */
-function bk_makePrecondGamma0(N, mu0, lam0) {
+function bk_makePrecondGamma0(N, mu0, lam0, scheme) {
   var N3 = N * N * N, nyq = N >> 1;
+  var willot = (scheme !== 'continuous');   /* match the Willot K so M⁻¹ stays a true inverse */
+  var PI_N = Math.PI / N;
   var beta = (lam0 + mu0) / (lam0 + 2 * mu0);
   var invMuKsq = new Float64Array(N3);
   var dirx = new Float64Array(N3), diry = new Float64Array(N3), dirz = new Float64Array(N3);
   for (var a = 0; a < N; a++) {
-    var ka = (a === nyq) ? 0 : ((a <= N / 2) ? a : a - N);
+    var kaC = (a === nyq) ? 0 : ((a <= N / 2) ? a : a - N);   /* continuous (Nyquist-zeroed) */
+    var kaS = (a <= N / 2) ? a : a - N;                       /* signed (for Willot) */
     for (var b = 0; b < N; b++) {
-      var kb = (b === nyq) ? 0 : ((b <= N / 2) ? b : b - N);
+      var kbC = (b === nyq) ? 0 : ((b <= N / 2) ? b : b - N);
+      var kbS = (b <= N / 2) ? b : b - N;
       for (var c = 0; c < N; c++) {
-        var kc = (c === nyq) ? 0 : ((c <= N / 2) ? c : c - N);
+        var kcC = (c === nyq) ? 0 : ((c <= N / 2) ? c : c - N);
+        var kcS = (c <= N / 2) ? c : c - N;
         var idx = a * N * N + b * N + c;
-        var ksq = ka * ka + kb * kb + kc * kc;
-        if (ksq > 0) {
-          invMuKsq[idx] = 1 / (mu0 * ksq);
-          var inv = 1 / Math.sqrt(ksq);
-          dirx[idx] = ka * inv; diry[idx] = kb * inv; dirz[idx] = kc * inv;
+        var gx, gy, gz;
+        if (willot) {
+          var sx = Math.sin(PI_N * kaS), cx = Math.cos(PI_N * kaS);
+          var sy = Math.sin(PI_N * kbS), cy = Math.cos(PI_N * kbS);
+          var sz = Math.sin(PI_N * kcS), cz = Math.cos(PI_N * kcS);
+          gx = sx * cy * cz; gy = cx * sy * cz; gz = cx * cy * sz;
+        } else {
+          gx = kaC; gy = kbC; gz = kcC;
+        }
+        var gsq = gx * gx + gy * gy + gz * gz;
+        if (gsq > 1e-30) {
+          invMuKsq[idx] = 1 / (mu0 * gsq);
+          var inv = 1 / Math.sqrt(gsq);
+          dirx[idx] = gx * inv; diry[idx] = gy * inv; dirz[idx] = gz * inv;
         }
       }
     }
@@ -1146,7 +1176,7 @@ function extractPrestressCPU(solid, C_s, C_v, N, axisVoigt, ws, opts) {
   var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   function applyKflat(xx, out) { bk_flatToField(xx, N3, uf); applyKcpu(uf, of, solid, C_s, C_v, N, ws); bk_fieldToFlat(of, N3, out); }
-  var applyMinv = (opts && opts.precond === "scalar") ? bk_makePrecondScalar(N, C_s[21]) : bk_makePrecondGamma0(N, C_s[21], C_s[1]);   /* Γ⁰ Christoffel reference (default) */
+  var applyMinv = (opts && opts.precond === "scalar") ? bk_makePrecondScalar(N, C_s[21]) : bk_makePrecondGamma0(N, C_s[21], C_s[1], (ws && ws.scheme) || 'willot');   /* Γ⁰ Christoffel reference (default), scheme-matched to ws */
   var sol = bk_pcgSolveK(applyKflat, applyMinv, rhs, n, N3, opts.cgTol || 1e-10, opts.cgMaxiter || 3000);
 
   /* total strain ε = ε̄ + ε(u′); σ⁰ = C(x):ε */
@@ -1223,11 +1253,13 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
   var axes = opts.axes || [0, 1, 2];
   var axisName = ['xx', 'yy', 'zz'];
   var ws = getBucklingWorkspaceCPU(N);
+  var scheme = opts.scheme || 'willot';   /* Willot rotated operators by default (no spurious near-null K modes) */
+  ws.scheme = scheme;
   var N3 = N * N * N, n = 3 * N3;
 
   var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
   var of = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
-  var applyMinv = (opts && opts.precond === "scalar") ? bk_makePrecondScalar(N, C_s[21]) : bk_makePrecondGamma0(N, C_s[21], C_s[1]);   /* Γ⁰ Christoffel reference (default) */
+  var applyMinv = (opts && opts.precond === "scalar") ? bk_makePrecondScalar(N, C_s[21]) : bk_makePrecondGamma0(N, C_s[21], C_s[1], scheme);   /* Γ⁰ Christoffel reference (default) */
 
   var perAxis = [], lambdaCr = Infinity, critAxis = -1, critMode = null, critSbar = 0;
 
