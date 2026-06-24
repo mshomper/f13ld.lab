@@ -430,9 +430,10 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
   var freeIdx = [];                  /* free (zero-stress) axes for stress control */
   for (var ii=0; ii<6; ii++) if (ii !== axisV) freeIdx.push(ii);
 
-  var dStep = epsTarget / nSteps;
+  var capEps = epsTarget, nominalStep = capEps / nSteps, maxSteps = Math.ceil(nSteps * 1.5);
   var step = 0, eAxis = 0;
-  while (step < nSteps) {
+  while (eAxis < capEps - 1e-9 && step < maxSteps) {
+    var dStep = Math.min(nominalStep, capEps - eAxis);   /* nominal stride, clamped to the cap */
     var trialAxis = eAxis + dStep;
     epsBarFull[axisV] = trialAxis;
 

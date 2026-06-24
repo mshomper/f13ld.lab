@@ -735,10 +735,12 @@ NonlinearSolverFull.prototype.crushStrain = async function (axis, opts) {
   var nSteps = opts.nSteps != null ? opts.nSteps : 16;
   var cutbackMax = opts.cutbackMax != null ? opts.cutbackMax : 4;
   var es = this.es, d = es.device;
-  var curve = [], dStep = epsTarget / nSteps, eAxis = 0, step = 0, E0 = null;
+  var capEps = epsTarget, nominalStep = capEps / nSteps, maxSteps = Math.ceil(nSteps * 1.5);
+  var curve = [], eAxis = 0, step = 0, E0 = null;
   var eb = [0,0,0,0,0,0];
 
-  while (step < nSteps) {
+  while (eAxis < capEps - 1e-9 && step < maxSteps) {
+    var dStep = Math.min(nominalStep, capEps - eAxis);   /* nominal stride, clamped to the cap */
     /* snapshot strain for cutback */
     var encS = d.createCommandEncoder(); es._copyPair(encS, es.eps, { n: this.snap_n, s: this.snap_s }); d.queue.submit([encS.finish()]);
     var trial = eAxis + dStep, ok = false, res = null, cut = 0;
@@ -870,17 +872,19 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var E0 = S6 ? 1 / S6[axis * 6 + axis] : null;
 
   var capEps = epsTarget;                 /* user strain cap; adaptive crush stops here */
-  var curve = [], dStep = capEps / nSteps, eAxis = 0, step = 0;
+  var nominalStep = capEps / nSteps;      /* reset each step so a cutback never permanently shrinks the march */
+  var curve = [], eAxis = 0, step = 0;
   /* Phase-6 tie-up #5 — per-accepted-step plastic-strain (alpha) capture for the
      Nonlinear-tab progression scrubber.  Read straight from the committed history
      (epp_n) right after each step commits, before the next step's snapshot. */
   var alphaSteps = [], alphaMax = 0;
-  var maxSteps = nSteps * 3;              /* guard: cutbacks halve dStep, so allow extra steps */
+  var maxSteps = Math.ceil(nSteps * 1.5);  /* guard: dStep recovers each step, so a tight cap suffices */
   var kneeStep = -1;                      /* step at which the 0.2%-offset knee first appears */
   var eb = [0, 0, 0, 0, 0, 0];
   var ebFreePrev = null, eAxisPrev = 0;
 
   while (eAxis < capEps - 1e-9 && step < maxSteps) {
+    var dStep = Math.min(nominalStep, capEps - eAxis);   /* nominal stride, clamped to land exactly on the cap */
     /* snapshot strain + committed history for cutback and macro-loop baseline */
     var encS = d.createCommandEncoder();
     es._copyPair(encS, es.eps, { n: this.snap_n, s: this.snap_s });
