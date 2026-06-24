@@ -1442,6 +1442,7 @@ function renderNonlinearViz(){
     if (rm.setStressGamma) rm.setStressGamma(1.0);
     if (rm.setViewMode)    rm.setViewMode('stress');
     if (rm.setDeformSign)  rm.setDeformSign(-1);   /* #6a — crush compresses, not expands */
+    if (rm.setMacroAmp)    rm.setMacroAmp(0);      /* #6 fix — bounded axial stretch (decoupled from uPrimeMaxNorm) */
     if (rm.setDeformAmp)   rm.setDeformAmp(0);
     if (rm.setActive)      rm.setActive(true);   /* render now; IO will manage it thereafter */
     eq._Nd = Nd;
@@ -1502,6 +1503,13 @@ function nlvizApply(frac){
       NLVIZ.lastInt[e.id] = si;
     }
     if (rm.setDeformAmp) rm.setDeformAmp(NLVIZ.maxAmp * (n > 1 ? si / (n - 1) : 0));
+    /* #6 fix — bounded axial-compression factor, scaled by this cube's actual
+       strain (real ~2.5% crush exaggerated ~6x to a legible ~15%, hard-capped
+       at 0.2 so the macro denominator can never invert). */
+    if (rm.setMacroAmp){
+      var epsStep = (e.nl.alphaSteps[si] && isFinite(e.nl.alphaSteps[si].eps)) ? e.nl.alphaSteps[si].eps : 0;
+      rm.setMacroAmp(Math.min(0.2, 6.0 * epsStep));
+    }
     var epsPct = e.nl.alphaSteps[si].eps * 100;
     if (epsPct > leadEps) leadEps = epsPct;
     var cr = document.getElementById('nlcr-' + e.id);

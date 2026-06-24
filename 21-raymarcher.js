@@ -101,6 +101,11 @@ function buildLabRaymarcherFS(stepCount) {
        untinted default; stress/buckling colormap branches ignore it. */
     'uniform vec3 uTint;',
     'uniform float uTintStrength;',
+    /* #6 fix — macro-stretch amplitude, decoupled from the corrector-normalized
+       uDeformAmp.  Sentinel <0 = fall back to uDeformAmp (Deform/Buckle keep
+       their current behavior); the nonlinear crush sets a bounded value so the
+       axial-compression factor can never invert. */
+    'uniform float uMacroAmp;',
 
     'const float H = 3.141593;',
 
@@ -291,7 +296,8 @@ function buildLabRaymarcherFS(stepCount) {
        colormap reads on the deformed shape (FEA viz convention). */
     'vec3 getExtent() {',
     '  if (uViewMode > 0.5 && uViewMode < 2.5) {',
-    '    return vec3(H,H,H) * (vec3(1.0) + uDeformAmp * abs(uEpsBar) + vec3(uWarpExpand));',
+    '    float mAmpE = (uMacroAmp >= 0.0) ? uMacroAmp : uDeformAmp;',
+    '    return vec3(H,H,H) * (vec3(1.0) + mAmpE * abs(uEpsBar) + vec3(uWarpExpand));',
     '  }',
     '  return vec3(H,H,H);',
     '}',
@@ -308,9 +314,10 @@ function buildLabRaymarcherFS(stepCount) {
     'float implicit(vec3 p) {',
     '  vec3 p_eval = p;',
     '  if (uViewMode > 0.5 && uViewMode < 2.5) {',
-    '    float sAmp = uDeformAmp * uDeformSign;',
-    '    vec3 p_unstretched = p / (vec3(1.0) + sAmp * uEpsBar);',
-    '    p_eval = p_unstretched - sAmp * sampleDisp(p_unstretched);',
+    '    float cAmp = uDeformAmp * uDeformSign;',
+    '    float mAmp = ((uMacroAmp >= 0.0) ? uMacroAmp : uDeformAmp) * uDeformSign;',
+    '    vec3 p_unstretched = p / (vec3(1.0) + mAmp * uEpsBar);',
+    '    p_eval = p_unstretched - cAmp * sampleDisp(p_unstretched);',
     '  }',
     '  if (uTopoMode > 2.5) {',
     /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
@@ -431,9 +438,10 @@ function buildLabRaymarcherFS(stepCount) {
        the larger interface-contamination issue. */
     '  vec3 col;',
     '  if (uViewMode > 1.5 && uViewMode < 2.5 && uStressUploaded > 0.5) {',
-    '    float sAmpS = uDeformAmp * uDeformSign;',
-    '    vec3 pos_unstretched = pos / (vec3(1.0) + sAmpS * uEpsBar);',
-    '    vec3 p_eval_stress = pos_unstretched - sAmpS * sampleDisp(pos_unstretched);',
+    '    float cAmpS = uDeformAmp * uDeformSign;',
+    '    float mAmpS = ((uMacroAmp >= 0.0) ? uMacroAmp : uDeformAmp) * uDeformSign;',
+    '    vec3 pos_unstretched = pos / (vec3(1.0) + mAmpS * uEpsBar);',
+    '    vec3 p_eval_stress = pos_unstretched - cAmpS * sampleDisp(pos_unstretched);',
     '    float sv = sampleStress(p_eval_stress);',
     /* A.3.3 — gamma correction: t -> t^γ.  γ<1 brightens the low end of the
        colormap, γ=1 is linear (used in shared mode for cross-comparison). */
@@ -662,6 +670,7 @@ function LabRaymarcher() {
        time to match the actual 3D texture size (the solver's grid N). */
     texN: 32,
     deformSign: 1.0,               /* #6 — +1 tension / -1 compression (crush) */
+    macroAmp: -1.0,                /* #6 fix — <0 = use deformAmp (default); >=0 = bounded macro stretch */
     tint: [1, 1, 1],               /* #7 — per-design surface tint (geom/deform) */
     tintStrength: 0.0
   };
@@ -736,7 +745,7 @@ LabRaymarcher.prototype._compileShader = function() {
    /* 4b — texture resolution for cubic kernel offsets */
    'uTexN',
    /* #6 crush sign · #7 per-design surface tint */
-   'uDeformSign','uTint','uTintStrength'].forEach(function(name){
+   'uDeformSign','uTint','uTintStrength','uMacroAmp'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -1243,6 +1252,17 @@ LabRaymarcher.prototype.setDeformSign = function(sign) {
   this._dirty = true;
 };
 
+/* #6 fix — bounded macro-stretch amplitude, independent of uPrimeMaxNorm.
+   Pass a value in [0, 0.5] to drive the axial stretch/compression factor
+   (1 +/- v) directly; pass null/<0 to restore the default (= deformAmp), which
+   leaves Deform/Buckle behavior unchanged.  Capped at 0.5 so the compression
+   denominator (1 - v) can never approach zero and invert the cube. */
+LabRaymarcher.prototype.setMacroAmp = function(v) {
+  if (this.failed) return;
+  this._u.macroAmp = (v == null || v < 0) ? -1.0 : Math.min(0.5, v);
+  this._dirty = true;
+};
+
 /* #7 — per-design surface tint for the geom/deform iridescent surface. */
 LabRaymarcher.prototype.setTint = function(rgb, strength) {
   if (this.failed) return;
@@ -1415,6 +1435,7 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uTexN,           S.texN);
   /* #6 crush sign · #7 surface tint */
   gl.uniform1f(u.uDeformSign,     S.deformSign);
+  gl.uniform1f(u.uMacroAmp,       S.macroAmp);
   gl.uniform3f(u.uTint,           S.tint[0], S.tint[1], S.tint[2]);
   gl.uniform1f(u.uTintStrength,   S.tintStrength);
 
@@ -1634,9 +1655,10 @@ function mountRaymarcherTiles() {
       var vp = mount.parentNode;
       rm.setGimbal(vp ? vp.querySelector('.vp-gimbal') : null);
     }
-    /* #6 — reset to tension by default; the nonlinear crush viz re-sets -1
-       on its cubes after this mount pass. */
+    /* #6 — reset to tension + default macro amp; the nonlinear crush viz
+       re-sets sign -1 and a bounded macro amp on its cubes after this pass. */
     if (rm.setDeformSign) rm.setDeformSign(1);
+    if (rm.setMacroAmp)   rm.setMacroAmp(-1);
     /* #7 — tint the iridescent surface with the design color in geom/deform;
        colormap modes (stress/buckle/nonlinear) clear the tint. */
     if (rm.setTint) {

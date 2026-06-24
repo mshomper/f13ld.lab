@@ -51,6 +51,9 @@
          typeof rm.setGimbal === 'function');
       ok('#6 deformSign state is ±1', rm._u && (rm._u.deformSign === 1 || rm._u.deformSign === -1),
          'deformSign=' + (rm._u && rm._u.deformSign));
+      ok('#6 uMacroAmp uniform resolved + setMacroAmp exists (balloon fix)',
+         rm._uloc && rm._uloc.uMacroAmp != null && typeof rm.setMacroAmp === 'function',
+         'macroAmp=' + (rm._u && rm._u.macroAmp) + ' (<0 = deform/buckle default)');
     }
   } catch (e) { ok('RM checks', false, e.message); }
 
