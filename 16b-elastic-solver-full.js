@@ -1869,51 +1869,48 @@ function paintFullVoigtGPULink(state, text) {
 
 
 /* ============================================================
-   APPENDED: Step 3a + 3b batched lockstep homogenization.
-   (Was previously the standalone 16b2-elastic-batched-lc.js.)
-   Additive only — serial path & borrowers untouched.
+   APPENDED: Step 3a + 3b batched lockstep homogenization
+   (2D-native dispatch).  Additive only — serial path &
+   borrowers untouched.
    ============================================================ */
 /* ============================================================
-   F13LD.lab · 16b2-elastic-batched-lc.js   (Step 3a + 3b)
-   Lockstep batched elastic homogenization.
+   F13LD.lab · Step 3a + 3b · batched lockstep elastic homogenization
+   (appended into 16b-elastic-solver-full.js)
 
    3a: all six Voigt load cases of ONE design in a single CG.
    3b: D designs × 6 load cases in a single CG (shared reference
        material → shared Γ/C0), with a tiling fallback when the
-       FFT batch (36·D) exceeds the device's grid / buffer limits.
+       FFT batch (36·D) exceeds device grid / buffer limits.
 
-   Extends ElasticSolverFull.prototype ADDITIVELY.  The serial
-   _applyA / solveLoadCaseFull / homogenizeFull are untouched, so
-   the nonlinear & buckling borrowers are unaffected.  Load AFTER
-   16b-elastic-solver-full.js.
+   Additive only — the serial _applyA / solveLoadCaseFull /
+   homogenizeFull are untouched; nonlinear & buckling borrowers
+   are unaffected.
+
+   DISPATCH: all batched kernels dispatch 2D-NATIVELY —
+     X = voxel  (workgroups of 64 over N³)
+     Y = slot   (combined CG slot 0..6T-1, or spectral slot 0..36T-1)
+   so the per-dimension workgroup count stays under the device cap
+   (X = ceil(N³/64): 32768 at N=128).  Above N≈160 the X dimension
+   itself would exceed the cap and needs X-tiling (a future 3c);
+   _ensureBatchedResources throws a clear error past that point.
 
    Slot layout (tile of T designs)
      CG state (eps,b,r,p,Ap,sig,tau)  width  6T   slot = d*6 + LC
      spectral (tauCmplx..depsC)       width 36T   slot = d*36 + LC*6 + Q
-   Note  (slot/6) of a spectral index = combined CG slot = d*6+LC,
-   so pack/gammaAccum/deAccum/dot are byte-identical to 3a — only
-   localStress changes (design-strided solid read, which collapses
-   to the 3a single-solid read at T=1).  Γ, C0, Cs, Cv are shared
-   across all 36T slots (single reference material).
+   Γ, C0, Cs, Cv shared across all slots (single reference material).
 
-   Validation (browser console, after load):
-     await runFullVoigtGPUTestBatched();   // 3a regression: D=1, bit-exact
-     await runMultiDesignGPUTest();        // 3b: 3 designs vs serial
+   Validation (console, functions are loaded with 16b — no paste):
+     await runFullVoigtGPUTestBatched();      // 3a regression, bit-exact
+     await runFullVoigtGPUTestBatched(64);    // high-N parity + speed
+     await runMultiDesignGPUTest();           // 3b, 3 designs
    ============================================================ */
 
-/* ---- batched WGSL kernels --------------------------------------------------
-   Bounds come from a small BatchSize/Pidx uniform; per-slot scalars from a
-   tiny read-only storage buffer (dynamic slot index).  All kernels are width-
-   agnostic: the same body serves T=1 (3a) and T>1 (3b) — only the dispatch
-   bound (carried in the uniform) changes.  localStress is the lone exception:
-   it strides the solid by design. */
+/* ---- batched WGSL kernels (2D-native: gid.x = voxel, gid.y = slot) -------- */
 
 var BATCH_SIZE_STRUCT_WGSL =
-'struct BatchSize { total: u32, voxels: u32, nslots: u32, _p: u32 }\n';
+'struct BatchSize { voxels: u32, nslots: u32, _p0: u32, _p1: u32 }\n';
 
-/* localStress, batched over (design, LC).  The combined CG slot is i/voxels;
-   design = (i/voxels)/6.  solid is shared per design → indexed by
-   design*voxels + voxel.  At T=1 design is always 0 → solid[voxel] (== 3a). */
+/* localStress: solid is shared per design → design = slot/6. */
 var LOCAL_STRESS_BATCHED_WGSL = ELASTIC_PARAMS_FULL_WGSL + BATCH_SIZE_STRUCT_WGSL +
 '@group(0) @binding(0) var<storage, read>       solid: array<f32>;\n' +
 '@group(0) @binding(1) var<storage, read>       eps_n: array<vec4<f32>>;\n' +
@@ -1924,10 +1921,11 @@ var LOCAL_STRESS_BATCHED_WGSL = ELASTIC_PARAMS_FULL_WGSL + BATCH_SIZE_STRUCT_WGS
 '@group(0) @binding(6) var<uniform>             BS: BatchSize;\n' +
 '@compute @workgroup_size(64)\n' +
 'fn local_stress_batched(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
-'  let i = gid.x;\n' +
-'  if (i >= BS.total) { return; }\n' +
-'  let voxel  = i % BS.voxels;\n' +
-'  let design = (i / BS.voxels) / 6u;\n' +
+'  let voxel = gid.x;\n' +
+'  if (voxel >= BS.voxels) { return; }\n' +
+'  let slot = gid.y;\n' +                          /* combined CG slot 0..6T-1 */
+'  let i = slot * BS.voxels + voxel;\n' +
+'  let design = slot / 6u;\n' +
 '  let isSolid = solid[design * BS.voxels + voxel] > 0.5;\n' +
 '  let en = eps_n[i].xyz;\n' +
 '  let es = eps_s[i].xyz;\n' +
@@ -1947,7 +1945,7 @@ var LOCAL_STRESS_BATCHED_WGSL = ELASTIC_PARAMS_FULL_WGSL + BATCH_SIZE_STRUCT_WGS
 '  sig_s[i] = vec4<f32>(dot(r3n,en)+dot(r3s,es), dot(r4n,en)+dot(r4s,es), dot(r5n,en)+dot(r5s,es), 0.0);\n' +
 '}\n';
 
-/* tau = sig − C0:eps (pure elementwise on wide buffers). */
+/* tau = sig − C0:eps (elementwise per slot). */
 var TAU_COMPUTE_BATCHED_WGSL = ELASTIC_PARAMS_FULL_WGSL + BATCH_SIZE_STRUCT_WGSL +
 '@group(0) @binding(0) var<storage, read>       eps_n: array<vec4<f32>>;\n' +
 '@group(0) @binding(1) var<storage, read>       eps_s: array<vec4<f32>>;\n' +
@@ -1959,16 +1957,16 @@ var TAU_COMPUTE_BATCHED_WGSL = ELASTIC_PARAMS_FULL_WGSL + BATCH_SIZE_STRUCT_WGSL
 '@group(0) @binding(7) var<uniform>             BS: BatchSize;\n' +
 '@compute @workgroup_size(64)\n' +
 'fn tau_compute_batched(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
-'  let i = gid.x;\n' +
-'  if (i >= BS.total) { return; }\n' +
+'  let voxel = gid.x;\n' +
+'  if (voxel >= BS.voxels) { return; }\n' +
+'  let i = gid.y * BS.voxels + voxel;\n' +
 '  let en = eps_n[i].xyz; let es = eps_s[i].xyz;\n' +
 '  let sn = sig_n[i].xyz; let ss = sig_s[i].xyz;\n' +
 '  tau_n[i] = vec4<f32>(sn.x-(dot(P.C0_r0n.xyz,en)+dot(P.C0_r0s.xyz,es)), sn.y-(dot(P.C0_r1n.xyz,en)+dot(P.C0_r1s.xyz,es)), sn.z-(dot(P.C0_r2n.xyz,en)+dot(P.C0_r2s.xyz,es)), 0.0);\n' +
 '  tau_s[i] = vec4<f32>(ss.x-(dot(P.C0_r3n.xyz,en)+dot(P.C0_r3s.xyz,es)), ss.y-(dot(P.C0_r4n.xyz,en)+dot(P.C0_r4s.xyz,es)), ss.z-(dot(P.C0_r5n.xyz,en)+dot(P.C0_r5s.xyz,es)), 0.0);\n' +
 '}\n';
 
-/* pack: tau (6T-wide) → tauCmplx (36T-wide).  combined CG slot CS = (i/voxels)/6;
-   Q = (i/voxels)%6; base = CS*voxels+voxel. */
+/* pack: tau (6T-wide) → tauCmplx (36T-wide).  slot = spectral slot; CS=slot/6. */
 var PACK_BATCHED_WGSL = BATCH_SIZE_STRUCT_WGSL +
 '@group(0) @binding(0) var<storage, read>       tau_n:   array<vec4<f32>>;\n' +
 '@group(0) @binding(1) var<storage, read>       tau_s:   array<vec4<f32>>;\n' +
@@ -1976,13 +1974,12 @@ var PACK_BATCHED_WGSL = BATCH_SIZE_STRUCT_WGSL +
 '@group(0) @binding(3) var<uniform>             BS: BatchSize;\n' +
 '@compute @workgroup_size(64)\n' +
 'fn pack_batched(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
-'  let i = gid.x;\n' +
-'  if (i >= BS.total) { return; }\n' +              /* total = 36T * voxels */
-'  let voxel = i % BS.voxels;\n' +
-'  let slot  = i / BS.voxels;\n' +                  /* spectral slot 0..36T-1 */
-'  let CS    = slot / 6u;\n' +                      /* combined CG slot d*6+LC */
-'  let Q     = slot % 6u;\n' +
-'  let base  = CS * BS.voxels + voxel;\n' +
+'  let voxel = gid.x;\n' +
+'  if (voxel >= BS.voxels) { return; }\n' +
+'  let slot = gid.y;\n' +                          /* spectral slot 0..36T-1 */
+'  let CS   = slot / 6u;\n' +                       /* combined CG slot d*6+LC */
+'  let Q    = slot % 6u;\n' +
+'  let base = CS * BS.voxels + voxel;\n' +
 '  var x: f32 = 0.0;\n' +
 '  if (Q < 3u) {\n' +
 '    let v = tau_n[base];\n' +
@@ -1991,13 +1988,12 @@ var PACK_BATCHED_WGSL = BATCH_SIZE_STRUCT_WGSL +
 '    let v = tau_s[base]; let q2 = Q - 3u;\n' +
 '    if (q2 == 0u) { x = v.x; } else if (q2 == 1u) { x = v.y; } else { x = v.z; }\n' +
 '  }\n' +
-'  out_cmpx[i] = vec2<f32>(x, 0.0);\n' +
+'  out_cmpx[slot * BS.voxels + voxel] = vec2<f32>(x, 0.0);\n' +
 '}\n';
 
-/* gammaAccum, batched over combined CG slot at fixed output row P (6 dispatches).
-   depsHat[CS*6+P] = Σ_Q Γ[P][Q]·tauHat[CS*6+Q].  Γ is shared (single material). */
+/* gammaAccum, fixed row P (pidx), all combined slots: depsHat[CS*6+P] = Σ_Q Γ[P][Q]·tauHat[CS*6+Q]. */
 var GAMMA_ACCUM_BATCHED_WGSL =
-'struct GP { total: u32, voxels: u32, pidx: u32, _p: u32 }\n' +
+'struct GP { voxels: u32, pidx: u32, _p0: u32, _p1: u32 }\n' +
 '@group(0) @binding(0) var<storage, read> g0: array<f32>;\n' +
 '@group(0) @binding(1) var<storage, read> g1: array<f32>;\n' +
 '@group(0) @binding(2) var<storage, read> g2: array<f32>;\n' +
@@ -2009,11 +2005,10 @@ var GAMMA_ACCUM_BATCHED_WGSL =
 '@group(0) @binding(8) var<uniform>             P: GP;\n' +
 '@compute @workgroup_size(64)\n' +
 'fn gamma_accum_batched(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
-'  let j = gid.x;\n' +
-'  if (j >= P.total) { return; }\n' +               /* total = 6T * voxels */
-'  let CS    = j / P.voxels;\n' +                    /* combined CG slot */
-'  let voxel = j % P.voxels;\n' +
-'  let row   = CS * 6u;\n' +
+'  let voxel = gid.x;\n' +
+'  if (voxel >= P.voxels) { return; }\n' +
+'  let CS  = gid.y;\n' +                            /* combined CG slot */
+'  let row = CS * 6u;\n' +
 '  var acc = g0[voxel] * tauHat[(row + 0u) * P.voxels + voxel];\n' +
 '  acc = acc + g1[voxel] * tauHat[(row + 1u) * P.voxels + voxel];\n' +
 '  acc = acc + g2[voxel] * tauHat[(row + 2u) * P.voxels + voxel];\n' +
@@ -2023,22 +2018,20 @@ var GAMMA_ACCUM_BATCHED_WGSL =
 '  depsHat[(row + P.pidx) * P.voxels + voxel] = acc;\n' +
 '}\n';
 
-/* deAccum, batched over combined CG slot at fixed row P (6 dispatches).
-   out.{n,s}[lane(P)] += Re(depsC[CS*6+P]).  Seed out←eps first. */
+/* deAccum, fixed row P: out.{n,s}[lane(P)] += Re(depsC[CS*6+P]).  Seed out←eps first. */
 var DEACCUM_BATCHED_WGSL =
-'struct DP { total: u32, voxels: u32, pidx: u32, _p: u32 }\n' +
+'struct DP { voxels: u32, pidx: u32, _p0: u32, _p1: u32 }\n' +
 '@group(0) @binding(0) var<storage, read_write> out_n: array<vec4<f32>>;\n' +
 '@group(0) @binding(1) var<storage, read_write> out_s: array<vec4<f32>>;\n' +
 '@group(0) @binding(2) var<storage, read>       deps_c: array<vec2<f32>>;\n' +
 '@group(0) @binding(3) var<uniform>             P: DP;\n' +
 '@compute @workgroup_size(64)\n' +
 'fn de_accum_batched(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
-'  let j = gid.x;\n' +
-'  if (j >= P.total) { return; }\n' +
-'  let CS    = j / P.voxels;\n' +
-'  let voxel = j % P.voxels;\n' +
-'  let dval  = deps_c[(CS * 6u + P.pidx) * P.voxels + voxel].x;\n' +
-'  let base  = CS * P.voxels + voxel;\n' +
+'  let voxel = gid.x;\n' +
+'  if (voxel >= P.voxels) { return; }\n' +
+'  let CS   = gid.y;\n' +
+'  let dval = deps_c[(CS * 6u + P.pidx) * P.voxels + voxel].x;\n' +
+'  let base = CS * P.voxels + voxel;\n' +
 '  if (P.pidx < 3u) {\n' +
 '    var o = out_n[base];\n' +
 '    if (P.pidx == 0u) { o.x = o.x + dval; } else if (P.pidx == 1u) { o.y = o.y + dval; } else { o.z = o.z + dval; }\n' +
@@ -2050,7 +2043,7 @@ var DEACCUM_BATCHED_WGSL =
 '  }\n' +
 '}\n';
 
-/* axpy (both n,s) with per-slot scalar: y += a[CS]·x.  scalar from storage. */
+/* axpy (both n,s) per-slot scalar: y += a[slot]·x. */
 var AXPY_BATCHED_WGSL = BATCH_SIZE_STRUCT_WGSL +
 '@group(0) @binding(0) var<storage, read>       x_n: array<vec4<f32>>;\n' +
 '@group(0) @binding(1) var<storage, read>       x_s: array<vec4<f32>>;\n' +
@@ -2060,14 +2053,16 @@ var AXPY_BATCHED_WGSL = BATCH_SIZE_STRUCT_WGSL +
 '@group(0) @binding(5) var<uniform>             BS: BatchSize;\n' +
 '@compute @workgroup_size(64)\n' +
 'fn axpy_batched(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
-'  let i = gid.x;\n' +
-'  if (i >= BS.total) { return; }\n' +
-'  let a = sc[i / BS.voxels];\n' +
+'  let voxel = gid.x;\n' +
+'  if (voxel >= BS.voxels) { return; }\n' +
+'  let slot = gid.y;\n' +
+'  let i = slot * BS.voxels + voxel;\n' +
+'  let a = sc[slot];\n' +
 '  y_n[i] = y_n[i] + a * x_n[i];\n' +
 '  y_s[i] = y_s[i] + a * x_s[i];\n' +
 '}\n';
 
-/* xbpy (both n,s) with per-slot scalar: y = x + b[CS]·y. */
+/* xbpy (both n,s) per-slot scalar: y = x + b[slot]·y. */
 var XBPY_BATCHED_WGSL = BATCH_SIZE_STRUCT_WGSL +
 '@group(0) @binding(0) var<storage, read>       x_n: array<vec4<f32>>;\n' +
 '@group(0) @binding(1) var<storage, read>       x_s: array<vec4<f32>>;\n' +
@@ -2077,15 +2072,17 @@ var XBPY_BATCHED_WGSL = BATCH_SIZE_STRUCT_WGSL +
 '@group(0) @binding(5) var<uniform>             BS: BatchSize;\n' +
 '@compute @workgroup_size(64)\n' +
 'fn xbpy_batched(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
-'  let i = gid.x;\n' +
-'  if (i >= BS.total) { return; }\n' +
-'  let b = sc[i / BS.voxels];\n' +
+'  let voxel = gid.x;\n' +
+'  if (voxel >= BS.voxels) { return; }\n' +
+'  let slot = gid.y;\n' +
+'  let i = slot * BS.voxels + voxel;\n' +
+'  let b = sc[slot];\n' +
 '  y_n[i] = x_n[i] + b * y_n[i];\n' +
 '  y_s[i] = x_s[i] + b * y_s[i];\n' +
 '}\n';
 
-/* dotReduce, slot-tagged by combined CG slot: workgroup w handles CS = w/partialCount
-   over that slot's voxels; partials[w] is that workgroup's partial.  CPU sums per CS. */
+/* dotReduce, 2D-native: workgroup (chunk = wgid.x, CS = wgid.y).  One partial per
+   (CS, chunk) at partials[CS*partialCount + chunk].  CPU sums per CS. */
 var DOT_REDUCE_BATCHED_WGSL =
 'struct DB { voxels: u32, partialCount: u32, _p0: u32, _p1: u32 }\n' +
 '@group(0) @binding(0) var<storage, read>       a_n: array<vec4<f32>>;\n' +
@@ -2098,9 +2095,8 @@ var DOT_REDUCE_BATCHED_WGSL =
 '@compute @workgroup_size(256)\n' +
 'fn reduce_batched(@builtin(local_invocation_id) lid: vec3<u32>,\n' +
 '                  @builtin(workgroup_id) wgid: vec3<u32>) {\n' +
-'  let wg    = wgid.x;\n' +
-'  let CS    = wg / P.partialCount;\n' +
-'  let chunk = wg % P.partialCount;\n' +
+'  let chunk = wgid.x;\n' +
+'  let CS    = wgid.y;\n' +
 '  let tid   = lid.x;\n' +
 '  let voxel = chunk * 256u + tid;\n' +
 '  var s: f32 = 0.0;\n' +
@@ -2117,26 +2113,30 @@ var DOT_REDUCE_BATCHED_WGSL =
 '    if (stride == 1u) { break; }\n' +
 '    stride = stride >> 1u;\n' +
 '  }\n' +
-'  if (tid == 0u) { partials[wg] = sdata[0]; }\n' +
+'  if (tid == 0u) { partials[CS * P.partialCount + chunk] = sdata[0]; }\n' +
 '}\n';
 
 
-/* ---- tile-size probe -------------------------------------------------------
-   Largest T (≤D) whose batch-36T FFT fits the device: per-buffer byte limit
-   AND the FFT's own 2D-grid constructor check (throwaway plan, destroyed). */
+/* ---- 2D dispatch helper ---------------------------------------------------- */
+ElasticSolverFull.prototype._dispatchGrid2 = function(enc, pipe, bg, xWG, yWG) {
+  var pass = enc.beginComputePass();
+  pass.setPipeline(pipe);
+  pass.setBindGroup(0, bg);
+  pass.dispatchWorkgroups(xWG, yWG, 1);
+  pass.end();
+};
+
+
+/* ---- tile-size probe (largest T whose batch-36T FFT fits) ------------------ */
 ElasticSolverFull.prototype._pickTileSize = function(D) {
   var N3 = this.N3;
   var lim = (this.device.limits && this.device.limits.maxStorageBufferBindingSize) || (128 * 1024 * 1024);
   for (var T = D; T >= 1; T--) {
-    var bytes = 36 * T * N3 * 8;            /* one spectral / FFT ping-pong buffer */
-    if (bytes > lim) continue;
-    try {
-      var probe = new FFTPlan(this.N, 36 * T);   /* throws if 2D grid exceeded */
-      probe.destroy();
-      return T;
-    } catch (e) { /* grid limit at this T → try smaller */ }
+    if (36 * T * N3 * 8 > lim) continue;       /* one spectral / FFT ping-pong buffer */
+    try { var probe = new FFTPlan(this.N, 36 * T); probe.destroy(); return T; }
+    catch (e) { /* grid limit at this T → smaller */ }
   }
-  return 1;                                  /* T=1 is always feasible (3a) */
+  return 1;
 };
 
 
@@ -2148,24 +2148,30 @@ ElasticSolverFull.prototype._ensureBatchedResources = function(T) {
 
   var d = this.device, BU = GPUBufferUsage, N3 = this.N3;
   var nCG = 6 * T, nSP = 36 * T;
-  var wideV = nCG * this.v4Size;          /* 6T × (N³ vec4) */
-  var wideC = nSP * this.cmplxSize;       /* 36T × (N³ complex) */
+  var maxDim = (d.limits && d.limits.maxComputeWorkgroupsPerDimension) || 65535;
+  var voxWGx = Math.ceil(N3 / 64);
+  if (voxWGx > maxDim) {
+    throw new Error('batched homogenize: N=' + this.N + ' needs X-tiling (voxel-WG ' +
+      voxWGx + ' > device cap ' + maxDim + '); not supported yet (3c).');
+  }
+  var dotWGx = Math.ceil(N3 / 256);
+  if (dotWGx > maxDim) throw new Error('batched dot: N too large for X dim (' + dotWGx + ' > ' + maxDim + ')');
 
+  var wideV = nCG * this.v4Size, wideC = nSP * this.cmplxSize;
   function vb() { return d.createBuffer({ size: wideV, usage: BU.STORAGE | BU.COPY_SRC | BU.COPY_DST }); }
   function cb() { return d.createBuffer({ size: wideC, usage: BU.STORAGE | BU.COPY_SRC | BU.COPY_DST }); }
   function pair() { return { n: vb(), s: vb() }; }
-  function ub(bytes) { return d.createBuffer({ size: bytes, usage: BU.UNIFORM | BU.COPY_DST }); }
+  function ub(b) { return d.createBuffer({ size: b, usage: BU.UNIFORM | BU.COPY_DST }); }
 
-  var B = { T: T, nCG: nCG, nSP: nSP };
+  var B = { T: T, nCG: nCG, nSP: nSP, voxWGx: voxWGx, dotWGx: dotWGx };
   B.eps = pair(); B.b = pair(); B.r = pair(); B.p = pair(); B.Ap = pair();
   B.sig = pair(); B.tau = pair();
   B.tauCmplx = cb(); B.tauHat = cb(); B.depsHat = cb(); B.depsC = cb();
 
   B.solidWide = d.createBuffer({ size: T * this.realSize, usage: BU.STORAGE | BU.COPY_DST });
-  B.solid = B.solidWide;                  /* default handle; D=1 path repoints to solidBuf */
+  B.solid = B.solidWide;
 
-  B.fft = new FFTPlan(this.N, nSP);       /* batch = 36T */
-
+  B.fft = new FFTPlan(this.N, nSP);
   B.scalarFloats = Math.max(nCG, 8);
   B.scalarBuf = d.createBuffer({ size: B.scalarFloats * 4, usage: BU.STORAGE | BU.COPY_DST });
 
@@ -2174,14 +2180,13 @@ ElasticSolverFull.prototype._ensureBatchedResources = function(T) {
   B.partials = d.createBuffer({ size: Math.max(nPart * 4, 256), usage: BU.STORAGE | BU.COPY_SRC });
   B.readback = d.createBuffer({ size: Math.max(nPart * 4, 256), usage: BU.COPY_DST | BU.MAP_READ });
 
-  B.size6  = ub(16); d.queue.writeBuffer(B.size6,  0, new Uint32Array([nCG * N3, N3, nCG, 0]));
-  B.size36 = ub(16); d.queue.writeBuffer(B.size36, 0, new Uint32Array([nSP * N3, N3, nSP, 0]));
+  B.size6  = ub(16); d.queue.writeBuffer(B.size6,  0, new Uint32Array([N3, nCG, 0, 0]));
+  B.size36 = ub(16); d.queue.writeBuffer(B.size36, 0, new Uint32Array([N3, nSP, 0, 0]));
   B.dotU   = ub(16); d.queue.writeBuffer(B.dotU,   0, new Uint32Array([N3, B.partialCount, 0, 0]));
-
   B.gammaPU = []; B.deaccPU = [];
   for (var P = 0; P < 6; P++) {
-    var gu = ub(16); d.queue.writeBuffer(gu, 0, new Uint32Array([nCG * N3, N3, P, 0])); B.gammaPU.push(gu);
-    var du = ub(16); d.queue.writeBuffer(du, 0, new Uint32Array([nCG * N3, N3, P, 0])); B.deaccPU.push(du);
+    var gu = ub(16); d.queue.writeBuffer(gu, 0, new Uint32Array([N3, P, 0, 0])); B.gammaPU.push(gu);
+    var du = ub(16); d.queue.writeBuffer(du, 0, new Uint32Array([N3, P, 0, 0])); B.deaccPU.push(du);
   }
 
   function pipe(code, entry) {
@@ -2197,10 +2202,7 @@ ElasticSolverFull.prototype._ensureBatchedResources = function(T) {
   B.xbPipe = pipe(XBPY_BATCHED_WGSL,         'xbpy_batched');
   B.drPipe = pipe(DOT_REDUCE_BATCHED_WGSL,   'reduce_batched');
 
-  /* constant identity eps_bar pattern — the 6 unit load cases, tiled over T
-     designs (eps_bar depends on LC only, not design). */
-  var idN = new Float32Array(nCG * N3 * 4);
-  var idS = new Float32Array(nCG * N3 * 4);
+  var idN = new Float32Array(nCG * N3 * 4), idS = new Float32Array(nCG * N3 * 4);
   for (var CS = 0; CS < nCG; CS++) {
     var LC = CS % 6, off = CS * N3 * 4;
     for (var v = 0; v < N3; v++) {
@@ -2214,7 +2216,6 @@ ElasticSolverFull.prototype._ensureBatchedResources = function(T) {
   this.B = B;
 };
 
-/* seed eps = b = identity load cases (current tile) */
 ElasticSolverFull.prototype._seedBatched = function() {
   var d = this.device, B = this.B;
   d.queue.writeBuffer(B.eps.n, 0, B.idN); d.queue.writeBuffer(B.eps.s, 0, B.idS);
@@ -2232,7 +2233,7 @@ ElasticSolverFull.prototype._dotB = async function(a, b) {
   ]});
   var pass = enc.beginComputePass();
   pass.setPipeline(B.drPipe); pass.setBindGroup(0, bg);
-  pass.dispatchWorkgroups(B.nCG * B.partialCount, 1, 1);
+  pass.dispatchWorkgroups(B.dotWGx, B.nCG, 1);    /* X = chunk, Y = combined slot */
   pass.end();
   enc.copyBufferToBuffer(B.partials, 0, B.readback, 0, B.nCG * B.partialCount * 4);
   d.queue.submit([enc.finish()]);
@@ -2255,8 +2256,7 @@ ElasticSolverFull.prototype._copyB = function(enc, src, dst) {
 };
 
 ElasticSolverFull.prototype._writeScalarB = function(scalarArr) {
-  var B = this.B;
-  var sc = new Float32Array(B.scalarFloats);
+  var B = this.B, sc = new Float32Array(B.scalarFloats);
   for (var i = 0; i < scalarArr.length && i < B.scalarFloats; i++) sc[i] = scalarArr[i];
   this.device.queue.writeBuffer(B.scalarBuf, 0, sc);
 };
@@ -2269,7 +2269,7 @@ ElasticSolverFull.prototype._axpyB = function(enc, scalarArr, x, y) {
     { binding: 2, resource: { buffer: y.n } }, { binding: 3, resource: { buffer: y.s } },
     { binding: 4, resource: { buffer: B.scalarBuf } }, { binding: 5, resource: { buffer: B.size6 } }
   ]});
-  this._dispatchEncoded(enc, B.axPipe, bg, B.nCG * this.N3, 64);
+  this._dispatchGrid2(enc, B.axPipe, bg, B.voxWGx, B.nCG);
 };
 ElasticSolverFull.prototype._xbpyB = function(enc, scalarArr, x, y) {
   var B = this.B;
@@ -2279,10 +2279,10 @@ ElasticSolverFull.prototype._xbpyB = function(enc, scalarArr, x, y) {
     { binding: 2, resource: { buffer: y.n } }, { binding: 3, resource: { buffer: y.s } },
     { binding: 4, resource: { buffer: B.scalarBuf } }, { binding: 5, resource: { buffer: B.size6 } }
   ]});
-  this._dispatchEncoded(enc, B.xbPipe, bg, B.nCG * this.N3, 64);
+  this._dispatchGrid2(enc, B.xbPipe, bg, B.voxWGx, B.nCG);
 };
 
-/* ---- batched operator: out = epsIn + Γ·(C(x):epsIn − C0:epsIn), all 6T slots --- */
+/* ---- batched operator: out = epsIn + Γ·(C(x):epsIn − C0:epsIn), all slots ---- */
 ElasticSolverFull.prototype._applyABatched = function(enc, epsIn, out) {
   var d = this.device, B = this.B;
 
@@ -2292,7 +2292,7 @@ ElasticSolverFull.prototype._applyABatched = function(enc, epsIn, out) {
     { binding: 3, resource: { buffer: B.sig.n } }, { binding: 4, resource: { buffer: B.sig.s } },
     { binding: 5, resource: { buffer: this.elasticParamsBuf } }, { binding: 6, resource: { buffer: B.size6 } }
   ]});
-  this._dispatchEncoded(enc, B.lsPipe, lsBg, B.nCG * this.N3, 64);
+  this._dispatchGrid2(enc, B.lsPipe, lsBg, B.voxWGx, B.nCG);
 
   var tcBg = d.createBindGroup({ layout: B.tcPipe.getBindGroupLayout(0), entries: [
     { binding: 0, resource: { buffer: epsIn.n } }, { binding: 1, resource: { buffer: epsIn.s } },
@@ -2300,13 +2300,13 @@ ElasticSolverFull.prototype._applyABatched = function(enc, epsIn, out) {
     { binding: 4, resource: { buffer: B.tau.n } }, { binding: 5, resource: { buffer: B.tau.s } },
     { binding: 6, resource: { buffer: this.elasticParamsBuf } }, { binding: 7, resource: { buffer: B.size6 } }
   ]});
-  this._dispatchEncoded(enc, B.tcPipe, tcBg, B.nCG * this.N3, 64);
+  this._dispatchGrid2(enc, B.tcPipe, tcBg, B.voxWGx, B.nCG);
 
   var pcBg = d.createBindGroup({ layout: B.pcPipe.getBindGroupLayout(0), entries: [
     { binding: 0, resource: { buffer: B.tau.n } }, { binding: 1, resource: { buffer: B.tau.s } },
     { binding: 2, resource: { buffer: B.tauCmplx } }, { binding: 3, resource: { buffer: B.size36 } }
   ]});
-  this._dispatchEncoded(enc, B.pcPipe, pcBg, B.nSP * this.N3, 64);
+  this._dispatchGrid2(enc, B.pcPipe, pcBg, B.voxWGx, B.nSP);
   B.fft.loadFromBuffer(enc, B.tauCmplx);
   B.fft.forwardEncoded(enc);
   B.fft.storeToBuffer(enc, B.tauHat);
@@ -2321,7 +2321,7 @@ ElasticSolverFull.prototype._applyABatched = function(enc, epsIn, out) {
       { binding: 6, resource: { buffer: B.tauHat } }, { binding: 7, resource: { buffer: B.depsHat } },
       { binding: 8, resource: { buffer: B.gammaPU[P] } }
     ]});
-    this._dispatchEncoded(enc, B.gaPipe, gaBg, B.nCG * this.N3, 64);
+    this._dispatchGrid2(enc, B.gaPipe, gaBg, B.voxWGx, B.nCG);
   }
 
   B.fft.loadFromBuffer(enc, B.depsHat);
@@ -2332,13 +2332,11 @@ ElasticSolverFull.prototype._applyABatched = function(enc, epsIn, out) {
       { binding: 0, resource: { buffer: out.n } }, { binding: 1, resource: { buffer: out.s } },
       { binding: 2, resource: { buffer: B.depsC } }, { binding: 3, resource: { buffer: B.deaccPU[P2] } }
     ]});
-    this._dispatchEncoded(enc, B.daPipe, daBg, B.nCG * this.N3, 64);
+    this._dispatchGrid2(enc, B.daPipe, daBg, B.voxWGx, B.nCG);
   }
 };
 
-/* ---- core lockstep CG over the current tile (this.B sized for T designs) ----
-   Assumes resources ensured, B.solid set, design solids uploaded.  Returns
-   { perDesign: [{C_eff, Ex..Gxy, perLC}], totalIters }. */
+/* ---- core lockstep CG over the current tile -------------------------------- */
 ElasticSolverFull.prototype._runLockstepTile = async function() {
   var d = this.device, B = this.B, nCG = B.nCG, N3 = this.N3;
   var ones = []; for (var z = 0; z < nCG; z++) ones.push(-1);
@@ -2353,7 +2351,7 @@ ElasticSolverFull.prototype._runLockstepTile = async function() {
   this._copyB(enc, B.b, B.r);
   d.queue.submit([enc.finish()]);
   var encR = d.createCommandEncoder();
-  this._axpyB(encR, ones, B.Ap, B.r);          /* r = b - Ap */
+  this._axpyB(encR, ones, B.Ap, B.r);
   d.queue.submit([encR.finish()]);
   var encP = d.createCommandEncoder();
   this._copyB(encP, B.r, B.p);
@@ -2363,14 +2361,12 @@ ElasticSolverFull.prototype._runLockstepTile = async function() {
   var live = [], iters = [], converged = [];
   for (var q = 0; q < nCG; q++) { live.push(true); iters.push(0); converged.push(false); }
   var nLive = nCG;
-
   var maxit = (typeof CG_MAXITER_FULL !== 'undefined') ? CG_MAXITER_FULL : 1000;
   var tol   = (typeof CG_TOL_FULL !== 'undefined') ? CG_TOL_FULL : 1e-4;
   var totalIters = 0;
 
   for (var it = 0; it < maxit && nLive > 0; it++) {
     totalIters = it + 1;
-
     var encA = d.createCommandEncoder();
     this._applyABatched(encA, B.p, B.Ap);
     d.queue.submit([encA.finish()]);
@@ -2381,11 +2377,11 @@ ElasticSolverFull.prototype._runLockstepTile = async function() {
       alpha[L1] = (live[L1] && Math.abs(pAp[L1]) > 1e-30) ? (rr[L1] / pAp[L1]) : 0;
 
     var encE = d.createCommandEncoder();
-    this._axpyB(encE, Array.prototype.slice.call(alpha), B.p, B.eps);   /* eps += alpha·p */
+    this._axpyB(encE, Array.prototype.slice.call(alpha), B.p, B.eps);
     d.queue.submit([encE.finish()]);
     var negAlpha = []; for (var L1b = 0; L1b < nCG; L1b++) negAlpha.push(-alpha[L1b]);
     var encRr = d.createCommandEncoder();
-    this._axpyB(encRr, negAlpha, B.Ap, B.r);                            /* r -= alpha·Ap */
+    this._axpyB(encRr, negAlpha, B.Ap, B.r);
     d.queue.submit([encRr.finish()]);
 
     var rrNew = await this._dotB(B.r, B.r);
@@ -2397,7 +2393,7 @@ ElasticSolverFull.prototype._runLockstepTile = async function() {
 
     var beta = []; for (var L4 = 0; L4 < nCG; L4++) beta.push(live[L4] ? (rrNew[L4] / rr[L4]) : 0);
     var encPp = d.createCommandEncoder();
-    this._xbpyB(encPp, beta, B.r, B.p);                                 /* p = r + beta·p */
+    this._xbpyB(encPp, beta, B.r, B.p);
     d.queue.submit([encPp.finish()]);
     rr = rrNew;
   }
@@ -2411,7 +2407,7 @@ ElasticSolverFull.prototype._runLockstepTile = async function() {
     { binding: 3, resource: { buffer: B.sig.n } }, { binding: 4, resource: { buffer: B.sig.s } },
     { binding: 5, resource: { buffer: this.elasticParamsBuf } }, { binding: 6, resource: { buffer: B.size6 } }
   ]});
-  this._dispatchEncoded(encS, B.lsPipe, lsBg, B.nCG * this.N3, 64);
+  this._dispatchGrid2(encS, B.lsPipe, lsBg, B.voxWGx, B.nCG);
   var V = B.nCG * this.v4Size;
   var rbN = d.createBuffer({ size: V, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   var rbS = d.createBuffer({ size: V, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -2428,9 +2424,7 @@ ElasticSolverFull.prototype._runLockstepTile = async function() {
   for (var dgn = 0; dgn < B.T; dgn++) {
     var C_eff = new Float64Array(36);
     for (var LC = 0; LC < 6; LC++) {
-      var CS = dgn * 6 + LC;
-      var sBar = [0, 0, 0, 0, 0, 0];
-      var slotOff = CS * N3 * 4;
+      var CS = dgn * 6 + LC, sBar = [0, 0, 0, 0, 0, 0], slotOff = CS * N3 * 4;
       for (var i = 0; i < N3; i++) {
         var bi = slotOff + i * 4;
         sBar[0] += aN[bi]; sBar[1] += aN[bi + 1]; sBar[2] += aN[bi + 2];
@@ -2450,13 +2444,13 @@ ElasticSolverFull.prototype._runLockstepTile = async function() {
       if (!converged[CSi]) allConv = false;
     }
     if (S === null) {
-      perDesign.push({ valid: false, reject_reason: 'singular_C_eff', C_eff: C_eff, perLC: perLC, allConverged: allConv });
+      perDesign.push({ valid: false, reject_reason: 'singular_C_eff', C_eff: C_eff, S: null, perLC: perLC, allConverged: allConv });
     } else {
       perDesign.push({
         valid: true,
         Ex: 1 / S[0], Ey: 1 / S[7], Ez: 1 / S[14],
         Gyz: 1 / S[21], Gxz: 1 / S[28], Gxy: 1 / S[35],
-        C_eff: C_eff, perLC: perLC, allConverged: allConv
+        C_eff: C_eff, S: S, perLC: perLC, allConverged: allConv
       });
     }
   }
@@ -2468,7 +2462,7 @@ ElasticSolverFull.prototype.homogenizeFullBatched = async function(opts) {
   opts = opts || {};
   var t0 = performance.now();
   this._ensureBatchedResources(1);
-  this.B.solid = this.solidBuf;            /* reuse the already-uploaded single design */
+  this.B.solid = this.solidBuf;
   var tile = await this._runLockstepTile();
   var r = tile.perDesign[0];
   r.totalIters = tile.totalIters;
@@ -2481,58 +2475,43 @@ ElasticSolverFull.prototype.homogenizeFullBatchedMulti = async function(designGr
   opts = opts || {};
   var d = this.device, N3 = this.N3, D = designGrids.length;
   var t0 = performance.now();
-
   var T = (opts.forceTile && opts.forceTile >= 1) ? Math.min(opts.forceTile, D) : this._pickTileSize(D);
 
-  var results = new Array(D);
-  var totalIters = 0, tilesUsed = 0;
-
+  var results = new Array(D), totalIters = 0, tilesUsed = 0;
   for (var start = 0; start < D; start += T) {
     var g = Math.min(T, D - start);
     this._ensureBatchedResources(g);
     this.B.solid = this.B.solidWide;
-
-    /* upload this tile's g solids contiguously into solidWide */
     var packed = new Float32Array(g * N3);
     for (var k = 0; k < g; k++) packed.set(designGrids[start + k], k * N3);
     d.queue.writeBuffer(this.B.solidWide, 0, packed);
-
     var tile = await this._runLockstepTile();
     for (var j = 0; j < g; j++) results[start + j] = tile.perDesign[j];
-    totalIters += tile.totalIters;
-    tilesUsed++;
+    totalIters += tile.totalIters; tilesUsed++;
   }
-
   return { perDesign: results, tileSize: T, tilesUsed: tilesUsed, totalIters: totalIters, time: performance.now() - t0 };
 };
 
 
-/* ---- harness 1: 3a regression (D=1, Schwarz P, N=16) — bit-exact ----------- */
+/* ---- harness 1: 3a regression / high-N parity (single design) -------------- */
 async function runFullVoigtGPUTestBatched(N) {
   N = N || 16;
   if (!WGPU.device) await ensureDevice();
   var recipe = DEMO_RECIPES.schwarzP;
-
   var fftB6 = (window.__sharedFFTBatched && window.__sharedFFTBatched.N === N && window.__sharedFFTBatched.batch === 6)
     ? window.__sharedFFTBatched : new FFTPlan(N, 6);
   if (!window.__sharedFFTBatched) window.__sharedFFTBatched = fftB6;
 
-  var family = recipe.family;
-  var params = KERNELS[family].parseRecipe(recipe);
-  var args   = resolveBuildArgs(recipe);
-  var solid  = buildVoxels(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+  var family = recipe.family, params = KERNELS[family].parseRecipe(recipe), args = resolveBuildArgs(recipe);
+  var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
   var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
   var C_s = isoC(mat.Es_MPa, mat.nu), C_v = isoC(mat.Es_MPa * 1e-4, mat.nu), C_0 = isoC(mat.Es_MPa, mat.nu);
   var Gamma = buildGammaFull(N, C_0[21], C_0[1]);
   var solver = new ElasticSolverFull(N, fftB6);
   solver.uploadDesign(solid, Gamma, C_s, C_v, C_0);
 
-  var tb0 = performance.now();
-  var homB = await solver.homogenizeFullBatched();
-  var tBatched = performance.now() - tb0;
-  var ts0 = performance.now();
-  var homS = await solver.homogenizeFull();
-  var tSerial = performance.now() - ts0;
+  var tb0 = performance.now(); var homB = await solver.homogenizeFullBatched(); var tBatched = performance.now() - tb0;
+  var ts0 = performance.now(); var homS = await solver.homogenizeFull();        var tSerial = performance.now() - ts0;
 
   function pct(a, b) { return Math.abs(a - b) / Math.max(1e-12, Math.abs(b)) * 100; }
   var keys = ['Ex', 'Ey', 'Ez', 'Gyz', 'Gxz', 'Gxy'], rows = [], worst = 0;
@@ -2556,37 +2535,27 @@ async function runMultiDesignGPUTest(N, opts) {
   if (!WGPU.device) await ensureDevice();
   var recipeKeys = ['schwarzP', 'spinodoid', 'hyperuniform'];
   var recipes = recipeKeys.map(function (k) { return DEMO_RECIPES[k]; });
-
-  /* shared reference material (use the first recipe's material for all) */
   var mat = recipes[0].material || { Es_MPa: 110000, nu: 0.34 };
   var C_s = isoC(mat.Es_MPa, mat.nu), C_v = isoC(mat.Es_MPa * 1e-4, mat.nu), C_0 = isoC(mat.Es_MPa, mat.nu);
   var Gamma = buildGammaFull(N, C_0[21], C_0[1]);
-
   var solids = recipes.map(function (recipe) {
-    var family = recipe.family;
-    var params = KERNELS[family].parseRecipe(recipe);
-    var args   = resolveBuildArgs(recipe);
+    var family = recipe.family, params = KERNELS[family].parseRecipe(recipe), args = resolveBuildArgs(recipe);
     return buildVoxels(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
   });
-
   var fftB6 = (window.__sharedFFTBatched && window.__sharedFFTBatched.N === N && window.__sharedFFTBatched.batch === 6)
     ? window.__sharedFFTBatched : new FFTPlan(N, 6);
   if (!window.__sharedFFTBatched) window.__sharedFFTBatched = fftB6;
-
   var solver = new ElasticSolverFull(N, fftB6);
-  solver.uploadDesign(solids[0], Gamma, C_s, C_v, C_0);   /* placeholder solid; multi overwrites */
+  solver.uploadDesign(solids[0], Gamma, C_s, C_v, C_0);
 
   var tm0 = performance.now();
   var homM = await solver.homogenizeFullBatchedMulti(solids, { forceTile: opts.forceTile });
   var tMulti = performance.now() - tm0;
 
-  /* serial per-design reference (same shared material) */
   var serialResults = [], tSerial = 0;
   for (var dgn = 0; dgn < solids.length; dgn++) {
     solver.uploadDesign(solids[dgn], Gamma, C_s, C_v, C_0);
-    var ts = performance.now();
-    serialResults.push(await solver.homogenizeFull());
-    tSerial += performance.now() - ts;
+    var ts = performance.now(); serialResults.push(await solver.homogenizeFull()); tSerial += performance.now() - ts;
   }
 
   function pct(a, b) { return Math.abs(a - b) / Math.max(1e-12, Math.abs(b)) * 100; }
