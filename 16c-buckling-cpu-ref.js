@@ -1171,6 +1171,11 @@ function extractPrestressCPU(solid, C_s, C_v, N, axisVoigt, ws, opts) {
   specDeriv(sb[2], 2, N, d, ws); for (var c2 = 0; c2 < N3; c2++) { rhsF[2][c2] += d[c2]; rhsF[2][c2] = -rhsF[2][c2]; }
 
   var rhs = new Float64Array(n); bk_fieldToFlat(rhsF, N3, rhs); bk_zeroMeanFlat(rhs, N3);
+  /* equilibrium sign: applyKcpu returns −div(C:ε(u)), and div(C:ε(u′)) = −div(C:Ē),
+     so the system is applyKcpu(u′) = +div(C:Ē) = +div(sb).  The assembly above built
+     −div(sb); negate once here.  (Without this the fluctuation solves with reversed
+     sign, anti-relaxing σ⁰ to Voigt+Δ instead of Voigt−Δ — a super-Voigt prestress.) */
+  for (var rs = 0; rs < n; rs++) rhs[rs] = -rhs[rs];
 
   /* solve K·u′ = RHS */
   var uf = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
