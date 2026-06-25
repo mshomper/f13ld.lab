@@ -1493,6 +1493,40 @@ function runBucklingCPUTest() {
     gates.B3_synthetic_N8 = { rho: inside / N3, lambda_cr: res.lambda_cr, critAxis: res.critAxis, pcr: res.pcr, pass: isFinite(res.lambda_cr) && res.lambda_cr > 0 };
   })();
 
+  /* B4 — prestress must obey the Voigt upper bound and match the trusted
+     elastic C_eff.  This is the gate that would have caught the RHS sign bug:
+     the reversed fluctuation anti-relaxed σ⁰ to Voigt+Δ (super-Voigt, ~4× C_eff)
+     instead of the physical Voigt−Δ.  Schwarz P solid, N=16, zz axis. */
+  (function () {
+    var N = 16, N3 = N * N * N, axis = 2, ws = getBucklingWorkspaceCPU(N); ws.scheme = 'willot';
+    var solid = new Uint8Array(N3);
+    for (var i = 0; i < N; i++) for (var j = 0; j < N; j++) for (var k = 0; k < N; k++) {
+      var P = Math.cos(2 * Math.PI * i / N) + Math.cos(2 * Math.PI * j / N) + Math.cos(2 * Math.PI * k / N);
+      solid[i * N * N + j * N + k] = (P > 0) ? 1 : 0;
+    }
+    var rho = 0; for (var v = 0; v < N3; v++) rho += solid[v]; rho /= N3;
+    var pre = extractPrestressCPU(solid, C_s, C_v, N, axis, ws, { cgTol: 1e-9, cgMaxiter: 3000 });
+    var sBarA = Math.abs(pre.sBar[axis]);
+    var voigt = rho * C_s[axis * 6 + axis] + (1 - rho) * C_v[axis * 6 + axis];   /* volume-average upper bound */
+    var voigtRatio = sBarA / voigt;                                              /* physical ceiling: must be <= 1 */
+    /* tighter cross-check against the trusted Green-operator elastic solve, when 16a is loaded */
+    var haveElastic = (typeof cgSolveFullCPU === 'function' && typeof buildGammaFull === 'function');
+    var ceffRel = NaN;
+    if (haveElastic) {
+      var C0 = isoC(Es, nu), Gamma = buildGammaFull(N, C0[21], C0[1], 'willot');
+      var eb = [0, 0, 0, 0, 0, 0]; eb[axis] = 1;                                 /* unit strain on axis */
+      var rE = cgSolveFullCPU(solid, C_s, C_v, C0, Gamma, N, eb, 1e-6, 800);
+      var ceff = Math.abs(rE.sigma[axis]);
+      ceffRel = Math.abs(sBarA - ceff) / Math.max(ceff, 1e-30);
+    }
+    var pass = voigtRatio <= 1.001 && (!haveElastic || ceffRel < 0.05);
+    gates.B4_voigt_prestress_bound = {
+      rho: +rho.toFixed(3), sBar_GPa: +(sBarA / 1000).toFixed(2), voigt_GPa: +(voigt / 1000).toFixed(2),
+      voigtRatio: +voigtRatio.toFixed(3), elasticChecked: haveElastic,
+      ceffRel: isFinite(ceffRel) ? +ceffRel.toFixed(3) : null, pass: pass
+    };
+  })();
+
   var passed = true, names = Object.keys(gates);
   for (var gi = 0; gi < names.length; gi++) if (!gates[names[gi]].pass) passed = false;
   if (typeof console !== 'undefined') {
