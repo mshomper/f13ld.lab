@@ -489,6 +489,13 @@ async function runNonlinearKernelTest(mat) {
    ════════════════════════════════════════════════════════════ */
 
 var NL_VOID_CONTRAST = 1e-3;   /* void stiffness = this * solid; ~+2% modulus for ~5x faster CG */
+var NL_C0_FACTOR     = 0.5;    /* DEFAULT Green-operator reference factor: C0 = isoC(E * factor, nu).
+                                  OVERRIDE LIVE FROM THE BROWSER CONSOLE (no code edit), then re-run a solve:
+                                      window.NL_C0_FACTOR = 0.25
+                                  1.0 = old stiff-end reference (poorly conditioned at high contrast);
+                                  softer = faster Willot CG.  EXACTLY result-invariant — C0 cancels at the
+                                  converged fixed point, so sigma_y is unchanged; only cg= drops.  Sweep
+                                  {1.0, 0.5, 0.25, 0.1}, pick lowest cg=.  A page reload resets to this default. */
 var NL_NEWTON_TOL    = 1e-3;   /* f32-appropriate outer tol (inner CG floor ~1e-4) */
 var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-floor guard) */
 var NL_NEWTON_MAX    = 12;   /* cap failed-attempt cost; successful solves use ~3 */
@@ -556,8 +563,10 @@ NonlinearSolverFull.prototype.upload = function (recipe, opts) {
   var mat = recipe.material || NL_MAT_DEFAULT;
   var m = nlMakeMaterial(mat);
   this.material = m;
-  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * NL_VOID_CONTRAST, m.nu), C_0 = isoC(m.E, m.nu);
-  var Gamma = buildGammaFull(this.N, C_0[21], C_0[1]);
+  var _c0f = (typeof window !== 'undefined' && typeof window.NL_C0_FACTOR === 'number') ? window.NL_C0_FACTOR : NL_C0_FACTOR;
+  this._c0Factor = _c0f;   /* surfaced in the [crush-timing] setup line */
+  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * NL_VOID_CONTRAST, m.nu), C_0 = isoC(m.E * _c0f, m.nu);
+  var Gamma = buildGammaFull(this.N, C_0[21], C_0[1]);   /* default scheme = Willot (rotated); reference = C_0 above */
   this.es.uploadDesign(solid, Gamma, C_s, C_v, C_0);
   this.setMaterial(m);
   this.resetHistory();
@@ -899,7 +908,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var _nlSetup0 = _nlNow();
   var C = await this._ensureElasticMacro();
   var _nlRun0 = _nlNow(), _nlPrev = _nlRun0, _nlCgTotal = 0;
-  console.log('[crush-timing] N=' + this.N + ' axis=' + axis + '  elastic-macro setup ' + (_nlRun0 - _nlSetup0).toFixed(0) + ' ms');
+  console.log('[crush-timing] N=' + this.N + ' axis=' + axis + '  C0factor=' + (this._c0Factor != null ? this._c0Factor : NL_C0_FACTOR) + '  elastic-macro setup ' + (_nlRun0 - _nlSetup0).toFixed(0) + ' ms');
   var freeIdx = []; for (var i = 0; i < 6; i++) if (i !== axis) freeIdx.push(i);
   var nf = freeIdx.length;
   var Kff = new Float64Array(nf * nf);
