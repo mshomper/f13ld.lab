@@ -489,20 +489,11 @@ async function runNonlinearKernelTest(mat) {
    ════════════════════════════════════════════════════════════ */
 
 var NL_VOID_CONTRAST = 1e-3;   /* void stiffness = this * solid; ~+2% modulus for ~5x faster CG */
-var NL_C0_FACTOR     = 0.5;    /* DEFAULT Green-operator reference factor: C0 = isoC(E * factor, nu).
-                                  OVERRIDE LIVE FROM THE BROWSER CONSOLE (no code edit), then re-run a solve:
-                                      window.NL_C0_FACTOR = 0.25
-                                  1.0 = old stiff-end reference (poorly conditioned at high contrast);
-                                  softer = faster Willot CG.  EXACTLY result-invariant — C0 cancels at the
-                                  converged fixed point, so sigma_y is unchanged; only cg= drops.  Sweep
-                                  {1.0, 0.5, 0.25, 0.1}, pick lowest cg=.  A page reload resets to this default. */
 var NL_NEWTON_TOL    = 1e-3;   /* f32-appropriate outer tol (inner CG floor ~1e-4) */
 var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-floor guard) */
 var NL_NEWTON_MAX    = 12;   /* cap failed-attempt cost; successful solves use ~3 */
 var NL_CG_TOL        = 1e-4;   /* inner ~10x tighter than newtonTol(1e-3); required for Newton to converge (matches 16f) */
 var NL_CG_MAX        = 1000;
-var NL_ETA_MAX       = 0.1;    /* inexact-Newton: loosest inner CG tol, used on early (far-from-converged) Newton iters */
-var NL_ETA_GAMMA     = 0.1;    /* forcing term: inner tol = clamp(GAMMA * newtonRel, NL_CG_TOL, NL_ETA_MAX) */
 
 function NonlinearSolverFull(N, fftPlan) {
   this.N = N;
@@ -563,10 +554,8 @@ NonlinearSolverFull.prototype.upload = function (recipe, opts) {
   var mat = recipe.material || NL_MAT_DEFAULT;
   var m = nlMakeMaterial(mat);
   this.material = m;
-  var _c0f = (typeof window !== 'undefined' && typeof window.NL_C0_FACTOR === 'number') ? window.NL_C0_FACTOR : NL_C0_FACTOR;
-  this._c0Factor = _c0f;   /* surfaced in the [crush-timing] setup line */
-  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * NL_VOID_CONTRAST, m.nu), C_0 = isoC(m.E * _c0f, m.nu);
-  var Gamma = buildGammaFull(this.N, C_0[21], C_0[1]);   /* default scheme = Willot (rotated); reference = C_0 above */
+  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * NL_VOID_CONTRAST, m.nu), C_0 = isoC(m.E, m.nu);
+  var Gamma = buildGammaFull(this.N, C_0[21], C_0[1]);
   this.es.uploadDesign(solid, Gamma, C_s, C_v, C_0);
   this.setMaterial(m);
   this.resetHistory();
@@ -701,14 +690,6 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
     lastRel = Math.sqrt(rr) / ebNorm;
     if (lastRel < this.newtonTol) { converged = true; break; }
 
-    /* Inexact-Newton forcing term (Eisenstat-Walker style): solve the inner CG
-       only as tightly as the current Newton progress warrants — loose when far
-       from convergence, tightening to the validated NL_CG_TOL floor as Newton
-       closes in. This kills the cg-cap grind on early iters; the decisive
-       near-convergence iters still solve to today's 1e-4, so sigma_y is
-       unchanged (it is governed by the outer newtonTol). */
-    var eta = Math.min(NL_ETA_MAX, Math.max(this.cgTol, NL_ETA_GAMMA * lastRel));
-
     /* CG: solve A_nl * deps = R (= es.r); then eps -= deps.
        Warm-start the FIRST Newton iter from the previous step's first-iter
        increment (near-constant per step in the elastic regime); cold-start
@@ -746,7 +727,7 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
       var encE = d.createCommandEncoder(); es._axpyPair(encE, al, es.p, dpair); d.queue.submit([encE.finish()]);
       var encRr = d.createCommandEncoder(); es._axpyPair(encRr, -al, es.Ap, es.r); d.queue.submit([encRr.finish()]);
       var rrNew = await es._dotPair(es.r, es.r);
-      if (Math.sqrt(rrNew) / bnorm < eta) break;
+      if (Math.sqrt(rrNew) / bnorm < this.cgTol) break;
       var beta = rrNew / rrcg;
       var encP = d.createCommandEncoder(); es._xbpyPair(encP, beta, es.r, es.p); d.queue.submit([encP.finish()]);
       rrcg = rrNew;
@@ -908,7 +889,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var _nlSetup0 = _nlNow();
   var C = await this._ensureElasticMacro();
   var _nlRun0 = _nlNow(), _nlPrev = _nlRun0, _nlCgTotal = 0;
-  console.log('[crush-timing] N=' + this.N + ' axis=' + axis + '  C0factor=' + (this._c0Factor != null ? this._c0Factor : NL_C0_FACTOR) + '  elastic-macro setup ' + (_nlRun0 - _nlSetup0).toFixed(0) + ' ms');
+  console.log('[crush-timing] N=' + this.N + ' axis=' + axis + '  elastic-macro setup ' + (_nlRun0 - _nlSetup0).toFixed(0) + ' ms');
   var freeIdx = []; for (var i = 0; i < 6; i++) if (i !== axis) freeIdx.push(i);
   var nf = freeIdx.length;
   var Kff = new Float64Array(nf * nf);
