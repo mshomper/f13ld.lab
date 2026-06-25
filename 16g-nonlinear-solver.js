@@ -514,6 +514,7 @@ function NonlinearSolverFull(N, fftPlan) {
   this.epp_n = sb(); this.epp_s = sb();     /* committed plastic history (alpha in epp_n.w) */
   this.eppT_n = sb(); this.eppT_s = sb();   /* trial history from current return_map */
   this.deps_n = sb(); this.deps_s = sb();   /* Newton correction (CG solution) */
+  this.warmDeps_n = sb(); this.warmDeps_s = sb();   /* retained first-Newton-iter increment for cross-step CG warm-start (zero-init = cold on first solve) */
   this.snap_n = sb(); this.snap_s = sb();   /* strain snapshot for load-step cutback */
   this.snapEpp_n = sb(); this.snapEpp_s = sb(); /* committed-history baseline for macro-Newton */
   this.j2ParamsBuf = d.createBuffer({ size: 64, usage: BU.UNIFORM | BU.COPY_DST });
@@ -689,14 +690,33 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
     lastRel = Math.sqrt(rr) / ebNorm;
     if (lastRel < this.newtonTol) { converged = true; break; }
 
-    /* CG: solve A_nl * deps = R (= es.r), x0 = 0; then eps -= deps */
-    var encZ = d.createCommandEncoder();
-    es._fillPair(encZ, { n: this.deps_n, s: this.deps_s }, [0,0,0,0,0,0]);
-    es._copyPair(encZ, es.r, es.p);
-    d.queue.submit([encZ.finish()]);
-    var rrcg = await es._dotPair(es.r, es.r);
-    var bnorm = Math.sqrt(rrcg) + 1e-30;
+    /* CG: solve A_nl * deps = R (= es.r); then eps -= deps.
+       Warm-start the FIRST Newton iter from the previous step's first-iter
+       increment (near-constant per step in the elastic regime); cold-start
+       (x0=0) later iters, where the increment shrinks toward zero and a stale
+       guess would only add work. Result-preserving: only x0 changes, and the
+       relative-tolerance denominator stays ||R|| (the RHS norm). */
     var dpair = { n: this.deps_n, s: this.deps_s };
+    var rrcg, bnorm;
+    if (n === 0) {
+      bnorm = Math.sqrt(await es._dotPair(es.r, es.r)) + 1e-30;   /* ||R|| from the RHS, before warm subtract */
+      var encW = d.createCommandEncoder();
+      es._copyPair(encW, { n: this.warmDeps_n, s: this.warmDeps_s }, dpair);   /* x0 = warmDeps */
+      d.queue.submit([encW.finish()]);
+      var encAx = d.createCommandEncoder(); this._applyA_nl(encAx, dpair, es.Ap); d.queue.submit([encAx.finish()]);
+      var encR0 = d.createCommandEncoder();
+      es._axpyPair(encR0, -1.0, es.Ap, es.r);   /* r0 = R - A*x0 */
+      es._copyPair(encR0, es.r, es.p);           /* p0 = r0 */
+      d.queue.submit([encR0.finish()]);
+      rrcg = await es._dotPair(es.r, es.r);      /* ||r0||^2 */
+    } else {
+      var encZ = d.createCommandEncoder();
+      es._fillPair(encZ, dpair, [0,0,0,0,0,0]);  /* x0 = 0 */
+      es._copyPair(encZ, es.r, es.p);            /* p0 = r0 = R */
+      d.queue.submit([encZ.finish()]);
+      rrcg = await es._dotPair(es.r, es.r);      /* ||R||^2 */
+      bnorm = Math.sqrt(rrcg) + 1e-30;
+    }
 
     for (var k = 0; k < this.cgMax; k++) {
       totalCg += 1;
@@ -713,6 +733,11 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
       rrcg = rrNew;
     }
     var encU = d.createCommandEncoder(); es._axpyPair(encU, -1.0, dpair, es.eps); d.queue.submit([encU.finish()]);
+    if (n === 0) {   /* retain the first-iter increment to warm-start the next step's first solve */
+      var encSv = d.createCommandEncoder();
+      es._copyPair(encSv, dpair, { n: this.warmDeps_n, s: this.warmDeps_s });
+      d.queue.submit([encSv.finish()]);
+    }
   }
 
   /* final stress + commit history */
