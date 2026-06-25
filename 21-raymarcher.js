@@ -313,23 +313,28 @@ function buildLabRaymarcherFS(stepCount) {
        (colormap vs iridescent) is selected in main() based on mode. */
     'float implicit(vec3 p) {',
     '  vec3 p_eval = p;',
+    '  float tBox = -1.0e6;',
     '  if (uViewMode > 0.5 && uViewMode < 2.5) {',
     '    float cAmp = uDeformAmp * uDeformSign;',
     '    float mAmp = ((uMacroAmp >= 0.0) ? uMacroAmp : uDeformAmp) * uDeformSign;',
     '    vec3 p_unstretched = p / (vec3(1.0) + mAmp * uEpsBar);',
     '    p_eval = p_unstretched - cAmp * sampleDisp(p_unstretched);',
+    '    if (uTile <= 1.0) {',
+    '      vec3 qb = abs(p_eval) - vec3(H);',                                 // trim to home cell [-H,H]^3
+    '      tBox = length(max(qb, vec3(0.0))) + min(max(qb.x, max(qb.y, qb.z)), 0.0);',
+    '    }',
     '  }',
     '  if (uTopoMode > 2.5) {',
     /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
     '    float a = sampleF(p_eval) - isoLevel;',
     '    float b = sampleF(p_eval + uPipeOffset) - isoLevel;',
-    '    return max(abs(a), abs(b)) - uPipeR;',
+    '    return max(max(abs(a), abs(b)) - uPipeR, tBox);',
     '  }',
     '  float raw = sampleF(p_eval);',
     '  float adj = raw - isoLevel;',
-    '  if (uTopoMode < 0.5) return abs(adj) - thickness;',                      /* sheet */
-    '  if (uTopoMode < 1.5) return uHalfInvert < 0.5 ? -adj : adj;',            /* half */
-    '  return -(abs(adj) - thickness);',                                        /* anti-sheet */
+    '  if (uTopoMode < 0.5) return max(abs(adj) - thickness, tBox);',                      /* sheet */
+    '  if (uTopoMode < 1.5) return max((uHalfInvert < 0.5 ? -adj : adj), tBox);',            /* half */
+    '  return max(-(abs(adj) - thickness), tBox);',                                        /* anti-sheet */
     '}',
 
     /* boxNormal — used for near-cap shading when the ray enters
