@@ -860,7 +860,11 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var relax = opts.macroRelax != null ? opts.macroRelax : 0.85;
   var es = this.es, d = es.device;
 
+  var _nlNow = (typeof performance !== 'undefined') ? function(){ return performance.now(); } : function(){ return Date.now(); };
+  var _nlSetup0 = _nlNow();
   var C = await this._ensureElasticMacro();
+  var _nlRun0 = _nlNow(), _nlPrev = _nlRun0, _nlCgTotal = 0;
+  console.log('[crush-timing] N=' + this.N + ' axis=' + axis + '  elastic-macro setup ' + (_nlRun0 - _nlSetup0).toFixed(0) + ' ms');
   var freeIdx = []; for (var i = 0; i < 6; i++) if (i !== axis) freeIdx.push(i);
   var nf = freeIdx.length;
   var Kff = new Float64Array(nf * nf);
@@ -953,6 +957,11 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     curve.push({ eps: eAxis, sigma: res.sigma_bar[axis] });
     ebFreePrev = freeIdx.map(function (fi) { return eb[fi]; });
     eAxisPrev = eAxis;
+    var _nlTstep = _nlNow(); _nlCgTotal += res.totalCgIters;
+    console.log('[crush-timing] step ' + (step + 1) + '  t=' + (_nlTstep - _nlPrev).toFixed(0) + 'ms' +
+                '  cg=' + res.totalCgIters + '  newt=' + res.newtonIters + '  macro=' + (mit + 1) + '  cut=' + cut +
+                '  eps=' + (eAxis * 100).toFixed(2) + '%  sig=' + res.sigma_bar[axis].toFixed(1) + 'MPa  relRes=' + res.relRes.toExponential(2));
+    _nlPrev = _nlTstep;
     if (verbose) console.log('[crush] step ' + (step + 1) + '/' + nSteps + '  eps=' + eAxis.toFixed(5) + '  sig=' + res.sigma_bar[axis].toFixed(1) +
                              ' MPa  macro=' + (mit + 1) + '  newt=' + res.newtonIters + '  cg=' + res.totalCgIters + '  relRes=' + res.relRes.toExponential(2));
     step++;
@@ -967,6 +976,8 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     if (kneeStep < 0 && nlOffsetYieldEx(curve, E0, 0.002).yielded) kneeStep = step;
     if (kneeStep >= 0 && step >= kneeStep + 3) break;
   }
+  console.log('[crush-timing] DONE N=' + this.N + '  steps=' + step + '  total=' + (_nlNow() - _nlRun0).toFixed(0) + 'ms  (' +
+              ((_nlNow() - _nlRun0) / Math.max(1, step)).toFixed(0) + ' ms/step avg)  cg(sum of accepted-solve iters)=' + _nlCgTotal);
   var yEx = nlOffsetYieldEx(curve, E0, 0.002);
   return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: yEx.sigma, yielded: yEx.yielded, E0: E0, N: this.N, epsCap: capEps, eAxisMax: eAxis, alphaSteps: alphaSteps, alphaMax: alphaMax };
 };
