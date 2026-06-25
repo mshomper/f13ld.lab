@@ -52,13 +52,13 @@
    row0: mu_s, lam_s, K_s, sigY0
    row1: mu_v, lam_v, K_v, useVoce (0/1 as f32)
    row2: H,    sigSat, delta, Hlin
-   row3: total (u32), pad, pad, pad */
+   row3: total (u32), theta_min (f32), pad, pad */
 var J2_PARAMS_WGSL = [
 'struct J2Params {',
 '  mu_s: f32, lam_s: f32, K_s: f32, sigY0: f32,',
 '  mu_v: f32, lam_v: f32, K_v: f32, useVoce: f32,',
 '  H: f32, sigSat: f32, delta: f32, Hlin: f32,',
-'  total: u32, _p0: u32, _p1: u32, _p2: u32,',
+'  total: u32, theta_min: f32, _p1: u32, _p2: u32,',
 '}',
 ''
 ].join('\n');
@@ -173,7 +173,7 @@ var RETURN_MAP_FULL_WGSL = J2_PARAMS_WGSL + J2_FLOW_WGSL + [
 '  sig_n[i] = vec4<f32>(s00 - twomudg*n00, s11 - twomudg*n11, s22 - twomudg*n22, 0.0);',
 '  sig_s[i] = vec4<f32>(s23 - twomudg*n23, s13 - twomudg*n13, s12 - twomudg*n12, 0.0);',
 '',
-'  let theta    = 1.0 - twomudg*inv;',
+'  let theta    = max(1.0 - twomudg*inv, P.theta_min);',
 '  let thetabar = 1.0/(1.0 + Hp/(3.0*P.mu_s)) - (1.0 - theta);',
 '  tan_n[i] = vec4<f32>(n00, n11, n22, theta);',
 '  tan_s[i] = vec4<f32>(n23, n13, n12, thetabar);',
@@ -535,6 +535,13 @@ NonlinearSolverFull.prototype.setMaterial = function (m) {
   f[4]=mu_v; f[5]=lam_v; f[6]=K_v; f[7]=useVoce;
   f[8]=m.H; f[9]=m.voce?m.voce.sigSat_MPa:0; f[10]=m.voce?m.voce.delta:0; f[11]=m.voce?(m.voce.Hlin_MPa||0):0;
   u[12]=this.N3;
+  /* Consistent-tangent floor (Newton Jacobian ONLY — never enters the residual,
+     so the converged stress and sigma_y are unchanged). Bounds the plastic-front
+     stiffness contrast that caps the CG. Override live from the console:
+         window.NL_THETA_MIN = 0.1   (then re-run a solve).  0 = exact tangent. */
+  var thMin = (typeof window !== 'undefined' && typeof window.NL_THETA_MIN === 'number') ? window.NL_THETA_MIN : 0;
+  this._thetaMin = thMin;
+  f[13] = thMin;
   this.device.queue.writeBuffer(this.j2ParamsBuf, 0, buf);
 };
 
@@ -889,7 +896,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var _nlSetup0 = _nlNow();
   var C = await this._ensureElasticMacro();
   var _nlRun0 = _nlNow(), _nlPrev = _nlRun0, _nlCgTotal = 0;
-  console.log('[crush-timing] N=' + this.N + ' axis=' + axis + '  elastic-macro setup ' + (_nlRun0 - _nlSetup0).toFixed(0) + ' ms');
+  console.log('[crush-timing] N=' + this.N + ' axis=' + axis + '  thetaMin=' + (this._thetaMin != null ? this._thetaMin : 0) + '  elastic-macro setup ' + (_nlRun0 - _nlSetup0).toFixed(0) + ' ms');
   var freeIdx = []; for (var i = 0; i < 6; i++) if (i !== axis) freeIdx.push(i);
   var nf = freeIdx.length;
   var Kff = new Float64Array(nf * nf);
