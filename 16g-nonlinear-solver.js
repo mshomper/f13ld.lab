@@ -494,6 +494,8 @@ var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-f
 var NL_NEWTON_MAX    = 12;   /* cap failed-attempt cost; successful solves use ~3 */
 var NL_CG_TOL        = 1e-4;   /* inner ~10x tighter than newtonTol(1e-3); required for Newton to converge (matches 16f) */
 var NL_CG_MAX        = 1000;
+var NL_ETA_MAX       = 0.1;    /* inexact-Newton: loosest inner CG tol, used on early (far-from-converged) Newton iters */
+var NL_ETA_GAMMA     = 0.1;    /* forcing term: inner tol = clamp(GAMMA * newtonRel, NL_CG_TOL, NL_ETA_MAX) */
 
 function NonlinearSolverFull(N, fftPlan) {
   this.N = N;
@@ -690,6 +692,14 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
     lastRel = Math.sqrt(rr) / ebNorm;
     if (lastRel < this.newtonTol) { converged = true; break; }
 
+    /* Inexact-Newton forcing term (Eisenstat-Walker style): solve the inner CG
+       only as tightly as the current Newton progress warrants — loose when far
+       from convergence, tightening to the validated NL_CG_TOL floor as Newton
+       closes in. This kills the cg-cap grind on early iters; the decisive
+       near-convergence iters still solve to today's 1e-4, so sigma_y is
+       unchanged (it is governed by the outer newtonTol). */
+    var eta = Math.min(NL_ETA_MAX, Math.max(this.cgTol, NL_ETA_GAMMA * lastRel));
+
     /* CG: solve A_nl * deps = R (= es.r); then eps -= deps.
        Warm-start the FIRST Newton iter from the previous step's first-iter
        increment (near-constant per step in the elastic regime); cold-start
@@ -727,7 +737,7 @@ NonlinearSolverFull.prototype.newtonSolve = async function (eps_bar) {
       var encE = d.createCommandEncoder(); es._axpyPair(encE, al, es.p, dpair); d.queue.submit([encE.finish()]);
       var encRr = d.createCommandEncoder(); es._axpyPair(encRr, -al, es.Ap, es.r); d.queue.submit([encRr.finish()]);
       var rrNew = await es._dotPair(es.r, es.r);
-      if (Math.sqrt(rrNew) / bnorm < this.cgTol) break;
+      if (Math.sqrt(rrNew) / bnorm < eta) break;
       var beta = rrNew / rrcg;
       var encP = d.createCommandEncoder(); es._xbpyPair(encP, beta, es.r, es.p); d.queue.submit([encP.finish()]);
       rrcg = rrNew;
