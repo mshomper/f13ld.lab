@@ -221,6 +221,13 @@ function buckleMagCap(fs){
    load events, run progress, and amp-slider changes.
    ---------------------------------------------------------- */
 function renderDesignGrid(){
+  /* Import-time buckling-grid prediction — idempotent annotate pass.  This is
+     the universal choke point (seed, restore, paste, drop all render here), so
+     every design is badged once regardless of script load order (00-mock-data
+     restores before 16c is defined, so this cannot live there). */
+  if (typeof annotateBucklingPredict === 'function' && LAB_STATE && LAB_STATE.designs){
+    for (var _bpI = 0; _bpI < LAB_STATE.designs.length; _bpI++) annotateBucklingPredict(LAB_STATE.designs[_bpI]);
+  }
   /* Phase 5 polish — persist the current design set (definitions only)
      so an imported comparison survives a reload.  renderDesignGrid is the
      common sink for every state mutation (add / remove / baseline / load). */
@@ -424,6 +431,16 @@ function renderDesignGrid(){
     if (LAB_STATE.runHasCompleted && d.results && d.results._runSource){
       var rsClass = d.results._error ? 'rs-err' : (d.results._runSource.indexOf('stub') === 0 ? 'rs-stub' : 'rs-real');
       sourceText += ' · <span class="' + rsClass + '">' + d.results._runSource + '</span>';
+    }
+    var _bp = d.buckle_predict;
+    if (_bp){
+      var _bpCls = _bp.prone ? 'prone' : 'ok';
+      var _bpTxt = 'N' + _bp.N + (_bp.prone ? ' \u00b7 PRONE' : ' \u00b7 OK');
+      var _bpTip = 'Predicted buckling grid N=' + _bp.N + ' \u2014 median wall ' + _bp.median +
+                   ' vox @ probe N=' + _bp.probeN + (_bp.prone
+                     ? ' \u2014 thin, buckling-prone, needs the fine grid'
+                     : ' \u2014 stocky, resolves at the coarse grid');
+      sourceText += ' <span class="dc-predict-pill ' + _bpCls + '" title="' + _bpTip + '">' + _bpTxt + '</span>';
     }
 
     html += '<div class="design-col">' +

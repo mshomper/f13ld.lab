@@ -1380,6 +1380,142 @@ function homogenizeBucklingCPU(recipe, N, opts) {
 
 
 /* ════════════════════════════════════════════════════════════
+   predictBucklingN — import-time, NO-SOLVE buckling-grid predictor.
+
+   Measures each design's local wall/strut gauge the way bone
+   morphometry measures trabecular thickness (Tb.Th): rasterize once
+   at a cheap probe grid, then peel material voxels layer by layer
+   (6-neighbour periodic erosion).  A voxel's vanish-layer = its depth
+   from the nearest surface.  The MEDIAN depth over material voxels is
+   the gauge (handoff §4: p10 is surface noise — use median).
+
+     N_needed = probeN × (PEEL_CAP / median),  clamped to {32, 64}.
+
+   Thin sheets/struts (median ≈ 4) → 64 and flagged buckling-prone;
+   stocky solids (median ≈ 10) → 32.  Erosion is capped at PEEL_CAP
+   layers so worst-case cost is PEEL_CAP × N³ — sub-millisecond at
+   probe N=32.  Pure annotation: drives the card badge and (later)
+   per-design N routing; runs no eigensolve.
+   ════════════════════════════════════════════════════════════ */
+var BK_PREDICT_PROBE_N    = 32;   /* §7: reuse the buckling base grid, not the N=128 elastic import raster */
+var BK_PREDICT_PEEL_CAP   = 8;    /* max erosion layers — bounds cost AND is the target voxels-per-wall */
+var BK_PREDICT_ESCALATE_T = 8;    /* median erosion depth below this → escalate to N=64.  Drop to 6 = riskier (fewer designs escalate) */
+
+function predictBucklingN(recipe, probeN) {
+  if (!recipe || !recipe.family) return null;
+  var family = recipe.family;
+  if (typeof KERNELS === 'undefined' || !KERNELS[family] ||
+      typeof buildVoxels !== 'function' || typeof resolveBuildArgs !== 'function') return null;
+
+  var N = probeN || BK_PREDICT_PROBE_N;
+
+  var solid;
+  try {
+    var params = KERNELS[family].parseRecipe(recipe);
+    var args   = resolveBuildArgs(recipe);
+    solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+  } catch (e) { return null; }
+  if (!solid) return null;
+
+  var medDepth = bk_medianErosionDepth(solid, N, BK_PREDICT_PEEL_CAP);
+  if (medDepth == null) return null;   /* empty solid — nothing to badge */
+
+  /* Wall thickness ≈ 2 × one-sided erosion depth (depth reaches the nearest
+     surface; a wall spans both sides).  Validated against synthetic Schwarz P:
+     6-neighbour median depth 5/2 (stocky/thin) → thickness 10/4, matching the
+     handoff §4 calibration exactly.  This is the unit the §5a routing formula
+     `N_needed = probeN × (target / thickness)` expects. */
+  var medThick = 2 * medDepth;
+  var prone = medThick < BK_PREDICT_ESCALATE_T;
+  var N3 = N * N * N, count = 0; for (var v = 0; v < N3; v++) count += solid[v] ? 1 : 0;
+  return {
+    N: prone ? 64 : 32,          /* clamp {32, 64}; cap stays 64 until warm-start speedups land */
+    prone: prone,
+    median: medThick,            /* median wall thickness, voxels @ probe grid (= 2×erosion depth) */
+    median_depth: medDepth,      /* raw one-sided erosion depth (diagnostic) */
+    probeN: N,
+    cap: BK_PREDICT_PEEL_CAP,
+    rho: count / N3              /* incidental volume fraction at the probe grid */
+  };
+}
+
+/* bk_medianErosionDepth — 6-neighbour PERIODIC erosion-depth map of a binary
+   solid, median over material voxels, capped at `cap` layers.  A voxel's
+   depth = the peel layer at which it vanishes (1 = surface).  Periodic
+   neighbours (matching the q=0 cell-periodic model and bk_modeLocalization)
+   so a feature touching the cell boundary isn't mis-read as surface.
+   Returns the median depth, or null if the solid is empty.  Cost ≤ cap·N³. */
+function bk_medianErosionDepth(solid, N, cap) {
+  var NN = N * N, N3 = N * NN;
+  var CAP = cap || BK_PREDICT_PEEL_CAP;
+  var depth = new Int16Array(N3);   /* 0 = unassigned/void */
+
+  /* layer 1 — surface voxels: any 6-neighbour (periodic) is void */
+  for (var i = 0; i < N; i++) {
+    var ip = ((i + 1) % N) * NN, im = ((i - 1 + N) % N) * NN, i0 = i * NN;
+    for (var j = 0; j < N; j++) {
+      var jp = ((j + 1) % N) * N, jm = ((j - 1 + N) % N) * N, j0 = j * N;
+      for (var k = 0; k < N; k++) {
+        var idx = i0 + j0 + k;
+        if (!solid[idx]) continue;
+        var kp = (k + 1) % N, km = (k - 1 + N) % N;
+        if (!solid[ip + j0 + k] || !solid[im + j0 + k] ||
+            !solid[i0 + jp + k] || !solid[i0 + jm + k] ||
+            !solid[i0 + j0 + kp] || !solid[i0 + j0 + km]) depth[idx] = 1;
+      }
+    }
+  }
+
+  /* grow inward.  Guarding on `depth[nbr] === cur` (the PRIOR layer only)
+     makes a single in-place sweep correct: voxels assigned cur+1 this sweep
+     never match cur, so they can't cascade within the same sweep. */
+  for (var cur = 1; cur < CAP; cur++) {
+    var changed = false;
+    for (var a = 0; a < N; a++) {
+      var ap = ((a + 1) % N) * NN, am = ((a - 1 + N) % N) * NN, a0 = a * NN;
+      for (var b = 0; b < N; b++) {
+        var bp = ((b + 1) % N) * N, bm = ((b - 1 + N) % N) * N, b0 = b * N;
+        for (var c = 0; c < N; c++) {
+          var ci = a0 + b0 + c;
+          if (!solid[ci] || depth[ci] !== 0) continue;
+          var cp = (c + 1) % N, cm = (c - 1 + N) % N;
+          if (depth[ap + b0 + c] === cur || depth[am + b0 + c] === cur ||
+              depth[a0 + bp + c] === cur || depth[a0 + bm + c] === cur ||
+              depth[a0 + b0 + cp] === cur || depth[a0 + b0 + cm] === cur) {
+            depth[ci] = cur + 1; changed = true;
+          }
+        }
+      }
+    }
+    if (!changed) break;
+  }
+
+  /* histogram median over material voxels; interior never reached within CAP → cap */
+  var hist = new Int32Array(CAP + 1), count = 0;
+  for (var v = 0; v < N3; v++) {
+    if (!solid[v]) continue;
+    hist[depth[v] || CAP]++; count++;
+  }
+  if (count === 0) return null;
+
+  var half = count / 2, acc = 0;
+  for (var dd = 1; dd <= CAP; dd++) { acc += hist[dd]; if (acc >= half) return dd; }
+  return CAP;
+}
+
+/* annotateBucklingPredict — attach the prediction to a design object once
+   (idempotent: a computed result, INCLUDING null, is cached so it never
+   recomputes on re-render).  SVG-mock / recipe-less designs cache null and
+   render no badge.  Kept off d.results and off localStorage. */
+function annotateBucklingPredict(design) {
+  if (!design || design.buckle_predict !== undefined) return;
+  if (!design.recipe || !design.recipe.family) { design.buckle_predict = null; return; }
+  try { design.buckle_predict = predictBucklingN(design.recipe, BK_PREDICT_PROBE_N); }
+  catch (e) { design.buckle_predict = null; }
+}
+
+
+/* ════════════════════════════════════════════════════════════
    runBucklingCPUTest — Push 2b validation.
 
      B1. extractPrestressCPU on a UNIFORM solid: u′ ≈ 0 and σ⁰ is

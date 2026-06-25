@@ -228,6 +228,21 @@ html, body {
 .vp-buckle-chip.local  { border-left-color:#ef4444; }
 .vp-buckle-chip.local .lbl { color:#ef4444; }
 
+/* Import-time buckling-grid prediction badge — rides the card's source/
+   metadata line (40-design-grid.js).  Same color grammar as the post-solve
+   m̄ chip above: green = resolves at the coarse grid, red = thin & buckling-
+   prone, needs the fine grid.  Pre-solve spec tag, not a control. */
+.dc-predict-pill {
+  display:inline-block; vertical-align:middle; margin-left:6px;
+  font-family:'IBM Plex Mono','JetBrains Mono',monospace;
+  font-size:9px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase;
+  padding:1px 5px; border-radius:3px;
+  border-left:2px solid var(--ink-dim);
+  background:rgba(255,255,255,0.03); color:var(--ink-mute);
+}
+.dc-predict-pill.ok    { border-left-color:#1D9E75; color:#1D9E75; }
+.dc-predict-pill.prone { border-left-color:#ef4444; color:#ef4444; }
+
 .vp-deform-control {
   position:absolute; bottom:10px; right:10px;
   background:rgba(6,8,15,0.92); border:0.5px solid var(--line);
