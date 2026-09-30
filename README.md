@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.8.1 · alpha · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.8.2 · alpha · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,14 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.8.2
+
+**PI-TPMS and shell parity with F13LD.tpms.**
+- **Normalization now survives import.** `pi_normalize` and `shell_normalize` from F13LD.tpms / F13LD.mesh recipes were dropped on import, so imported PI-TPMS and shell designs were analyzed un-normalized (your gyroid PI-TPMS: 8.9 % instead of 9.84 % volume fraction — Lab now matches the tpms app's 9.84 % exactly at 48³). Recipes without the flags stay un-normalized, so older results do not change.
+- **The viewer draws what the solver analyzes:** normalized PI-TPMS pipes (angle-corrected distance to the surface intersection, same constants as F13LD.tpms) and normalized shell walls.
+
+**Connectivity selector** (replaces *Prune islands*): *All networks · remove islands* (default — keeps every network that runs continuously through the tiled structure, e.g. both sides of an interwoven PI-TPMS), *Largest network only* (one side of the weave), or *Keep everything*. Buckling always removes floating islands (free bodies) and solves interwoven networks separately: they share the applied strain, so the weakest network sets the critical strain and their stiffnesses add.
 
 ## What's new in v0.8.1
 

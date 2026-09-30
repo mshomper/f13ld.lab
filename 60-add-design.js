@@ -349,6 +349,15 @@ function normalizeDesignJson(json, filename){
     /* Phase shift — snake_case → camelCase */
     var ps = extG.phase_shift != null ? extG.phase_shift : extG.phaseShift;
     if (ps != null) labG.phaseShift = ps;
+    /* v0.8.2 — gradient-normalization flags from F13LD.tpms / F13LD.mesh
+       (pi_normalize: cylindrical PI-TPMS pipes, radius in distance units;
+       shell_normalize: constant-thickness walls).  Were dropped here, so every
+       imported recipe ran un-normalized (≈10 % less material on a gyroid
+       PI-TPMS).  Only an explicit true/false is carried; null or absent stays
+       absent, and TpmsKernel.parseRecipe then defaults to OFF (older recipes
+       keep their previous results). */
+    if (extG.pi_normalize === true || extG.pi_normalize === false) labG.pi_normalize = extG.pi_normalize;
+    if (extG.shell_normalize === true || extG.shell_normalize === false) labG.shell_normalize = extG.shell_normalize;
     /* half_invert — already matches */
     if (extG.half_invert != null) labG.half_invert = extG.half_invert;
     /* center / half_width — used by NoiseKernel.parseRecipe via surface block,

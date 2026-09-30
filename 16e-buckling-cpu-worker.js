@@ -85,7 +85,7 @@ var BUCKLE_WORKER_FILES = [
 /* Bump on any solver-file change so the worker's importScripts refetches
    instead of serving a stale cached copy (the blob worker has its own cache,
    separate from the main page). */
-var BUCKLE_SOLVER_VERSION = 'fe-h8i-1';
+var BUCKLE_SOLVER_VERSION = 'fe-h8i-2';
 
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes
@@ -98,7 +98,7 @@ var BUCKLE_WORKER_ONMESSAGE =
   '  if (_feRelease){ clearTimeout(_feRelease); _feRelease = null; }\n' +
   '  try {\n' +
   '    var fe = (opts.method || "fe") === "fe";\n' +
-  '    var one = fe ? homogenizeBucklingFE(job.recipe, N, { axes: opts.axes })\n' +
+  '    var one = fe ? homogenizeBucklingFE(job.recipe, N, { axes: opts.axes, connectivity: opts.connectivity })\n' +
   '                 : homogenizeBucklingCPU(job.recipe, N, opts);\n' +
   '    /* free the FE mesh / multigrid / prestress cache if no further axis of this design arrives soon */\n' +
   '    if (fe) _feRelease = setTimeout(function(){ _feBuckleCache = null; _feRelease = null; }, 3000);\n' +

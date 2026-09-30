@@ -748,12 +748,55 @@ function homogenizeBucklingFE(recipe, N, opts) {
     return { lambda_cr: Infinity, pcr: Infinity, critAxis: null, perAxis: pa, loading: 'uniaxial', mode: null, N: N, rho: rho, skip_reason: reason, method: 'fe-h8i' };
   }
   if (!before) return stub('empty at N=' + N, 0);
-  if (typeof pruneToLargestComponent === 'function') solid = pruneToLargestComponent(solid, N);
+  /* Connectivity (v0.8.2): 'largest' keeps one network; otherwise every
+     network that spans the cell is kept.  Floating islands are always
+     removed here, even under 'off' — an island is a free rigid body. */
+  var connMode = opts.connectivity || 'networks';
+  if (connMode === 'largest' && typeof pruneToLargestComponent === 'function') solid = pruneToLargestComponent(solid, N);
+  else if (typeof pruneToNetworks === 'function') solid = pruneToNetworks(solid, N);
+  else if (typeof pruneToLargestComponent === 'function') solid = pruneToLargestComponent(solid, N);
   var after = 0; for (var v2 = 0; v2 < N3; v2++) if (solid[v2]) after++;
   var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
-  var key = N + '|' + JSON.stringify(recipe);
+  var key = N + '|' + connMode + '|' + JSON.stringify(recipe);
+  var matS = { Es_MPa: mat.Es_MPa, nu: mat.nu };
+  /* Interwoven networks share no material, so each has its own rigid-body
+     modes: solve each separately.  They carry the same applied strain in
+     parallel, so the critical strain is the weakest network's and the axial
+     stiffness is the sum (each E_a is already averaged over the full cell). */
+  var pc = (typeof periodicComponents === 'function') ? periodicComponents(solid, N) : { count: 1 };
   var res;
-  try { res = bucklingFromSolidFE(solid, { Es_MPa: mat.Es_MPa, nu: mat.nu }, N, opts, key); }
+  try {
+    if (pc.count <= 1) res = bucklingFromSolidFE(solid, matS, N, opts, key);
+    else {
+      var parts = [];
+      for (var ci = 1; ci <= pc.count; ci++) {
+        var sc = new Float32Array(N3);
+        for (var vi = 0; vi < N3; vi++) if (pc.label[vi] === ci) sc[vi] = 1;
+        parts.push(bucklingFromSolidFE(sc, matS, N, opts, key + '|net' + ci));
+      }
+      res = parts[0];
+      var names = [];
+      for (var pa = 0; pa < res.perAxis.length; pa++) {
+        var lam = Infinity, Esum = 0, arg = 0, conv = true;
+        for (var pk = 0; pk < parts.length; pk++) {
+          var q = parts[pk].perAxis[pa];
+          Esum += isFinite(q.Eaxis) ? q.Eaxis : 0;
+          if (q.eigConverged === false) conv = false;
+          if (q.lambda < lam) { lam = q.lambda; arg = pk; }
+        }
+        var qa = parts[arg].perAxis[pa];
+        res.perAxis[pa] = { axis: qa.axis, lambda: lam, sBar: -Esum, Eaxis: Esum, cgIters: qa.cgIters, eigIters: qa.eigIters,
+                            eigConverged: conv, mode: qa.mode, mWave: qa.mWave, network: arg + 1 };
+      }
+      var lc = Infinity, ca = null, cm = null, cs = 0, allC = true;
+      for (var pb = 0; pb < res.perAxis.length; pb++) {
+        var r2 = res.perAxis[pb]; if (r2.eigConverged === false) allC = false;
+        if (r2.lambda < lc) { lc = r2.lambda; ca = r2.axis; cm = r2.mode; cs = r2.sBar; }
+      }
+      res = { lambda_cr: lc, pcr: isFinite(lc) ? lc * Math.abs(cs) : Infinity, critAxis: ca, loading: 'uniaxial', perAxis: res.perAxis,
+              mode: cm, N: N, eigConverged: allC, method: res.method, prestress: res.prestress, networks: pc.count };
+    }
+  }
   catch (e) { return stub((e && e.message) || String(e), after / N3); }
   res.rho = after / N3;
   res.prunedFrac = before ? 1 - after / before : 0;

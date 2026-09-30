@@ -57,7 +57,9 @@ function buildLabRaymarcherFS(stepCount) {
     'uniform float thickness; uniform float isoLevel; uniform float uTopoMode;',
     'uniform float uHalfInvert; uniform float uPipeR;',
     'uniform vec3  uPipeOffset;',
+    'uniform float uNormMode;',   /* v0.8.2: 0 none · 1 shell_normalize · 2 pi_normalize */
     'uniform float uLipschitz;',
+    'uniform float uTexNG;',      /* geometry-texture resolution (for gradF step) */
     'uniform highp sampler3D uField;',
     'uniform float uFieldMin; uniform float uFieldMax; uniform float uTile;',
     'uniform float uNrmStep;',
@@ -115,6 +117,14 @@ function buildLabRaymarcherFS(stepCount) {
     '  vec3 uvw = uTile > 1.0 ? fract(p/(2.0*H)*uTile + 0.5) : fract(p/(2.0*H) + 0.5);',
     '  float t = texture(uField, uvw).r;',
     '  return t * (uFieldMax - uFieldMin) + uFieldMin;',
+    '}',
+    /* v0.8.2 — field gradient by central differences on the baked texture
+       (≈0.75 texel), used by the normalized PI-TPMS / shell distances */
+    'vec3 gradF(vec3 p) {',
+    '  float e = 0.75 * (2.0 * H) / max(uTexNG, 8.0);',
+    '  return vec3(sampleF(p + vec3(e,0.0,0.0)) - sampleF(p - vec3(e,0.0,0.0)),',
+    '              sampleF(p + vec3(0.0,e,0.0)) - sampleF(p - vec3(0.0,e,0.0)),',
+    '              sampleF(p + vec3(0.0,0.0,e)) - sampleF(p - vec3(0.0,0.0,e))) / (2.0 * e);',
     '}',
 
     /* 4b — Sigg-Hadwiger 8-tap cubic B-spline kernel helpers.
@@ -325,13 +335,25 @@ function buildLabRaymarcherFS(stepCount) {
     '    }',
     '  }',
     '  if (uTopoMode > 2.5) {',
-    /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid */
+    /* mode 3: pi-tpms — max(|a|, |b|) < pipeR is solid; normalized: distance to
+       the intersection curve of the two surfaces (F13LD.tpms / mesh formula,
+       angle-corrected, |grad| floor 0.08, cos clamp 0.95) — round pipes of radius pipeR */
     '    float a = sampleF(p_eval) - isoLevel;',
     '    float b = sampleF(p_eval + uPipeOffset) - isoLevel;',
+    '    if (uNormMode > 1.5) {',
+    '      vec3 gA = gradF(p_eval), gB = gradF(p_eval + uPipeOffset);',
+    '      float mA = max(length(gA), 0.08), mB = max(length(gB), 0.08);',
+    '      float dA = a / mA, dB = b / mB;',
+    '      float ca = clamp(dot(gA, gB) / (mA * mB), -0.95, 0.95);',
+    '      float dC = sqrt(max(dA*dA - 2.0*ca*dA*dB + dB*dB, 0.0) / (1.0 - ca*ca));',
+    '      return max(dC - uPipeR, tBox);',
+    '    }',
     '    return max(max(abs(a), abs(b)) - uPipeR, tBox);',
     '  }',
     '  float raw = sampleF(p_eval);',
     '  float adj = raw - isoLevel;',
+    /* shell_normalize: wall thickness in distance units (|φ−c| / |∇φ|) */
+    '  if (uTopoMode < 0.5 && uNormMode > 0.5 && uNormMode < 1.5) return max(abs(adj) / max(length(gradF(p_eval)), 0.08) - thickness, tBox);',
     '  if (uTopoMode < 0.5) return max(abs(adj) - thickness, tBox);',                      /* sheet */
     '  if (uTopoMode < 1.5) return max((uHalfInvert < 0.5 ? -adj : adj), tBox);',            /* half */
     '  return max(-(abs(adj) - thickness), tBox);',                                        /* anti-sheet */
@@ -638,7 +660,7 @@ function LabRaymarcher() {
   /* Default uniform values; overwritten by setRecipe → _refreshTopologyUniforms */
   this._u = {
     thickness: 0.3, isoLevel: 0.0, topoMode: 0, halfInvert: 0,
-    pipeR: 0.1, pipeOffset: [0, 0, 0],
+    pipeR: 0.1, pipeOffset: [0, 0, 0], normMode: 0, texNG: 48,
     fieldMin: -1, fieldMax: 1, lipschitz: 1.0, tile: 1.0,
     nrmStep: 0.004, zoom: 20.0,   /* ~15% margin from viewport edges; F13LD.grain default is 16 (closer) */
     /* A.2 — deformed/stress view */
@@ -737,7 +759,7 @@ LabRaymarcher.prototype._compileShader = function() {
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   /* Cache uniform locations */
   var L = {};
-  ['res','rot','zoom','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset',
+  ['res','rot','zoom','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset','uNormMode','uTexNG',
    'uLipschitz','uField','uFieldMin','uFieldMax','uTile','uNrmStep',
    /* A.2 — Deformed/Stress view uniforms */
    'uViewMode','uDispUploaded','uDeformAmp','uDisp','uDispOffset','uDispScale',
@@ -776,6 +798,7 @@ function labModeToUniforms(family, params, args) {
     u.isoLevel  = args.offset || 0;
     u.pipeR     = args.pipeR  || 0.1;
     u.pipeOffset = [(ps.x||0) * TWO_PI, (ps.y||0) * TWO_PI, (ps.z||0) * TWO_PI];
+    u.normMode  = (params && params.piNorm) ? 2 : 0;      /* v0.8.2 — match buildVoxels */
     return u;
   }
 
@@ -783,6 +806,7 @@ function labModeToUniforms(family, params, args) {
     u.topoMode  = 0;
     u.isoLevel  = args.offset || 0;
     u.thickness = args.wt || 0.3;
+    u.normMode  = (params && params.shellNorm) ? 1 : 0;   /* v0.8.2 — match buildVoxels */
     return u;
   }
 
@@ -871,6 +895,8 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
   this._u.halfInvert = topoU.halfInvert;
   this._u.pipeR      = topoU.pipeR;
   this._u.pipeOffset = topoU.pipeOffset;
+  this._u.normMode   = topoU.normMode || 0;
+  this._u.texNG      = N;
   this._u.tile       = 1.0;
 
   /* Upload texture */
@@ -1444,6 +1470,8 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uHalfInvert, S.halfInvert);
   gl.uniform1f(u.uPipeR,      S.pipeR);
   gl.uniform3f(u.uPipeOffset, S.pipeOffset[0], S.pipeOffset[1], S.pipeOffset[2]);
+  gl.uniform1f(u.uNormMode,   S.normMode || 0);
+  gl.uniform1f(u.uTexNG,      S.texNG || 48);
   gl.uniform1f(u.uLipschitz,  S.lipschitz);
   gl.uniform1f(u.uFieldMin,   S.fieldMin);
   gl.uniform1f(u.uFieldMax,   S.fieldMax);

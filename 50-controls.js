@@ -56,7 +56,13 @@ var SIGMA_Y_TI64_MPA = (typeof NL_MAT_DEFAULT !== 'undefined' && isFinite(NL_MAT
    component before every solve (prunes floating islands).  Default on; the
    flag is part of each mode's recompute signature, so toggling it forces a
    fresh solve. */
-var GEOM_STATE = { pruneLargest: true };
+/* v0.8.2 — connectivity policy (was a keep-largest toggle):
+     'networks' keep every network that spans the cell, drop floating islands (default)
+     'largest'  keep only the largest network — one side of an interwoven weave
+     'off'      keep everything (buckling still drops floating islands: they are free bodies)
+   pruneLargest mirrors "not off" for solvers/tests that only read the old flag. */
+var GEOM_STATE = { connectivity: 'networks', pruneLargest: true };
+function connOpts(){ return { connectivity: GEOM_STATE.connectivity, pruneLargest: GEOM_STATE.connectivity !== 'off' }; }
 
 var RUN_STATE = {
   running: false,
@@ -90,9 +96,10 @@ var RUN_TIMING = { elastic: 0, nonlinear: 0, buckling: 0 };
 /* ============================================================
    PHYSICS TOGGLES
    ============================================================ */
-function onPruneToggle(el){
-  GEOM_STATE.pruneLargest = !GEOM_STATE.pruneLargest;
-  if (el) el.classList.toggle('on', GEOM_STATE.pruneLargest);
+function onConnectivityChange(v){
+  if (v !== 'networks' && v !== 'largest' && v !== 'off') return;
+  GEOM_STATE.connectivity = v;
+  GEOM_STATE.pruneLargest = (v !== 'off');
 }
 
 function onPhysToggle(el){
@@ -450,7 +457,7 @@ async function runRealSweep(N, runToken){
       /* Skip recompute when nothing this mode depends on changed: grid N,
          prune flag, solver path (full 6-LC Voigt) and the recipe/material
          fingerprint (Sprint A — ids alone are not unique across imports). */
-      var elSig = 'N' + N + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0) + '|full6|r' + recipeFp[i];
+      var elSig = 'N' + N + '|p' + GEOM_STATE.connectivity + '|full6|r' + recipeFp[i];
       if (d.results && !d.results._error && d.results._elasticSig === elSig){
         paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · cached');
         doneUnits++; bumpProgress();
@@ -461,7 +468,7 @@ async function runRealSweep(N, runToken){
 
       var elasticResult = null, solveErr = null;
       nFresh.elastic++;
-      try { elasticResult = await solveDesignElasticFull(recipe, N, { pruneLargest: GEOM_STATE.pruneLargest }); }
+      try { elasticResult = await solveDesignElasticFull(recipe, N, connOpts()); }
       catch (err){ solveErr = err; console.error('[run] design ' + d.id + ' elastic solve failed:', err); }
       if (stale()) return;
 
@@ -520,7 +527,7 @@ async function runRealSweep(N, runToken){
 
       /* Skip recompute when grid/axis/cap/prune are unchanged and a valid
          result (with captured α) is already cached. */
-      var nlSig = 'N' + nlN + '|a' + NONLIN_STATE.axis + '|c' + NONLIN_STATE.cap + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0) + '|r' + recipeFp[ni];
+      var nlSig = 'N' + nlN + '|a' + NONLIN_STATE.axis + '|c' + NONLIN_STATE.cap + '|p' + GEOM_STATE.connectivity + '|r' + recipeFp[ni];
       var nlExist = NONLIN_BY_DESIGN[dn.id];
       if (nlExist && !nlExist.error && nlExist._sig === nlSig && nlExist.alphaSteps){
         paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · cached');
@@ -550,7 +557,7 @@ async function runRealSweep(N, runToken){
       nFresh.nonlinear++;
       try {
         nlSolver = new NonlinearSolverFull(nlN, nlfft);
-        nlSolver.upload(rcpN, { pruneLargest: GEOM_STATE.pruneLargest });
+        nlSolver.upload(rcpN, connOpts());
         nlOut = await nlSolver.crush(nlAxis, { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: onNlStep, captureAlpha: true /* tie-up #5 — per-step plastic-strain field for the Nonlinear-tab scrubber */ });
       } catch (e){ nlErr = e; if (!stale()) console.error('[run] nonlinear solve failed for ' + dn.id + ':', e); }
       if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
@@ -588,7 +595,7 @@ async function runRealSweep(N, runToken){
     paintRunStatus('<span class="v">Buckling</span> · N=' + bN + ' · ' + nBuckleDesigns + ' design(s) · pool solving…');
     renderDesignGrid();
 
-    var bkSigBase = 'N' + bN + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0) + '|g' + (window.BUCKLE_GPU ? 1 : 0);
+    var bkSigBase = 'N' + bN + '|p' + GEOM_STATE.connectivity + '|g' + (window.BUCKLE_GPU ? 1 : 0);
     var jobs = [];
     for (var k = 0; k < nDesigns; k++){
       if (!recipes[k]) continue;
@@ -605,7 +612,7 @@ async function runRealSweep(N, runToken){
         RUN_STATE.activeWorkers++;            /* tie-up #3 — live-activity flag up while this axis-set is in flight */
         nFresh.buckling++;
         jobs.push(
-          (typeof computeBuckling === 'function' ? computeBuckling : computeBucklingCPU)(recipe, bN, { pruneLargest: GEOM_STATE.pruneLargest }, function(p){
+          (typeof computeBuckling === 'function' ? computeBuckling : computeBucklingCPU)(recipe, bN, connOpts(), function(p){
             if (stale()) return;              /* Sprint A — superseded job: no UI writes */
             doneUnits++; bumpProgress();
             paintRunStatus('<span class="v">Buckling</span> · ' + (design.label || design.id) +

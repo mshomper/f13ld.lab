@@ -41,7 +41,7 @@
       <button class="fh-action-btn ghost" id="addDesignBtn" onclick="onAddDesignClick()">+ Add Design</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.8.1</span>
+      <span class="fh-version">v0.8.2</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -116,7 +116,14 @@
         <div class="phys-toggle on" data-phys="buckle"  onclick="onPhysToggle(this)"><span class="check">✓</span>Buckling</div>
         <div class="phys-toggle on" data-phys="nonlin"  onclick="onPhysToggle(this)"><span class="check">✓</span>Nonlinear · J2 plasticity</div>
         <div class="phys-toggle"    data-phys="thermal" onclick="onPhysToggle(this)"><span class="check">✓</span>Thermal κ</div>
-        <div class="phys-toggle on" id="prunePill" onclick="onPruneToggle(this)" title="Keep only the largest periodically-connected solid component before solving — removes floating islands that cause spurious buckling/crush results"><span class="check">✓</span>Prune islands</div>
+        <div class="spec-pill" id="connPill" title="Which connected pieces of the voxelized cell are analyzed. All networks: every network that runs continuously through the tiled structure (e.g. both sides of an interwoven PI-TPMS), floating islands removed. Largest network: one side of a weave only. Keep everything: no removal (buckling still removes floating islands — they are free bodies).">
+          <span class="key">Connectivity</span>
+          <select id="connSel" onchange="onConnectivityChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;">
+            <option value="networks" selected>All networks · remove islands</option>
+            <option value="largest">Largest network only</option>
+            <option value="off">Keep everything</option>
+          </select>
+        </div>
       </div>
     </div>
 

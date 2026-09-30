@@ -329,24 +329,93 @@ function pruneSmallIslands(solid, N, opts) {
 }
 
 /* ============================================================
+   periodicComponents(solid, N)  — v0.8.2
+   Periodic 6-connected components, each with the axes along which it
+   WRAPS (percolates): its unwrapped copy reconnects to its own periodic
+   image, so when the cell is tiled it forms an endless network in that
+   direction.  A component that wraps no axis is a finite floating island
+   in the tiled structure — it carries no load.
+   Returns { label:Int32Array (0 = void), sizes:[0, s1, …], wraps:[0, bits…],
+   count } with wrap bits 1 = x, 2 = y, 4 = z.
+   ============================================================ */
+function periodicComponents(solid, N) {
+  var N3 = N * N * N, SA = N * N, SB = N, Nm1 = N - 1;
+  var label = new Int32Array(N3), stack = new Int32Array(N3);
+  var ox = new Int8Array(N3), oy = new Int8Array(N3), oz = new Int8Array(N3);
+  var sizes = [0], wraps = [0], comp = 0, top = 0;
+  function visit(nb, cx, cy, cz, cId) {
+    if (!solid[nb]) return;
+    if (!label[nb]) { label[nb] = cId; ox[nb] = cx; oy[nb] = cy; oz[nb] = cz; stack[top++] = nb; return; }
+    var w = 0;
+    if (ox[nb] !== ((cx << 24) >> 24)) w |= 1;   /* compare as int8 (offsets wrap in the typed array) */
+    if (oy[nb] !== ((cy << 24) >> 24)) w |= 2;
+    if (oz[nb] !== ((cz << 24) >> 24)) w |= 4;
+    if (w) wraps[cId] |= w;
+  }
+  for (var seed = 0; seed < N3; seed++) {
+    if (!solid[seed] || label[seed]) continue;
+    comp++; sizes.push(0); wraps.push(0);
+    top = 0; stack[top++] = seed; label[seed] = comp; ox[seed] = 0; oy[seed] = 0; oz[seed] = 0;
+    while (top > 0) {
+      var idx = stack[--top]; sizes[comp]++;
+      var a = (idx / SA) | 0, rem = idx - a * SA, b = (rem / SB) | 0, c = rem - b * SB;
+      var X = ox[idx], Y = oy[idx], Z = oz[idx];
+      /* crossing a cell face moves to the neighbouring periodic image (offset ±1) */
+      visit((a === 0 ? Nm1 : a - 1) * SA + b * SB + c, a === 0 ? X - 1 : X, Y, Z, comp);
+      visit((a === Nm1 ? 0 : a + 1) * SA + b * SB + c, a === Nm1 ? X + 1 : X, Y, Z, comp);
+      visit(a * SA + (b === 0 ? Nm1 : b - 1) * SB + c, X, b === 0 ? Y - 1 : Y, Z, comp);
+      visit(a * SA + (b === Nm1 ? 0 : b + 1) * SB + c, X, b === Nm1 ? Y + 1 : Y, Z, comp);
+      visit(a * SA + b * SB + (c === 0 ? Nm1 : c - 1), X, Y, c === 0 ? Z - 1 : Z, comp);
+      visit(a * SA + b * SB + (c === Nm1 ? 0 : c + 1), X, Y, c === Nm1 ? Z + 1 : Z, comp);
+    }
+  }
+  return { label: label, sizes: sizes, wraps: wraps, count: comp };
+}
+
+/* ============================================================
+   pruneToNetworks(solid, N)  — v0.8.2, default connectivity policy
+   Keep EVERY component that wraps the periodic cell (an interwoven
+   PI-TPMS, a bundle of parallel fibres, both sides of a nodal
+   surface) and remove only floating islands.  If nothing wraps (the
+   design is under-resolved at this grid) the largest component is kept
+   so the solve still has a load path, and the log says so.
+   ============================================================ */
+function pruneToNetworks(solid, N) {
+  var pc = periodicComponents(solid, N);
+  if (pc.count === 0 || (pc.count === 1 && pc.wraps[1])) return solid;
+  var keep = [], nNet = 0;
+  for (var ci = 1; ci <= pc.count; ci++) { keep[ci] = !!pc.wraps[ci]; if (keep[ci]) nNet++; }
+  if (!nNet) {
+    var best = 1; for (var cj = 2; cj <= pc.count; cj++) if (pc.sizes[cj] > pc.sizes[best]) best = cj;
+    keep[best] = true;
+    console.warn('[prune] no component spans the periodic cell at N=' + N + ' — kept the largest (' + pc.sizes[best] + ' voxels); raise the grid');
+  }
+  var islands = 0;
+  for (var ck = 1; ck <= pc.count; ck++) if (!keep[ck]) islands++;
+  if (!islands) return solid;
+  var out = solid.slice(), removed = 0;
+  for (var i = 0; i < out.length; i++) if (out[i] && !keep[pc.label[i]]) { out[i] = 0; removed++; }
+  console.log('[prune] kept ' + Math.max(nNet, 1) + ' spanning network(s); removed ' + removed + ' voxel(s) across ' + islands + ' floating island(s)');
+  return out;
+}
+
+/* ============================================================
    pruneVoxels(solid, N, family, opts)
-   Family-aware prune dispatcher.  Called by the solvers in place
-   of pruneToLargestComponent so each family gets the right policy:
-
-     · beam            → NONE.  A periodic strut lattice fills the
-                         cube and is connected through its own
-                         periodic images; mesh's cantilever-trim
-                         prune does not apply to a bulk RVE.
-     · bundle, wave    → pruneSmallIslands.  Keep all large
-                         interwoven networks; drop only specks.
-     · tpms/noise/grain→ pruneToLargestComponent (unchanged) so the
-                         already-validated effective-property
-                         numbers are preserved.
-
-   opts is forwarded to pruneSmallIslands (keepFrac / absFloor).
+   Connectivity policy dispatcher, called by every solver.
+   opts.connectivity (v0.8.2, the UI selector):
+     'networks' — keep all spanning networks, drop floating islands (default)
+     'largest'  — keep only the largest network (one side of a weave);
+                  bundle/wave keep their size-threshold rule
+     'off'      — keep everything
+   Legacy callers that pass only opts.pruneLargest keep the old behaviour.
+   beam lattices are never pruned (they connect through their images).
    ============================================================ */
 function pruneVoxels(solid, N, family, opts) {
+  opts = opts || {};
   if (family === 'beam') return solid;
+  var mode = opts.connectivity || (opts.pruneLargest ? 'largest' : 'off');
+  if (mode === 'off') return solid;
+  if (mode === 'networks') return pruneToNetworks(solid, N);
   if (family === 'bundle' || family === 'wave') return pruneSmallIslands(solid, N, opts);
   if (typeof pruneToLargestComponent === 'function') return pruneToLargestComponent(solid, N);
   return solid;
@@ -358,6 +427,8 @@ if (typeof module !== 'undefined' && module.exports) {
     checkVoxelConnectivity: checkVoxelConnectivity,
     pruneToLargestComponent: pruneToLargestComponent,
     pruneSmallIslands: pruneSmallIslands,
-    pruneVoxels: pruneVoxels
+    pruneVoxels: pruneVoxels,
+    periodicComponents: periodicComponents,
+    pruneToNetworks: pruneToNetworks
   };
 }
