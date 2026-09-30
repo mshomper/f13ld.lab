@@ -71,6 +71,10 @@ Also:
 
 ## 2. Queued
 
+**Scoped (as time permits)**
+
+- **STL unit-cell import:** see [`STL_IMPORT_SCOPE.md`](STL_IMPORT_SCOPE.md). Import a CAD unit cell as an STL, store it as a signed-distance grid, and add an `import` kernel family so every solver runs on it unchanged. Five open decisions are listed at the end of that doc. It is independent of B2.
+
 **Speed**
 
 - **Elastic solver (16b), GPU-resident CG.** It still does 2 blocking `mapAsync` per CG iteration. Port the v0.8.1 nonlinear approach: scalars stay on the GPU, convergence is checked every ≤16 iterations, and σ̄ is reduced on the GPU.
