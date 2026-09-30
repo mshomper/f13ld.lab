@@ -340,7 +340,7 @@ function renderDesignGrid(){
     grid.style.display   = 'none';
     grid.innerHTML       = '';
     merged.style.display = 'grid';
-    mPlot.innerHTML = buildMergedCurvePlot();
+    if (typeof renderMergedCurvePlot === 'function') renderMergedCurvePlot(mPlot); else mPlot.innerHTML = buildMergedCurvePlot();
     if (typeof renderNonlinearViz === 'function') renderNonlinearViz();   /* tie-up #1 */
     return;
   }

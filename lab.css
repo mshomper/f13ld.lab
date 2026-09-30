@@ -681,3 +681,6 @@ html, body {
 .mp-scale-btn + .mp-scale-btn { border-left:none }
 .mp-scale-btn.active { background:var(--neon); border-color:var(--neon); color:#0a0a0a }
 .mp-legend-key { color:var(--ink-dim); font-family:'JetBrains Mono', monospace; font-size:10px; gap:6px; margin-left:auto }
+.mp-legend-warn { color:#e0b020; font-family:'JetBrains Mono', monospace; font-size:10.5px; flex-basis:100% }
+.mp-legend-hint { color:var(--ink-dim); font-family:'JetBrains Mono', monospace; font-size:10.5px; flex-basis:100% }
+.mp-legend-hint .mp-scale-btn { margin:0 4px; padding:1px 7px }
