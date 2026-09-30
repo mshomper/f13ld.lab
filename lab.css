@@ -669,3 +669,15 @@ html, body {
 .dc-limit-pill.yield  { border-left-color:#1D9E75; color:#1D9E75; }
 .dc-limit-pill.buckle { border-left-color:#e0b020; color:#e0b020; }
 .dc-limit-pill.unk    { border-left-color:var(--ink-dim); color:var(--ink-mute); }
+
+/* v0.8.0 — σ–ε plot: header right group + MPa / ÷ own-yield toggle */
+.mp-head-right { display:flex; align-items:center; gap:14px; flex-wrap:wrap; justify-content:flex-end }
+.mp-scale { display:inline-flex }
+.mp-scale-btn {
+  background:transparent; border:1px solid rgba(255,255,255,0.18);
+  color:rgba(255,255,255,0.6); font:11px 'JetBrains Mono', ui-monospace, monospace;
+  padding:3px 9px; cursor:pointer; letter-spacing:0.04em; line-height:1.2;
+}
+.mp-scale-btn + .mp-scale-btn { border-left:none }
+.mp-scale-btn.active { background:var(--neon); border-color:var(--neon); color:#0a0a0a }
+.mp-legend-key { color:var(--ink-dim); font-family:'JetBrains Mono', monospace; font-size:10px; gap:6px; margin-left:auto }

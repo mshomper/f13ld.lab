@@ -199,135 +199,214 @@ function svgEmptyViewport(message){
 }
 
 /* ----------------------------------------------------------
-   buildMergedCurvePlot — generates the σ–ε comparison plot
-   when curve mode is active. Reads from LAB_STATE.designs.
+   buildMergedCurvePlot — σ–ε comparison (Nonlinear tab), v0.8.0 redesign.
+   · Y axis fits the CURVES, not the buckling lines.  A buckling strength
+     far above the curves is reported as an off-scale tag at the top
+     ("σ_cr 5952 MPa · 24× yield ▲") instead of squashing every curve flat.
+   · Curves start at the origin (the solver records its first load step,
+     not ε = 0), so the elastic rise, the yield knee and the hardening read
+     like a stress–strain curve.
+   · 0.2 %-offset construction line + yield dot per design (where it yields).
+   · "MPa" / "÷ own yield" toggle: normalized mode divides each curve by its
+     own yield, so a 12 MPa design and a 250 MPa design can be compared in
+     shape on one axis (buckling then reads directly as ×yield).
+   · Native hover tooltips on every solved point; SVG drawn at the panel's
+     own aspect so text is never stretched.
    ---------------------------------------------------------- */
+var CURVE_STATE = { scale: 'abs' };   /* 'abs' (MPa) | 'norm' (σ / own σ_y) */
+
+function onCurveScaleToggle(mode){
+  if (mode !== 'abs' && mode !== 'norm') return;
+  CURVE_STATE.scale = mode;
+  var mPlot = document.getElementById('mergedPlot');
+  if (mPlot) mPlot.innerHTML = buildMergedCurvePlot();   /* plot only — the α cubes keep running */
+}
+
+function _mpNiceStep(span, target){
+  if (!(span > 0)) return 1;
+  var raw = span / (target || 5), pw = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10)), m = raw / pw;
+  var nm = (m <= 1) ? 1 : (m <= 2) ? 2 : (m <= 2.5) ? 2.5 : (m <= 5) ? 5 : 10;
+  return nm * pw;
+}
+function _mpFmt(v, step){
+  var dp = step >= 1 ? 0 : (step >= 0.1 ? 1 : 2);
+  if (step === 2.5 || step === 0.25) dp = Math.max(dp, step === 0.25 ? 2 : 1);
+  return v.toFixed(dp);
+}
+
 function buildMergedCurvePlot(){
-  // Gather real nonlinear curves + buckling cross-reference per design.
   var entries = [];
   for (var i = 0; i < LAB_STATE.designs.length && i < 3; i++){
     var d = LAB_STATE.designs[i];
     var nl = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
     if (nl && !nl.error && nl.curve && nl.curve.length > 1){
       var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
-      var pcr = (bk && !bk.error && isFinite(bk.pcr)) ? bk.pcr : null;
-      entries.push({ design: d, nl: nl, pcr: pcr });
+      /* buckling on the crush axis when available (same axis as the curve) */
+      var pcr = null;
+      if (bk && !bk.error && !bk.skip_reason){
+        pcr = isFinite(bk.pcr_ratio_ref) ? bk.pcr_ratio_ref : (isFinite(bk.pcr) ? bk.pcr : null);
+      }
+      entries.push({ design: d, nl: nl, pcr: pcr, pcrAxis: bk && bk.ratioAxis });
     }
   }
-
   if (!entries.length){
     var msg = LAB_STATE.runHasCompleted
-      ? 'Enable Nonlinear and Run a comparison to see \u03c3\u2013\u03b5 curves'
-      : 'Run a comparison to see \u03c3\u2013\u03b5 curves';
-    return '<div class="mp-empty"><div class="icon">\u223f</div><div class="msg">' + msg + '</div></div>';
+      ? 'Enable Nonlinear and Run a comparison to see σ–ε curves'
+      : 'Run a comparison to see σ–ε curves';
+    return '<div class="mp-empty"><div class="icon">∿</div><div class="msg">' + msg + '</div></div>';
   }
 
-  // Auto-scale axes to the data (strain %, stress MPa). Include sigma_cr so the
-  // buckling line is always on-canvas.
-  var epsMax = 0, sigMax = 0;
+  var norm = CURVE_STATE.scale === 'norm';
+  /* per-design scale: MPa, or divide by own yield (by the curve's top when it never yields) */
+  for (var e0 = 0; e0 < entries.length; e0++){
+    var en = entries[e0], cv0 = en.nl.curve, top = 0;
+    for (var t0 = 0; t0 < cv0.length; t0++) if (cv0[t0].sigma > top) top = cv0[t0].sigma;
+    en.div = !norm ? 1 : ((en.nl.yielded && isFinite(en.nl.sigma_y_eff) && en.nl.sigma_y_eff > 0) ? en.nl.sigma_y_eff : (top || 1));
+  }
+
+  /* axes fit the curves; a buckling line is kept on-scale only if it sits
+     within 1.6× the highest curve, otherwise it becomes an off-scale tag */
+  var epsMax = 0, curveMax = 0;
   for (var e = 0; e < entries.length; e++){
     var cv = entries[e].nl.curve;
     for (var k = 0; k < cv.length; k++){
-      if (cv[k].eps   > epsMax) epsMax = cv[k].eps;
-      if (cv[k].sigma > sigMax) sigMax = cv[k].sigma;
+      if (cv[k].eps > epsMax) epsMax = cv[k].eps;
+      if (cv[k].sigma / entries[e].div > curveMax) curveMax = cv[k].sigma / entries[e].div;
     }
-    if (entries[e].pcr != null && entries[e].pcr > sigMax) sigMax = entries[e].pcr;
   }
-  function niceCap(x){
-    if (!(x > 0)) return 1;
-    var pw = Math.pow(10, Math.floor(Math.log10(x)));
-    var m = x / pw; var nm = (m <= 1) ? 1 : (m <= 2) ? 2 : (m <= 5) ? 5 : 10;
-    return nm * pw;
+  /* a design's buckling line is drawn only when it sits near its OWN curve
+     (≤ 1.6× that curve's top) — otherwise it would float over another
+     design's curve and read as belonging to it; it becomes a tag instead */
+  var yTop = curveMax * 1.12;
+  for (var e2 = 0; e2 < entries.length; e2++){
+    var own = 0, cvo = entries[e2].nl.curve;
+    for (var o2 = 0; o2 < cvo.length; o2++) if (cvo[o2].sigma > own) own = cvo[o2].sigma;
+    entries[e2].ownTop = own / entries[e2].div;
+    var pv = entries[e2].pcr != null ? entries[e2].pcr / entries[e2].div : null;
+    entries[e2].pcrPlot = pv;
+    entries[e2].pcrOnScale = (pv != null && pv <= entries[e2].ownTop * 1.6);
+    if (entries[e2].pcrOnScale && pv * 1.08 > yTop) yTop = pv * 1.08;
   }
-  var epsCap = niceCap(epsMax * 100);
-  var sigCap = niceCap(sigMax);
+  var yStep = _mpNiceStep(yTop, 5), yCap = Math.ceil(yTop / yStep) * yStep;
+  var epsPct = epsMax * 100, xStep = _mpNiceStep(epsPct * 1.02, 6), xCap = Math.ceil(epsPct * 1.02 / xStep) * xStep;
+
+  /* draw at the panel's own aspect so text is not stretched */
+  var host = document.getElementById('mergedPlot');
+  var W = 800, H = 360;
+  if (host && host.clientWidth > 200 && host.clientHeight > 200){
+    W = Math.max(520, host.clientWidth - 44);
+    H = Math.max(240, host.clientHeight - 36 - 30 - 64);
+  }
+  var X0 = 64, X1 = W - 24, Y0 = 34, Y1 = H - 40;
+  function px(ep){ return X0 + (X1 - X0) * (ep / xCap); }
+  function py(sv){ return Y1 - (Y1 - Y0) * (sv / yCap); }
+  var MONO = 'JetBrains Mono,monospace';
+
   var axisLabel = (entries[0].nl.axis || 'zz').toUpperCase();
-  var nLabel = entries[0].nl.N;
   var capPct = Math.round((entries[0].nl.epsCap || 0.05) * 100);
-  var anyBuckLimited = false;
-
-  var X0 = 60, X1 = 780, Y0 = 20, Y1 = 320;
-  function px(epsPct){ return X0 + (X1 - X0) * (epsPct / epsCap); }
-  function py(sig){    return Y1 - (Y1 - Y0) * (sig / sigCap); }
-
   var html = '<div class="mp-head">' +
-    '<div class="mp-title">Stress\u2013Strain \u00b7 Comparison</div>' +
-    '<div class="mp-sub">UNIAXIAL \u00b7 ' + axisLabel + ' \u00b7 J2 plasticity (small strain) \u00b7 N=' + nLabel + ' \u00b7 \u03b5\u2264' + capPct + '%</div>' +
+    '<div class="mp-title">Stress–Strain · Comparison</div>' +
+    '<div class="mp-head-right">' +
+      '<span class="mp-sub">UNIAXIAL · ' + axisLabel + ' · J2 plasticity (small strain) · N=' + entries[0].nl.N + ' · ε≤' + capPct + '%</span>' +
+      '<span class="mp-scale">' +
+        '<button class="mp-scale-btn' + (!norm ? ' active' : '') + '" onclick="onCurveScaleToggle(\'abs\')" title="Stress in MPa">MPa</button>' +
+        '<button class="mp-scale-btn' + (norm ? ' active' : '') + '" onclick="onCurveScaleToggle(\'norm\')" title="Each curve divided by its own yield strength — compares curve shape across designs of very different strength">÷ own yield</button>' +
+      '</span>' +
     '</div>' +
-    '<div class="mp-canvas">' +
-    '<svg viewBox="0 0 800 360" preserveAspectRatio="none">';
+    '</div>' +
+    '<div class="mp-canvas"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet">';
 
-  html += '<g stroke="#1a1a2a" stroke-width="0.5">';
-  html += '<line x1="' + X0 + '" y1="' + Y0 + '" x2="' + X0 + '" y2="' + Y1 + '"/>';
-  html += '<line x1="' + X0 + '" y1="' + Y1 + '" x2="' + X1 + '" y2="' + Y1 + '"/>';
-  for (var gy = 1; gy <= 4; gy++){ var yy = (Y1 - (Y1 - Y0) * gy / 4).toFixed(1); html += '<line x1="' + X0 + '" y1="' + yy + '" x2="' + X1 + '" y2="' + yy + '" stroke-dasharray="2,4"/>'; }
-  for (var gx = 1; gx <= 5; gx++){ var xx = (X0 + (X1 - X0) * gx / 5).toFixed(1); html += '<line x1="' + xx + '" y1="' + Y0 + '" x2="' + xx + '" y2="' + Y1 + '" stroke-dasharray="2,4"/>'; }
+  /* grid + ticks */
+  html += '<g stroke="#23233a" stroke-width="1">';
+  for (var yv = 0; yv <= yCap + 1e-9; yv += yStep){ var yy = py(yv).toFixed(1); html += '<line x1="' + X0 + '" y1="' + yy + '" x2="' + X1 + '" y2="' + yy + '"' + (yv === 0 ? '' : ' stroke-dasharray="2,5"') + '/>'; }
+  for (var xv = 0; xv <= xCap + 1e-9; xv += xStep){ var xx = px(xv).toFixed(1); html += '<line x1="' + xx + '" y1="' + Y0 + '" x2="' + xx + '" y2="' + Y1 + '"' + (xv === 0 ? '' : ' stroke-dasharray="2,5"') + '/>'; }
+  html += '</g><g font-family="' + MONO + '" font-size="11" fill="#7a7a92">';
+  for (var yl = 0; yl <= yCap + 1e-9; yl += yStep) html += '<text x="' + (X0 - 10) + '" y="' + (py(yl) + 4).toFixed(1) + '" text-anchor="end">' + _mpFmt(yl, yStep) + '</text>';
+  for (var xl = 0; xl <= xCap + 1e-9; xl += xStep) html += '<text x="' + px(xl).toFixed(1) + '" y="' + (Y1 + 18) + '" text-anchor="middle">' + _mpFmt(xl, xStep) + '</text>';
+  var yName = norm ? 'σ / own σ_y' : 'σ (MPa)';
+  html += '<text x="16" y="' + ((Y0 + Y1) / 2).toFixed(0) + '" text-anchor="middle" transform="rotate(-90, 16, ' + ((Y0 + Y1) / 2).toFixed(0) + ')" letter-spacing="1">' + yName + '</text>';
+  html += '<text x="' + ((X0 + X1) / 2).toFixed(0) + '" y="' + (H - 6) + '" text-anchor="middle" letter-spacing="1">ε (%)</text>';
   html += '</g>';
+  if (norm){ var y1 = py(1).toFixed(1); html += '<text x="' + (X0 + 6) + '" y="' + (parseFloat(y1) - 5).toFixed(1) + '" font-family="' + MONO + '" font-size="10" fill="#7a7a92">yield = 1</text>'; }
 
-  html += '<g font-family="JetBrains Mono,monospace" font-size="10" fill="#555">';
-  for (var ly = 0; ly <= 4; ly++){
-    var yv = sigCap * ly / 4; var yt = (Y1 - (Y1 - Y0) * ly / 4 + 4).toFixed(1);
-    var yl = (yv >= 100) ? Math.round(yv).toString() : yv.toFixed(0);
-    html += '<text x="' + (X0 - 18) + '" y="' + yt + '" text-anchor="end">' + yl + '</text>';
-  }
-  for (var lx = 0; lx <= 5; lx++){
-    var xv = epsCap * lx / 5; var xt = (X0 + (X1 - X0) * lx / 5).toFixed(1);
-    html += '<text x="' + xt + '" y="' + (Y1 + 18) + '" text-anchor="middle">' + xv.toFixed(xv < 1 ? 2 : 1) + '</text>';
-  }
-  html += '<text x="20" y="170" text-anchor="middle" transform="rotate(-90, 20, 170)" letter-spacing="1.5">\u03c3 (MPa)</text>';
-  html += '<text x="420" y="354" text-anchor="middle" letter-spacing="1.5">\u03b5 (%)</text>';
-  html += '</g>';
-
+  var offTags = [], anyBuckLimited = false;
   for (var ci = 0; ci < entries.length; ci++){
-    var dd = entries[ci].design, nlc = entries[ci].nl, cvv = nlc.curve, pcr = entries[ci].pcr;
-    var path = '';
-    for (var pi = 0; pi < cvv.length; pi++){
-      path += (pi === 0 ? 'M' : 'L') + px(cvv[pi].eps * 100).toFixed(1) + ',' + py(cvv[pi].sigma).toFixed(1) + ' ';
-    }
-    html += '<path d="' + path.replace(/\s+$/, '') + '" fill="none" stroke="' + dd.color + '" stroke-width="2"/>';
+    var en2 = entries[ci], dd = en2.design, nlc = en2.nl, cvv = nlc.curve, dv = en2.div, col = dd.color;
+    var yielded = !!(nlc.yielded && isFinite(nlc.sigma_y_eff));
 
-    // offset-yield marker — only when a real knee was detected
-    if (nlc.yielded && isFinite(nlc.sigma_y_eff)){
-      var yEps = null;
-      for (var qi = 0; qi < cvv.length; qi++){ if (cvv[qi].sigma >= nlc.sigma_y_eff){ yEps = cvv[qi].eps; break; } }
-      if (yEps == null) yEps = cvv[cvv.length - 1].eps;
-      html += '<circle cx="' + px(yEps * 100).toFixed(1) + '" cy="' + py(nlc.sigma_y_eff).toFixed(1) + '" r="3.5" fill="' + dd.color + '" stroke="#0a0a0a" stroke-width="1"/>';
+    /* 0.2 %-offset construction line (textbook), up to the yield point */
+    if (yielded && isFinite(nlc.E0) && nlc.E0 > 0){
+      var epsY = nlc.sigma_y_eff / nlc.E0 + 0.002;
+      html += '<line x1="' + px(0.2).toFixed(1) + '" y1="' + py(0).toFixed(1) + '" x2="' + px(epsY * 100).toFixed(1) + '" y2="' + py(nlc.sigma_y_eff / dv).toFixed(1) + '" stroke="' + col + '" stroke-width="1" stroke-dasharray="3,4" opacity="0.45"/>';
     }
-
-    // buckling cross-reference: horizontal sigma_cr line, dashed in design color
-    if (pcr != null && pcr <= sigCap){
-      var yb = py(pcr).toFixed(1);
-      var buckBeforeYield = (!nlc.yielded) || (isFinite(nlc.sigma_y_eff) && pcr < nlc.sigma_y_eff);
-      if (buckBeforeYield) anyBuckLimited = true;
-      html += '<line x1="' + X0 + '" y1="' + yb + '" x2="' + X1 + '" y2="' + yb + '" stroke="' + dd.color + '" stroke-width="1.2" stroke-dasharray="6,4" opacity="0.55"/>';
-      html += '<text x="' + (X1 - 4) + '" y="' + (parseFloat(yb) - 4).toFixed(1) + '" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="' + dd.color + '" opacity="0.8">\u03c3_cr ' + pcr.toFixed(1) + '</text>';
+    /* curve from the origin */
+    var path = 'M' + px(0).toFixed(1) + ',' + py(0).toFixed(1);
+    for (var pi = 0; pi < cvv.length; pi++) path += ' L' + px(cvv[pi].eps * 100).toFixed(1) + ',' + py(cvv[pi].sigma / dv).toFixed(1);
+    html += '<path d="' + path + '" fill="none" stroke="' + col + '" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>';
+    /* direct label at the curve end; flag curves squashed by a stronger design */
+    var lastP = cvv[cvv.length - 1], lx2 = px(lastP.eps * 100), ly2 = py(lastP.sigma / dv);
+    var squashed = !norm && en2.ownTop < 0.12 * yCap;
+    html += '<text x="' + (lx2 + 8).toFixed(1) + '" y="' + (ly2 + 4).toFixed(1) + '" font-family="' + MONO + '" font-size="11" font-weight="600" fill="' + col + '">' + dd.label.split('·').pop().trim() + '</text>';
+    if (squashed) html += '<text x="' + (lx2 - 4).toFixed(1) + '" y="' + (ly2 - 10).toFixed(1) + '" text-anchor="end" font-family="' + MONO + '" font-size="10" fill="#7a7a92">Design ' + dd.label.split('·').pop().trim() + ' is small at this scale — try ÷ own yield</text>';
+    /* hover targets on every solved point */
+    var letter = dd.label.split('·').pop().trim();
+    html += '<g fill="transparent">';
+    for (var hi = 0; hi < cvv.length; hi++){
+      html += '<circle cx="' + px(cvv[hi].eps * 100).toFixed(1) + '" cy="' + py(cvv[hi].sigma / dv).toFixed(1) + '" r="7"><title>Design ' + letter + ' · ε = ' + (cvv[hi].eps * 100).toFixed(2) + ' % · σ = ' + cvv[hi].sigma.toFixed(1) + ' MPa' + (norm ? ' (' + (cvv[hi].sigma / dv).toFixed(2) + '× yield)' : '') + '</title></circle>';
+    }
+    html += '</g>';
+    /* yield dot + label */
+    if (yielded){
+      var ex = isFinite(nlc.E0) && nlc.E0 > 0 ? (nlc.sigma_y_eff / nlc.E0 + 0.002) * 100 : null;
+      if (ex == null){ for (var qi = 0; qi < cvv.length; qi++) if (cvv[qi].sigma >= nlc.sigma_y_eff){ ex = cvv[qi].eps * 100; break; } }
+      if (ex != null){
+        var cxv = px(ex), cyv = py(nlc.sigma_y_eff / dv);
+        html += '<circle cx="' + cxv.toFixed(1) + '" cy="' + cyv.toFixed(1) + '" r="4.5" fill="' + col + '" stroke="#0a0a12" stroke-width="1.5"><title>Design ' + letter + ' 0.2% offset yield: ' + nlc.sigma_y_eff.toFixed(1) + ' MPa at ε = ' + ex.toFixed(2) + ' %</title></circle>';
+        /* stagger labels so designs yielding at the same point (normalized view) stay legible */
+        var lyv = cyv + 16 + ci * 14;
+        if (lyv > Y1 - 22) lyv = cyv - 10 - ci * 14;     /* near the axis → label above the dot */
+        html += '<text x="' + (cxv + 8).toFixed(1) + '" y="' + lyv.toFixed(1) + '" font-family="' + MONO + '" font-size="10.5" fill="' + col + '">' + letter + ' σ_y ' + nlc.sigma_y_eff.toFixed(nlc.sigma_y_eff >= 100 ? 0 : 1) + ' MPa</text>';
+      }
+    }
+    /* buckling reference */
+    if (en2.pcrPlot != null){
+      var ratio = yielded ? en2.pcr / nlc.sigma_y_eff : null;
+      if (!yielded || (isFinite(nlc.sigma_y_eff) && en2.pcr < nlc.sigma_y_eff)) anyBuckLimited = anyBuckLimited || (yielded && en2.pcr < nlc.sigma_y_eff);
+      var bTxt = 'σ_cr ' + (en2.pcr >= 100 ? en2.pcr.toFixed(0) : en2.pcr.toFixed(1)) + ' MPa' + (ratio != null ? ' · ' + (ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(1)) + '× yield' : '');
+      if (en2.pcrOnScale && en2.pcrPlot <= yCap){
+        var yb = py(en2.pcrPlot).toFixed(1);
+        html += '<line x1="' + X0 + '" y1="' + yb + '" x2="' + X1 + '" y2="' + yb + '" stroke="' + col + '" stroke-width="1.4" stroke-dasharray="7,5" opacity="0.7"/>';
+        html += '<text x="' + (X1 - 4) + '" y="' + (parseFloat(yb) - 6).toFixed(1) + '" text-anchor="end" font-family="' + MONO + '" font-size="10.5" fill="' + col + '">buckles · ' + bTxt + '</text>';
+      } else offTags.push({ col: col, txt: bTxt, letter: letter });
     }
   }
-
+  /* off-scale buckling tags, stacked top-right */
+  for (var ot = 0; ot < offTags.length; ot++){
+    var tg = offTags[ot], ty = Y0 - 16 + ot * 14;
+    html += '<text x="' + X1 + '" y="' + ty + '" text-anchor="end" font-family="' + MONO + '" font-size="10.5" fill="' + tg.col + '">▲ Design ' + tg.letter + ' buckles at ' + tg.txt + ' — above its curve, not drawn</text>';
+  }
   if (anyBuckLimited){
-    html += '<text x="' + (X0 + 8) + '" y="' + (Y0 + 14) + '" font-family="JetBrains Mono,monospace" font-size="10" fill="#c87f42" letter-spacing="0.5">\u26a0 buckling-limited \u2014 collapses at \u03c3_cr before yield</text>';
+    html += '<text x="' + (X0 + 8) + '" y="' + (Y0 + 14) + '" font-family="' + MONO + '" font-size="11" fill="#e0b020">⚠ buckling-limited — collapses at σ_cr before it yields; the curve above that line is not reached</text>';
   }
   html += '</svg></div>';
 
-  // legend
+  /* legend */
   html += '<div class="mp-legend">';
   for (var li = 0; li < entries.length; li++){
-    var ld = entries[li].design, lnl = entries[li].nl, lpcr = entries[li].pcr;
-    var letter = ld.label.split('\u00b7').pop().trim();
+    var ld = entries[li].design, lnl = entries[li].nl;
+    var lletter = ld.label.split('·').pop().trim();
     var yieldTxt = (lnl.yielded && isFinite(lnl.sigma_y_eff))
-      ? ('\u03c3_y = ' + lnl.sigma_y_eff.toFixed(1) + ' MPa' + (lnl.truncated ? ' (partial)' : ''))
+      ? ('σ_y ' + lnl.sigma_y_eff.toFixed(1) + ' MPa' + (isFinite(lnl.E0) ? ' · E ' + (lnl.E0 >= 1000 ? (lnl.E0 / 1000).toFixed(2) + ' GPa' : lnl.E0.toFixed(0) + ' MPa') : '') + (lnl.truncated ? ' (partial)' : ''))
       : (lnl.truncReason === 'step-budget' && isFinite(lnl.eAxisMax))
-        ? ('stopped at \u03b5=' + (lnl.eAxisMax * 100).toFixed(2) + '% (step budget) \u2014 no yield in range reached' + (isFinite(lnl.sigmaCap) ? (' (\u03c3_y > ' + lnl.sigmaCap.toFixed(0) + ' MPa)') : ''))
-        : ('no yield \u2264 ' + Math.round((lnl.epsCap || 0.05) * 100) + '%' + (isFinite(lnl.sigmaCap) ? (' (\u03c3_y > ' + lnl.sigmaCap.toFixed(0) + ' MPa)') : ''));
-    var buckTxt = (lpcr != null && ((!lnl.yielded) || (isFinite(lnl.sigma_y_eff) && lpcr < lnl.sigma_y_eff)))
-      ? ' \u00b7 buckling-limited (\u03c3_cr ' + lpcr.toFixed(1) + ')'
-      : '';
+        ? ('stopped at ε=' + (lnl.eAxisMax * 100).toFixed(2) + '% (step budget) — no yield in range reached')
+        : ('no yield ≤ ' + Math.round((lnl.epsCap || 0.05) * 100) + '%' + (isFinite(lnl.sigmaCap) ? (' (σ_y > ' + lnl.sigmaCap.toFixed(0) + ' MPa)') : ''));
     html += '<div class="mp-legend-item">' +
       '<div class="swatch" style="background:' + ld.color + '"></div>' +
-      '<strong style="color:' + ld.color + '">Design ' + letter + '</strong> ' + ld.title +
-      '<span class="marker">' + yieldTxt + buckTxt + '</span>' +
+      '<strong style="color:' + ld.color + '">Design ' + lletter + '</strong> ' + ld.title +
+      '<span class="marker">' + yieldTxt + '</span>' +
       '</div>';
   }
+  html += '<div class="mp-legend-item mp-legend-key"><svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="#8a8aa2" stroke-width="1" stroke-dasharray="3,4"/></svg>0.2% offset · <svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="#8a8aa2" stroke-width="1.4" stroke-dasharray="7,5"/></svg>buckling strength</div>';
   html += '</div>';
   return html;
 }
