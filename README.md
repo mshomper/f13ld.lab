@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.8.0 · alpha · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.8.1 · alpha · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,16 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.8.1
+
+**Nonlinear crush: correct and fast.**
+- **Root cause of the slow, erratic crush:** after every change of the applied macro strain, the Newton residual kept a uniform (mean-strain) part the operator cannot remove, so CG ran on an effectively non-symmetric system — hundreds to 1,000+ iterations per solve, occasional divergence, cutbacks, and run times that did not track grid size. The strain field's mean is now reset to the applied strain before each solve.
+- **Less over-solving:** the CG tolerance follows the Newton residual (inexact Newton); failing attempts stop after three strikes instead of 12 Newton iterations; each load step starts from an extrapolated strain field.
+- **GPU-resident CG:** scalars stay on the GPU, one small readback per block of up to 16 iterations (was 2 per iteration), cached bind groups, batched real-pair FFTs.
+- **Measured (software WebGPU, counts):** Schwarz P N=16 — CG iterations 9,300 → 175, GPU readbacks 18,826 → 235; spinodoid N=32 — CG 14,200 → 523. Results match the previous solver (σ_y within 0.3 %; the old solver's capped steps were up to 1.5 % off). Legacy path: `window.NL_FAST = false`; per-solve trace: `window.NL_TRACE = true`.
+
+**Stress–strain plot:** axes fit the curves; buckling far above a curve becomes a tag instead of squashing the plot; curves start at the origin with 0.2 %-offset lines; MPa / ÷ own-yield toggle; collision-aware labels; values on hover.
 
 ## What's new in v0.8.0
 
