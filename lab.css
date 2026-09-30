@@ -653,3 +653,19 @@ html, body {
 .dc-row .rd.down { color:var(--bad); }      /* comparison only */
 .dc-row .rd.neut { color:var(--ink-dim); }
 .dc-row .rd.warn { color:var(--warn); }     /* status descriptors (buckling-limited, governed…) */
+
+/* v0.8.0 — governing failure pill on the card header (yield vs buckling).
+   Jade = yields first (the expected, ductile failure); amber = buckles first
+   (status, not a comparison); muted = not determined yet. */
+.dc-limit-pill {
+  display:inline-block; align-self:flex-start; margin-top:4px;
+  font-family:'IBM Plex Mono','JetBrains Mono',monospace;
+  font-size:9.5px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase;
+  padding:2px 6px; border-radius:3px;
+  border-left:2px solid var(--ink-dim);
+  background:rgba(255,255,255,0.04); color:var(--ink-mute);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;
+}
+.dc-limit-pill.yield  { border-left-color:#1D9E75; color:#1D9E75; }
+.dc-limit-pill.buckle { border-left-color:#e0b020; color:#e0b020; }
+.dc-limit-pill.unk    { border-left-color:var(--ink-dim); color:var(--ink-mute); }

@@ -2097,6 +2097,10 @@ async function solveDesignBucklingGPU(recipe, N, opts, onProgress) {
 async function computeBuckling(recipe, N, opts, onProgress) {
   opts = opts || {};
   var useGPU = (opts.gpu != null) ? opts.gpu : (typeof window !== 'undefined' && window.BUCKLE_GPU);
+  /* v0.8.0 — the GPU port implements the legacy spectral operator only, which
+     finds void-controlled artifact modes.  The voxel-FE method (16h, default)
+     runs on the CPU pool until its own GPU port lands. */
+  if ((opts.method || (typeof BUCKLE_CPU_DEFAULTS !== 'undefined' && BUCKLE_CPU_DEFAULTS.method) || 'fe') === 'fe') useGPU = false;
   /* The GPU path only implements the legacy laterally-CONFINED prestress
      (extractPrestressGPU, unit macro strain).  Uniaxial-stress loading (the
      16c/16e default) is CPU-only for now — route there rather than return

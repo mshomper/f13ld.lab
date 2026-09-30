@@ -201,14 +201,14 @@ function paintNonlinCapPill(){
 /* Reference seconds-per-design at each mode's reference grid (uncalibrated). */
 var RUN_REF = {
   elastic:   { sec: 2.0,  refN: 64 },   /* full-Voigt 6-LC @ N=64 */
-  buckling:  { sec: 144.0, refN: 16 },  /* 3-axis pool @ N=16 — the measured 17.6 s @ N=8 desktop figure
-                                           (docs/BUCKLING.md) scaled by (16/8)^3; N=8 is no longer offered */
+  buckling:  { sec: 25.0, refN: 32 },   /* v0.8.0 voxel FE, 3-axis pool @ N=32: Schwarz P (dense) 34 s / axis in a
+                                           slow single-thread sandbox, axes in parallel; sheets ~12 s */
   nonlinear: { sec: 90.0, refN: 16, refCap: 0.05 }  /* sync-bound crush @ N=16, 5% cap */
 };
 
 /* Calibration: measured seconds-per-design keyed by mode → { sec, N, cap }.
    Persisted so the estimate is already calibrated on the next page load. */
-var RUN_CALIB_KEY = 'f13ld.lab.timing.v2';   /* Sprint A — v1 values were biased low (cached designs counted) */
+var RUN_CALIB_KEY = 'f13ld.lab.timing.v3';   /* v0.8.0 — buckling method changed (voxel FE); drop spectral calibrations */
 var RUN_CALIB = (function(){
   try { var j = localStorage.getItem(RUN_CALIB_KEY); if (j) return JSON.parse(j); } catch(e){}
   return {};

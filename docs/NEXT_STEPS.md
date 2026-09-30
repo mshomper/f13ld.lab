@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.7.2 (branch `sprint-a-v0.7.2`) · 2026-09-30
+**As of:** v0.8.0 (Sprint B1 — voxel-FE buckling) · 2026-09-30
 **Owner direction:** Matt Shomper directs implementation; **analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
 This file replaces the v0.7.1 handoff. The old plan (warm-start the inner solve, real FFT, build LOBPCG, Bloch–Floquet) is obsolete: LOBPCG already shipped, and the buckling method itself was found to be invalid (below).
@@ -9,13 +9,16 @@ This file replaces the v0.7.1 handoff. The old plan (warm-start the inner solve,
 
 ## 0. State
 
-- **Sprint A shipped** (see README *What's new in v0.7.2*): axis-convention fix, Voce material live, yield-detection fixes, free-sided buckling prestress, converged eigen-solve, density display, run reliability, hyperuniform periodic wrap, 45-entry AM material library (`15c-materials.js`, `docs/MATERIALS.md`).
-- **Buckling is invalid as computed.** The spectral (Willot) operator has 510 zero-energy patterns on an all-solid 8³ cell (3 are legitimate); the eigen-solve finds them, and only the soft void resists them, so the critical load scales with the void stiffness (Schwarz P N=16: 4.4 / 43.7 / 422 / 3270 MPa for void 1e-5…1e-2). Elastic homogenization is unaffected (validated).
-- **Validated replacement prototype:** `proto/fe-buckling/` — matrix-free voxel FE, incompatible-modes hex (H8I), void removed, multigrid. Plate benchmark within 1.2 % of the exact answer down to 1-voxel walls. Plan and numbers: `docs/SPRINT_B_PROPOSAL.md`.
+- **v0.7.2 (Sprint A)** — axis-convention fix, Voce material, yield-detection fixes, free-sided loading, reliability, hyperuniform wrap, 45-entry material library.
+- **v0.8.0 (Sprint B1)** — buckling by matrix-free voxel FE (`16h-buckling-fe.js`, H8I, void removed, multigrid, LOBPCG) on the 16e worker pool; spectral buckling kept only as `opts.method = 'spectral'`. Cards show yield- vs buckling-limited. Self-test: `runFEBucklingSelfTest(32)`.
 
-## 1. Next — Sprint B (awaiting approval)
+## 1. Next — Sprint B2/B3
 
-B1 CPU voxel-FE buckling (`16h`) in the 16e worker pool → B2 split axes across idle cores → B3 WebGPU port. Details, validation targets and UI changes: `docs/SPRINT_B_PROPOSAL.md` §4.
+- **B2 — idle cores.** One axis per worker leaves most of an 8-core pool idle for a single design. Split the element loop of an axis across 2+ workers (ordinary messages were 96–99 % efficient in the speed study; SharedArrayBuffer is not available on GitHub Pages).
+- **B2 — memory.** A dense N=64 design peaks near 0.5 GB per worker (multigrid level-1 element matrices ≈150 MB, LOBPCG vectors); 3 designs × 3 axes on 7 workers can approach 3–4 GB. Cap concurrent N=64 FE tasks by `navigator.deviceMemory`, or store coarse element matrices in f32.
+- **B2 — grid choice.** Replace the spectral-era under-resolution guard and the PRONE/OK predictor pill with an FE-appropriate rule (H8I resolves 1-voxel walls; flag when N=32 and N=64 disagree by more than 10 %).
+- **B2 — multigrid on stochastic geometry.** Multigrid is strong on TPMS (27–45 prestress PCG iterations for 3 solves at N=32) but weak on grain designs: spinodoid 1,184 and hyperuniform 1,865 iterations for 6 solves at N=32, and 140–190 LOBPCG iterations on hyperuniform. Likely causes: Galerkin coarse elements over thin, irregular struts and a fixed Chebyshev ratio. Try a stronger smoother / more levels' smoothing, or aggregation-based coarsening; and share the prestress across the 3 axis workers (today each worker repeats it).
+- **B3 — WebGPU voxel FE.** Gather → constant 24×24 multiply → scatter per element, per-node gather (no atomics), multigrid on GPU; CPU path is the reference.
 
 ## 2. Queued
 
@@ -28,7 +31,8 @@ B1 CPU voxel-FE buckling (`16h`) in the 16e worker pool → B2 split axes across
 ## 3. Validation harness
 
 - `runAxisConventionGPUTest()` — z-laminate; Ez must be the soft axis and match the CPU oracle axis by axis.
-- `F13LD_buckleBench()` — Schwarz P through the CPU worker path (spectral; to be replaced in B1).
+- `runFEBucklingSelfTest(32)` — zero-energy count (must be 3) + periodic plate benchmark vs the exact continuum answer (within ~1 % at N=32).
+- `F13LD_buckleBench(recipe, N)` — any recipe through the real worker pool (voxel FE by default).
 - Node harnesses: load the numbered solver files into one scope with small `window/document/performance` shims (see `proto/fe-buckling/h.js`).
 
 ## 4. Conventions (do not violate)

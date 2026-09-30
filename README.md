@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.7.2 · alpha · **Sprint A complete** · axis-convention fix · AM material library · Voce hardening live · free-sided buckling · ⚠ buckling values are a known discretization artifact pending the voxel-FE solver (see *Known issue*)
+**Status:** v0.8.0 · alpha · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -40,9 +40,16 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
-## Known issue — buckling (v0.7.2)
+## What's new in v0.8.0
 
-The spectral buckling solver finds **spurious void-controlled modes**: the computed critical load scales with the void stiffness (Schwarz P, N=16: 4.4 / 43.7 / 422 / 3270 MPa for void ratios 1e-5 / 1e-4 / 1e-3 / 1e-2), with essentially all of the mode's strain energy in the void. The Willot spectral operator has hundreds of zero-energy patterns in the solid (510 in an 8³ all-solid cell, versus 3 legitimate rigid translations). Buckling Strength, Critical Strain and the Buckling-to-Yield Ratio therefore do **not** describe the structure; earlier "buckling-limited" readings (including hyperuniform's 11.7 MPa) were this artifact. A matrix-free voxel finite-element solver (incompatible-modes hex, void removed, multigrid) has been prototyped and validated against an analytic plate benchmark to within 1.2 % down to 1-voxel walls; it is the next sprint. See `docs/NEXT_STEPS.md`.
+**Buckling rebuilt on voxel finite elements.** The spectral buckling operator had hundreds of zero-energy patterns in the solid (510 on an all-solid 8³ cell; 3 are legitimate rigid translations), so its eigen-solve found void-controlled artifacts: the critical load tracked the stiffness assigned to empty space (Schwarz P, N=16: 4.4 / 43.7 / 422 / 3270 MPa for void ratios 1e-5 … 1e-2). Every buckling number before v0.8.0 came from that artifact.
+
+- **Method (`16h-buckling-fe.js`).** One incompatible-modes hex (H8I, the Abaqus C3D8I family) per solid voxel; void voxels have no elements. Constant 24×24 element matrix, matrix-free, multigrid-preconditioned prestress and LOBPCG, free-sided uniaxial loading, largest connected component always kept.
+- **Validated.** Periodic plate benchmark within 1.1 % of the exact continuum answer at N=32 (≈4 % at N=16), accurate down to 1-voxel walls; exactly 3 zero-energy modes; results identical to the Sprint B prototype (`proto/fe-buckling/`). Console: `runFEBucklingSelfTest(32)`.
+- **Fast, and fastest on sparse designs** (void costs nothing): Schwarz P at N=32 ≈ 34 s per axis in a slow single-thread sandbox; P and gyroid sheets ≈ 12 s. Axes run in parallel on the worker pool.
+- **What it says about typical Ti lattices:** Schwarz P solid (ρ 0.50), P sheet (ρ 0.14) and gyroid sheet (ρ 0.13) all yield first — buckling strength 9–25× the yield strength.
+- **Cards.** Every design card now shows its governing failure: *Yield-limited* (jade) or *Buckling-limited* (amber), with the buckling-to-yield factor; *est.* when the yield comes from the solid material rather than a crush run; *Limit undetermined* when the crush never reached yield.
+- The spectral path remains for comparison only (`opts.method = 'spectral'`); the spectral GPU port (16d) is disabled for the FE default.
 
 ## What's new in v0.7.2
 
@@ -50,7 +57,7 @@ The spectral buckling solver finds **spurious void-controlled modes**: the compu
 - **Axis convention fixed.** The elastic solver relabeled X↔Z (`SWAP = [2,1,0,5,4,3]`) to hide a viewer transposition; on anisotropic designs Ex/Ez, Gyz/Gxy, the Poisson ratios, the stiffness surface and the "ZZ" crush axis were mislabeled, and stress / mode / α overlays sat on the wrong voxels. The solver frame is now the physical frame, the viewer transposes solver fields at upload, and `runAxisConventionGPUTest()` (z-laminate) guards it.
 - **Voce hardening now runs.** Recipe materials replaced the Ti-6Al-4V default instead of overriding it field by field, so every crush used 880 MPa + linear hardening. Yield on Schwarz P N=8: 201.8 → 233.2 MPa.
 - **Yield detection.** Implicit (0,0) origin for the 0.2 % offset, knee step refinement, honest step-budget truncation, lateral-stress miss recorded, CPU oracle now runs the GPU's macro loop.
-- **Buckling.** Free-sided (uniaxial-stress) prestress by superposition of the axis solves (6 when shear-coupled); eigen-solve cap 30 → 200 with a leading-mode residual guard and a "not converged" flag (the 30-iteration cap had been stopping 2–9× high). The λ tile is now **Critical Strain**. See *Known issue* above.
+- **Buckling.** Free-sided (uniaxial-stress) prestress by superposition of the axis solves (6 when shear-coupled); eigen-solve cap 30 → 200 with a leading-mode residual guard and a "not converged" flag (the 30-iteration cap had been stopping 2–9× high). The λ tile is now **Critical Strain**. (Superseded by voxel-FE buckling in v0.8.0.)
 - **Labels.** "J2 + geom" → "J2 plasticity (small strain)" — there is no geometric nonlinearity in the crush.
 
 **Materials.** A **Material** pill applies one of 45 AM materials (Ti-6Al-4V Grades 5/23 in as-built, stress-relieved, annealed, HIP and EBM conditions; CP-Ti; Ti-6Al-7Nb; β-Ti; 316L; 17-4PH; 15-5PH; maraging; IN718; IN625; Hastelloy X; Haynes 282; AlSi10Mg; Scalmalloy; A20X; 6061-RAM2; CoCrMo; Ta; Nb; GRCop-42; CuCrZr; PA12; PEEK; PEKK; NiTi) to every design, with fitted Voce hardening. Materials without a usable yield model (most polymers, NiTi) skip the crush with a reason. Values and sources: `docs/MATERIALS.md`.

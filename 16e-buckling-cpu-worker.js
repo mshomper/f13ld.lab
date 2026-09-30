@@ -1,6 +1,8 @@
 /* ============================================================
    F13LD.lab · 16e-buckling-cpu-worker.js
-   On-demand CPU buckling (16c oracle) on a Web Worker POOL.
+   On-demand CPU buckling on a Web Worker POOL.  v0.8.0: each task runs
+   the voxel-FE solver (16h) by default; opts.method = 'spectral' runs the
+   legacy 16c path (void-artifact prone — comparison only).
 
    16c is a dense-validated REFERENCE solver, not interactive —
    each axis is a CPU eigenproblem of tens of seconds.  The three
@@ -54,6 +56,12 @@
    convergence flag is carried to the card, which turns amber if the cap is
    still hit. */
 var BUCKLE_CPU_DEFAULTS = {
+  /* v0.8.0 — 'fe' = voxel finite elements (16h, H8I, void removed): the
+     production method.  'spectral' = the legacy 16c operator, kept only for
+     comparison; its eigen-solve finds void-controlled artifacts (critical
+     load tracks the void stiffness).  The keys below this line configure the
+     spectral path only; the FE path uses FE_BUCKLE_DEFAULTS in 16h. */
+  method:    'fe',
   loading:   'uniaxial',   /* free-sided uniaxial stress; 'confined' = legacy laterally-confined strain */
   block:     4,
   eigIters:  200,
@@ -70,23 +78,30 @@ var BUCKLE_WORKER_FILES = [
   '14a-connectivity.js',
   '13-kernels.js',
   '13b-kernels-new.js',
-  '16c-buckling-cpu-ref.js'
+  '16c-buckling-cpu-ref.js',   /* dense helpers (Jacobi, Cholesky) + legacy spectral path */
+  '16h-buckling-fe.js'         /* v0.8.0 production buckling: voxel FE */
 ];
 
 /* Bump on any solver-file change so the worker's importScripts refetches
    instead of serving a stale cached copy (the blob worker has its own cache,
    separate from the main page). */
-var BUCKLE_SOLVER_VERSION = 'uniaxial-load-2';
+var BUCKLE_SOLVER_VERSION = 'fe-h8i-1';
 
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes
    the task id so the pool can route the reply.  Ships the mode field as
    transferable Float32Arrays. */
 var BUCKLE_WORKER_ONMESSAGE =
+  'var _feRelease = null;\n' +
   'onmessage = function(e){\n' +
   '  var job = e.data, N = job.N, opts = job.opts || {};\n' +
+  '  if (_feRelease){ clearTimeout(_feRelease); _feRelease = null; }\n' +
   '  try {\n' +
-  '    var one = homogenizeBucklingCPU(job.recipe, N, opts);\n' +
+  '    var fe = (opts.method || "fe") === "fe";\n' +
+  '    var one = fe ? homogenizeBucklingFE(job.recipe, N, { axes: opts.axes })\n' +
+  '                 : homogenizeBucklingCPU(job.recipe, N, opts);\n' +
+  '    /* free the FE mesh / multigrid / prestress cache if no further axis of this design arrives soon */\n' +
+  '    if (fe) _feRelease = setTimeout(function(){ _feBuckleCache = null; _feRelease = null; }, 3000);\n' +
   '    var pa = one.perAxis[0];\n' +
   '    var mode = null, transfer = [];\n' +
   '    if (pa.mode){\n' +
@@ -96,7 +111,7 @@ var BUCKLE_WORKER_ONMESSAGE =
   '      mode = { u_prime:[ux,uy,uz], sigma_vm:null, N:N, eps_bar:[0,0,0] };\n' +
   '      transfer.push(ux.buffer, uy.buffer, uz.buffer);\n' +
   '    }\n' +
-  '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, Eaxis:pa.Eaxis, cgIters:pa.cgIters, eigIters:pa.eigIters, eigConverged:pa.eigConverged, mWave:pa.mWave, prestress:(one.prestress || null) }, mode: mode, rho: one.rho, loading: one.loading, skip_reason: one.skip_reason }, transfer);\n' +
+  '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, Eaxis:pa.Eaxis, cgIters:pa.cgIters, eigIters:pa.eigIters, eigConverged:pa.eigConverged, mWave:pa.mWave, prestress:(one.prestress || null) }, mode: mode, rho: one.rho, loading: one.loading, method: (one.method || "spectral"), skip_reason: one.skip_reason }, transfer);\n' +
   '  } catch (err){ postMessage({ id: job.id, type:"error", message: (err && err.message) || String(err) }); }\n' +
   '};\n';
 
@@ -249,7 +264,7 @@ function computeBucklingCPU(recipe, N, opts, onProgress){
   var merged = {}, k;
   for (k in BUCKLE_CPU_DEFAULTS){ if (BUCKLE_CPU_DEFAULTS.hasOwnProperty(k)) merged[k] = BUCKLE_CPU_DEFAULTS[k]; }
   if (opts){ for (k in opts){ if (opts.hasOwnProperty(k)) merged[k] = opts[k]; } }
-  N = N || 8;
+  N = N || 32;
   var axes = merged.axes || [0, 1, 2];
   var pool = getBucklingPool();
   var done = 0;
@@ -269,11 +284,12 @@ function computeBucklingCPU(recipe, N, opts, onProgress){
   }
 
   return Promise.all(tasks).then(function(msgs){
-    var perAxis = [], modes = {}, lambdaCr = Infinity, critAxis = null, critSbar = 0, rho = 0, skipReason = null, loading = merged.loading;
+    var perAxis = [], modes = {}, lambdaCr = Infinity, critAxis = null, critSbar = 0, rho = 0, skipReason = null, loading = merged.loading, method = merged.method || 'fe';
     for (var i = 0; i < msgs.length; i++){
       var m = msgs[i];
       rho = m.rho;
       if (m.loading) loading = m.loading;
+      if (m.method) method = m.method;
       if (m.skip_reason && !skipReason) skipReason = m.skip_reason;
       perAxis.push(m.perAxis);
       if (m.mode){
@@ -302,17 +318,17 @@ function computeBucklingCPU(recipe, N, opts, onProgress){
     var pcr = isFinite(lambdaCr) ? lambdaCr * Math.abs(critSbar) : Infinity;   /* critical axial stress, MPa (both loadings) */
     var eigConverged = true;
     for (var ec = 0; ec < perAxis.length; ec++) if (perAxis[ec].eigConverged === false) eigConverged = false;
-    return { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: rho, loading: loading, perAxis: perAxis, modes: modes, skip_reason: skipReason, eigConverged: eigConverged };
+    return { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: rho, loading: loading, method: method, perAxis: perAxis, modes: modes, skip_reason: skipReason, eigConverged: eigConverged };
   });
 }
 
 /* F13LD_buckleBench — console helper to measure this machine's real
    buckling timing (now pool-parallel across axes).
-     F13LD_buckleBench()                     // Schwarz P demo, N=8
-     F13LD_buckleBench(DEMO_SPINODOID, 16)   // any demo recipe, N=16 */
+     F13LD_buckleBench()                     // Schwarz P demo, N=32, voxel FE
+     F13LD_buckleBench(DEMO_SPINODOID, 64)   // any demo recipe / grid */
 function F13LD_buckleBench(recipe, N){
   recipe = recipe || (typeof DEMO_SCHWARZ_P !== 'undefined' ? DEMO_SCHWARZ_P : null);
-  N = N || 8;
+  N = N || 32;
   if (!recipe){ console.warn('[buckle bench] no recipe available'); return; }
   var info = F13LD_bucklePoolInfo();
   var t0 = (typeof performance !== 'undefined') ? performance.now() : Date.now();

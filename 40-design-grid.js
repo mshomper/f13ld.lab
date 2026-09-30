@@ -111,6 +111,31 @@ function preRunStats(d, mode){
   ];
 }
 
+/* v0.8.0 — card-header pill: which failure governs this design.
+   Ratio = buckling strength / yield strength (applyBuckleYield, 50-controls):
+   ≥ 1 → yields first (yield-limited), < 1 → buckles first.  When the crush
+   never reached yield the ratio is an upper bound, so ≥ 1 is undetermined.
+   Without a crush result the yield is the solid material's (marked est.). */
+function governingLimitPill(d){
+  var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
+  if (!bk || bk.error || bk.skip_reason || !isFinite(bk.pcr_py)) return '';
+  var r = bk.pcr_py, fx = (r >= 10) ? r.toFixed(0) : (r >= 1 ? r.toFixed(1) : r.toFixed(2));
+  var est = bk.provisional && !bk.yieldBound ? ' · est.' : '';
+  var cls, txt, tip;
+  if (bk.yieldBound && r >= 1){
+    cls = 'unk'; txt = 'Limit undetermined';
+    tip = 'Buckling strength is at least ' + fx + '× the highest stress the crush reached without yielding. Raise the crush strain cap to find the yield.';
+  } else if (r >= 1){
+    cls = 'yield'; txt = 'Yield-limited · buckles at ' + fx + '× yield' + est;
+    tip = 'The structure yields before it buckles: buckling strength is ' + fx + '× the yield strength' + (est ? ' (yield estimated from the solid material; run the Nonlinear crush for the design\'s own yield)' : '') + '.';
+  } else {
+    cls = 'buckle'; txt = 'Buckling-limited · buckles at ' + fx + '× yield' + est;
+    tip = 'The structure buckles before it yields: buckling strength is only ' + fx + '× the yield strength' + (est ? ' (yield estimated from the solid material)' : '') + '.';
+  }
+  if (bk.eigConverged === false){ txt += ' · not converged'; tip += ' The buckling eigen-solve hit its iteration cap; treat the number with care.'; }
+  return '<span class="dc-limit-pill ' + cls + '" title="' + tip + '">' + txt + '</span>';
+}
+
 function statsForDesign(d, mode){
   var r = d.results;
   if (!r){
@@ -510,6 +535,8 @@ function renderDesignGrid(){
                      : ' \u2014 stocky, resolves at the coarse grid');
       sourceText += ' <span class="dc-predict-pill ' + _bpCls + '" title="' + _bpTip + '">' + _bpTxt + '</span>';
     }
+    /* v0.8.0 — governing failure mode, on every tab: yield vs buckling. */
+    var limitPill = governingLimitPill(d);
 
     html += '<div class="design-col">' +
       '<div class="dc-head">' +
@@ -517,6 +544,7 @@ function renderDesignGrid(){
           '<span class="label">'+d.label+'</span>' +
           '<span class="title">'+d.title+'</span>' +
           '<span class="source">'+sourceText+'</span>' +
+          limitPill +
         '</div>' +
         '<div class="dc-controls">' +
           '<span class="dc-status-dot '+statusClass+'" title="'+statusClass+'"></span>' +
