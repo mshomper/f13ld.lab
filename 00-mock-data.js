@@ -39,15 +39,17 @@ var MOCK_DESIGNS = [
     results:null
   },
   {
-    id:'demo-rda9',
+    /* v0.8.0 — was the reaction-diffusion 'Trabecular · GS' demo, which has
+       no Lab geometry generator and only ever showed a static drawing. */
+    id:'demo-hu7c',
     label:'DESIGN · C',
-    title:'Trabecular · GS',
-    source:'demo · F13LD.Grain JSON · RD',
+    title:'Hyperuniform · trabecular',
+    source:'demo · F13LD.Grain JSON · HU',
     family:'grain',
-    variant:'reaction_diffusion',
-    topology:'sheet',
+    variant:'hyperuniform',
+    topology:'strut',
     rho_rel:null,
-    cell_mm:4.0,
+    cell_mm:5.0,
     mat_es_gpa:110, mat_nu:0.30,
     color:'#e879c9',
     slot:2,
@@ -100,6 +102,13 @@ function loadDesigns(){
     if (!p || p.v !== 1 || !Array.isArray(p.designs)) return null;
     for (var i = 0; i < p.designs.length; i++){
       if (!p.designs[i] || !p.designs[i].id) return null;   // shape guard
+      /* v0.8.0 migration: a saved copy of the old reaction-diffusion demo
+         becomes the hyperuniform demo that replaced it (same slot). */
+      if (p.designs[i].id === 'demo-rda9'){
+        var slotOld = p.designs[i].slot, hu = null;
+        for (var m = 0; m < MOCK_DESIGNS.length; m++) if (MOCK_DESIGNS[m].id === 'demo-hu7c') hu = MOCK_DESIGNS[m];
+        if (hu){ var cp = {}; for (var kk in hu) if (hu.hasOwnProperty(kk)) cp[kk] = hu[kk]; cp.slot = slotOld; p.designs[i] = cp; if (p.baselineId === 'demo-rda9') p.baselineId = 'demo-hu7c'; }
+      }
     }
     return p;
   } catch (e){ return null; }

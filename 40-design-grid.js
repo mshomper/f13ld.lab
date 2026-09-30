@@ -121,16 +121,17 @@ function governingLimitPill(d){
   if (!bk || bk.error || bk.skip_reason || !isFinite(bk.pcr_py)) return '';
   var r = bk.pcr_py, fx = (r >= 10) ? r.toFixed(0) : (r >= 1 ? r.toFixed(1) : r.toFixed(2));
   var est = bk.provisional && !bk.yieldBound ? ' · est.' : '';
+  var axTxt = bk.ratioAxis ? ' (' + String(bk.ratioAxis).toUpperCase() + ' buckling vs ' + String(bk.ratioAxis).toUpperCase() + ' yield)' : '';
   var cls, txt, tip;
   if (bk.yieldBound && r >= 1){
     cls = 'unk'; txt = 'Limit undetermined';
     tip = 'Buckling strength is at least ' + fx + '× the highest stress the crush reached without yielding. Raise the crush strain cap to find the yield.';
   } else if (r >= 1){
     cls = 'yield'; txt = 'Yield-limited · buckles at ' + fx + '× yield' + est;
-    tip = 'The structure yields before it buckles: buckling strength is ' + fx + '× the yield strength' + (est ? ' (yield estimated from the solid material; run the Nonlinear crush for the design\'s own yield)' : '') + '.';
+    tip = 'The structure yields before it buckles: buckling strength is ' + fx + '× the yield strength' + axTxt + (est ? ' (yield estimated from the solid material; run the Nonlinear crush for the design\'s own yield)' : '') + '.';
   } else {
     cls = 'buckle'; txt = 'Buckling-limited · buckles at ' + fx + '× yield' + est;
-    tip = 'The structure buckles before it yields: buckling strength is only ' + fx + '× the yield strength' + (est ? ' (yield estimated from the solid material)' : '') + '.';
+    tip = 'The structure buckles before it yields: buckling strength is only ' + fx + '× the yield strength' + axTxt + (est ? ' (yield estimated from the solid material)' : '') + '.';
   }
   if (bk.eigConverged === false){ txt += ' · not converged'; tip += ' The buckling eigen-solve hit its iteration cap; treat the number with care.'; }
   return '<span class="dc-limit-pill ' + cls + '" title="' + tip + '">' + txt + '</span>';
@@ -239,7 +240,7 @@ function zenerDescriptor(z){
    ---------------------------------------------------------- */
 function familyKey(d){
   if (d.variant === 'spinodoid') return 'spinodoid';
-  if (d.variant === 'reaction_diffusion') return 'trabecular';
+  if (d.variant === 'reaction_diffusion' || d.variant === 'hyperuniform') return 'trabecular';
   if (d.family === 'tpms') return 'tpms';
   if (d.family === 'grain') return 'grain';
   return 'tpms';

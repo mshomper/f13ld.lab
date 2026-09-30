@@ -720,7 +720,20 @@ function applyBuckleYield(res, designId){
   var matSel = (typeof materialForSolver === 'function') ? materialForSolver(MATERIAL_STATE.id) : null;
   var sigY0Mat = (matSel && isFinite(matSel.sigY0_MPa)) ? matSel.sigY0_MPa : SIGMA_Y_TI64_MPA;
   var sigY = haveY ? nl.sigma_y_eff : (boundBasis != null ? boundBasis : sigY0Mat);
-  res.pcr_py = isFinite(res.pcr) ? res.pcr / sigY : Infinity;
+  /* v0.8.0 — compare like with like: when a crush result exists its yield is
+     for ONE axis, so divide that axis's buckling strength by it (the weakest-
+     axis pcr can sit on a different axis; spinodoid: X buckling over Z yield).
+     Without a crush the yield is the isotropic solid's, so the weakest axis. */
+  var pcrRef = res.pcr, ratioAxis = res.critAxis;
+  if (nl && !nl.error && nl.axis && res.perAxis){
+    for (var pa = 0; pa < res.perAxis.length; pa++){
+      var q = res.perAxis[pa];
+      if (q && q.axis === nl.axis && isFinite(q.lambda) && isFinite(q.sBar)){ pcrRef = q.lambda * Math.abs(q.sBar); ratioAxis = q.axis; }
+    }
+  }
+  res.pcr_ratio_ref = pcrRef;
+  res.ratioAxis = ratioAxis;
+  res.pcr_py = isFinite(pcrRef) ? pcrRef / sigY : Infinity;
   res.failure_mode = (res.pcr_py >= 1) ? 'Yield-limited' : 'Buckling-limited';
   res.sigma_y_ref = sigY;
   res.provisional = !haveY;
