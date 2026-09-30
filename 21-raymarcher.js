@@ -914,7 +914,8 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
    Quantization step at typical |u\'|_max=0.8 is 0.0031 — invisible
    under the warp visualization at any practical amp setting.
 
-   Storage: voxel idx = (iz*N + iy)*N + ix matches buildVoxels and
+   Storage: fields arrive in buildVoxels order (ix*N + iy)*N + iz and are
+   transposed by fieldsetToTexOrder to (iz*N + iy)*N + ix, matching
    the geometry field texture, so the same UV samples align.
 
    σ_VM is captured here but not consumed yet — A.3 wires it into
@@ -945,10 +946,39 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
    The design-grid uses the same stressMaxOverride for the colorbar
    label so the colorbar legend and the shader colors agree.
 
-   Storage: voxel idx = (iz*N + iy)*N + ix matches buildVoxels and
+   Storage: fields arrive in buildVoxels order (ix*N + iy)*N + iz and are
+   transposed by fieldsetToTexOrder to (iz*N + iy)*N + ix, matching
    the geometry field texture, so the same UV samples align.  */
+/* Axis-convention fix (Sprint A, v0.7.2) — solver fields (elastic u'/σ_VM,
+   buckling mode, nonlinear α) are stored in buildVoxels order
+   idx = i*N² + j*N + k with physical x = i (slowest) and z = k (fastest).
+   WebGL texImage3D wants x fastest: tex = i + j*N + k*N², which is the order
+   buildRawField already uses for the geometry texture.  Uploading solver
+   arrays unconverted transposed X↔Z against the geometry, which is what the
+   old SWAP in 16b was compensating for.  Returns a NEW array — never mutate
+   the caller's field (fieldsets are re-uploaded on every axis toggle). */
+function solverToTexOrder(arr, N) {
+  var out = new Float32Array(N * N * N);
+  var NN = N * N, s = 0;
+  for (var i = 0; i < N; i++)
+    for (var j = 0; j < N; j++)
+      for (var k = 0; k < N; k++)
+        out[i + j * N + k * NN] = arr[s++];
+  return out;
+}
+function fieldsetToTexOrder(fs) {
+  var N = fs.N, out = {};
+  for (var key in fs) if (Object.prototype.hasOwnProperty.call(fs, key)) out[key] = fs[key];
+  if (fs.u_prime && fs.u_prime.length === 3 && fs.u_prime[0] && fs.u_prime[0].length === N * N * N) {
+    out.u_prime = [solverToTexOrder(fs.u_prime[0], N), solverToTexOrder(fs.u_prime[1], N), solverToTexOrder(fs.u_prime[2], N)];
+  }
+  if (fs.sigma_vm && fs.sigma_vm.length === N * N * N) out.sigma_vm = solverToTexOrder(fs.sigma_vm, N);
+  return out;
+}
+
 LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
   if (this.failed || !fieldsObj) return;
+  fieldsObj = fieldsetToTexOrder(fieldsObj);   /* solver order → texture order (x fastest) */
   var gl = this.gl;
   var N  = fieldsObj.N;
   var N3 = N*N*N;
@@ -1109,6 +1139,7 @@ LabRaymarcher.prototype.updateScalarField = function(arr, N, capOverride) {
   if (this.failed || !arr) return;
   var gl = this.gl, N3 = N * N * N;
   if (arr.length !== N3) { console.warn('[LabRaymarcher] updateScalarField: size mismatch'); return; }
+  arr = solverToTexOrder(arr, N);   /* solver order → texture order (x fastest) */
   this._u.texN = N;
   var svArr = dilateSigmaVMByOneVoxel(arr, N);
   var svMin = 0;

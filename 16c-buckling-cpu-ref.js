@@ -25,6 +25,38 @@
    λ_cr is reported as the minimum positive λ over the three
    normal compression axes (xx / yy / zz).
 
+   ── Loading (opts.loading) ──────────────────────────────
+   'uniaxial' (DEFAULT) — free-sided uniaxial STRESS.  For axis a
+       the reference prestress is the field under a macro stress
+       along e_a only, every other macro stress component zero
+       (lateral faces traction-free, shear free) — the same load
+       case as the nonlinear crush tab and physiological
+       compression.  Built by superposition (σ⁰ is linear in ε̄):
+         σ⁰_uni = E_a·Σ_j S[j][a]·F^(j),  F^(j) = σ⁰ for ε̄ = −e_j,
+       with C[:,j] = −σ̄(F^(j)) the effective stiffness at the
+       BUCKLING grid, S = C⁻¹ and E_a = 1/S[a][a] the uniaxial
+       modulus (see bk_uniaxialPrestressSet).  The E_a scaling makes
+       the reference state "unit compressive AXIAL STRAIN, laterals
+       free": σ̄ = −E_a·e_a.  (Normalising to a unit STRESS instead
+       — σ̄ = −1 MPa — puts σ⁰ ~1e-4·K in scale, and bk_lobpcgGen's
+       relative near-null drop then discards the whole
+       preconditioned-residual block; measured: stalls at iter 2
+       with λ off by >2000×.  Strain units keep σ⁰ at the same scale
+       as the validated confined path.)
+       Units: λ = critical axial macro STRAIN (dimensionless, same
+         meaning as confined), perAxis[].sBar = σ̄_axis = −E_a (MPa),
+         pcr = λ·E_a = critical uniaxial stress (MPa),
+         perAxis[].Eaxis = E_a (MPa).
+   'confined' — legacy laterally-confined loading, kept for
+       validation/comparison: unit compressive macro STRAIN on one
+       normal axis, all other macro strains zero (triaxial
+       prestress).  λ = critical axial strain, sBar = σ̄_axis per unit
+       strain (confined modulus, includes lateral-constraint stiffening),
+       pcr = λ·|sBar| (critical AXIAL stress under confinement),
+       Eaxis = |sBar|.
+   In both modes λ is the critical axial strain and pcr = λ·|sBar_axis|
+   (MPa), so every consumer (16e aggregation, UI tiles) is unchanged.
+
    ── Derivative convention (scale-invariant) ─────────────
    Spectral derivatives use the SIGNED integer wavenumber κ
    (κ = k for k ≤ N/2, else k − N), Nyquist component zeroed:
@@ -289,6 +321,7 @@ function runBucklingOperatorSelfTest(N) {
   N = N || 8;
   var N3 = N * N * N;
   var ws = getBucklingWorkspaceCPU(N);
+  var prevScheme = ws.scheme;          /* restored on exit: the workspace is a cached singleton */
   ws.scheme = 'continuous';            /* analytic gates G1–G3/G6 assume continuous-κ eigenvalues */
 
   var Es = 110000, nu = 0.30;
@@ -381,6 +414,7 @@ function runBucklingOperatorSelfTest(N) {
   /* G8 — dense assembly symmetry at small N */
   var Nd = 4, Nd3 = Nd*Nd*Nd, dof = 3*Nd3;
   var wsd = getBucklingWorkspaceCPU(Nd);
+  var prevSchemeD = (wsd === ws) ? prevScheme : wsd.scheme;
   wsd.scheme = 'continuous';
   var solidD = new Uint8Array(Nd3); solidD.fill(1);
   var sig0d = []; for (var c3=0;c3<6;c3++){ var a=new Float64Array(Nd3); for (var i5=0;i5<Nd3;i5++) a[i5]=Math.sin(i5*0.7+c3)*100; sig0d.push(a); }
@@ -403,6 +437,12 @@ function runBucklingOperatorSelfTest(N) {
   function maxAsym(M){ var mx=0; for (var r=0;r<dof;r++) for (var cc=0;cc<dof;cc++){ var d=Math.abs(M[cc][r]-M[r][cc]); var sc=Math.max(Math.abs(M[cc][r]),Math.abs(M[r][cc]),1e-12); if (sc>1e-6){ var rr=d/sc; if (rr>mx) mx=rr; } } return mx; }
   var asymK = maxAsym(Kdense), asymKg = maxAsym(Kgdense);
   gates.G8_dense_symmetry = { dof: dof, maxRelAsymK: asymK, maxRelAsymKg: asymKg, pass: asymK < 1e-7 && asymKg < 1e-7 };
+
+  /* Restore the cached workspaces' scheme.  Leaving 'continuous' on the
+     N=4 singleton made a later runBucklingCPUTest in the same process fail
+     B2 (its dense reference ran continuous while bucklingFromSolid ran
+     Willot).  undefined = default Willot. */
+  ws.scheme = prevScheme; wsd.scheme = prevSchemeD;
 
   var passed = true;
   var names = Object.keys(gates);
@@ -722,7 +762,14 @@ function bk_lobpcgGen(applyA, applyB, applyT, n, m, opts) {
   }
 
   var P = [];                    /* conjugate-direction block (empty on iter 0) */
-  var prevTheta = null, converged = false, lastIters = 0;
+  var prevTheta = null, converged = false, lastIters = 0, stableCount = 0;
+  /* opts.resTol: also require the leading pair's relative residual
+     ‖A x − θ B x‖ / (|θ|·‖B x‖) below this.  θ-change alone can read a
+     stalled start as converged (seen: N=8 stopped at 20 sweeps with λ 38×
+     too high).  Its θ lags the residual: on Schwarz P N=8 the leading
+     residual reads 0.91 at a stalled θ (8.6× off) and 0.40 once θ is within
+     0.3%, so a 0.25 guard separates the two (buckling default below). */
+  var resTol = opts.resTol || 0, resLead = Infinity;
 
   for (var it = 0; it < iters; it++) {
     lastIters = it + 1;
@@ -736,6 +783,7 @@ function bk_lobpcgGen(applyA, applyB, applyT, n, m, opts) {
       var theta = (Math.abs(xbx) > 1e-300) ? bk_dot(X[cc], ax, n) / xbx : 0;
       var w = new Float64Array(n);
       for (var i2 = 0; i2 < n; i2++) w[i2] = ax[i2] - theta * bx[i2];
+      if (cc === 0) resLead = Math.sqrt(bk_dot(w, w, n)) / Math.max(Math.abs(theta) * Math.sqrt(bk_dot(bx, bx, n)), 1e-300);
       var tw = new Float64Array(n); applyT(w, tw);
       if (proj) proj(tw);
       AX.push(ax); BX.push(bx); W.push(tw);
@@ -800,12 +848,19 @@ function bk_lobpcgGen(applyA, applyB, applyT, n, m, opts) {
     X = newX; P = newP;
 
     if (prevTheta && prevTheta.length === topThetas.length) {
+      /* opts.nConv: test only the leading nConv pairs (buckling needs just the
+         critical mode; trailing pairs converge slower and used to hold the
+         whole solve at the iteration cap).  opts.nStable: require that many
+         consecutive sub-tol iterations so a slow-moving stretch is not read
+         as convergence.  Defaults (all pairs, 1) keep the old behavior. */
+      var nConv = Math.min(opts.nConv || topThetas.length, topThetas.length);
       var maxd = 0;
-      for (var kk = 0; kk < topThetas.length; kk++) {
+      for (var kk = 0; kk < nConv; kk++) {
         var rel = Math.abs(topThetas[kk] - prevTheta[kk]) / Math.max(Math.abs(topThetas[kk]), 1e-30);
         if (rel > maxd) maxd = rel;
       }
-      if (maxd < tol) { converged = true; break; }
+      stableCount = (maxd < tol && (!resTol || resLead < resTol)) ? stableCount + 1 : 0;
+      if (stableCount >= (opts.nStable || 1)) { converged = true; break; }
     }
     prevTheta = topThetas;
   }
@@ -818,7 +873,7 @@ function bk_lobpcgGen(applyA, applyB, applyT, n, m, opts) {
     out.push({ theta: num / den, vec: X[cf] });
   }
   out.sort(function (p, q) { return q.theta - p.theta; });
-  out._iters = lastIters; out._converged = converged;
+  out._iters = lastIters; out._converged = converged; out._resLead = resLead;
   return out;
 }
 
@@ -1202,6 +1257,133 @@ function extractPrestressCPU(solid, C_s, C_v, N, axisVoigt, ws, opts) {
   return { sigma0: sigma0, sBar: sBar, cgIters: sol.iters, cgConverged: sol.converged };
 }
 
+/* bk_invSmall — Gauss-Jordan inverse (partial pivoting) of a small dense
+   row-major n×n matrix (n ≤ 6 here).  Returns null if singular. */
+function bk_invSmall(A, n) {
+  var M = new Float64Array(n * 2 * n), w = 2 * n;
+  for (var r = 0; r < n; r++) { for (var c = 0; c < n; c++) M[r * w + c] = A[r * n + c]; M[r * w + n + r] = 1; }
+  for (var col = 0; col < n; col++) {
+    var piv = col, best = Math.abs(M[col * w + col]);
+    for (var r2 = col + 1; r2 < n; r2++) { var v = Math.abs(M[r2 * w + col]); if (v > best) { best = v; piv = r2; } }
+    if (!(best > 1e-300)) return null;
+    if (piv !== col) for (var s = 0; s < w; s++) { var t = M[col * w + s]; M[col * w + s] = M[piv * w + s]; M[piv * w + s] = t; }
+    var inv = 1 / M[col * w + col];
+    for (var s2 = 0; s2 < w; s2++) M[col * w + s2] *= inv;
+    for (var r3 = 0; r3 < n; r3++) {
+      if (r3 === col) continue;
+      var f = M[r3 * w + col]; if (f === 0) continue;
+      for (var s3 = 0; s3 < w; s3++) M[r3 * w + s3] -= f * M[col * w + s3];
+    }
+  }
+  var out = new Float64Array(n * n);
+  for (var r4 = 0; r4 < n; r4++) for (var c4 = 0; c4 < n; c4++) out[r4 * n + c4] = M[r4 * w + n + c4];
+  return out;
+}
+
+/* ============================================================
+   bk_uniaxialPrestressSet — free-sided uniaxial-STRESS prestress
+   fields for the requested normal axes (opts.loading 'uniaxial').
+
+   1. Solve the 3 normal unit-compressive-strain cell problems
+      (extractPrestressCPU, axis 0..2) → basis fields F^(j) and
+      C[:,j] = −σ̄(F^(j)) — the effective stiffness at THIS grid and
+      void contrast, so the load is consistent with the operators the
+      eigensolve uses.
+   2. Shear coupling ratio  max|C[shear][normal]| / max|C[normal][normal]|.
+      Above opts.shearCouplingTol (default 1e-3) the 3 shear fields are
+      solved too and the full 6×6 is used; otherwise shear is treated as
+      decoupled (3×3 normal block, zero macro shear strain).
+   3. σ⁰_uni(a) = E_a·Σ_j S[j][a]·F^(j), S = C⁻¹ (C NOT symmetrized, so
+      the combination reproduces σ̄ = −E_a·e_a on the solved block to
+      roundoff), E_a = 1/S[a][a] → unit compressive axial strain with
+      free laterals (see header for why strain, not stress, units).
+      σ̄ of the combined field is re-measured by volume average and the
+      residual reported relative to E_a (normal block exact; in
+      decoupled mode the shear residual is bounded by the coupling
+      threshold).
+
+   Returns { byAxis: {a: {sigma0, sBar, Eaxis}}, C, S (6×6 row-major; zero
+   outside the solved block), shearCoupled, coupling, nSolves,
+   cgIters (sum), residNormal, residAll }.
+   ============================================================ */
+function bk_uniaxialPrestressSet(solid, C_s, C_v, N, axes, ws, opts) {
+  opts = opts || {};
+  var N3 = N * N * N;
+  var basis = [], cgIters = 0, j, P;
+  for (j = 0; j < 3; j++) { var pj = extractPrestressCPU(solid, C_s, C_v, N, j, ws, opts); basis.push(pj); cgIters += pj.cgIters; }
+
+  var Cn = 0, Csn = 0;
+  for (j = 0; j < 3; j++) {
+    for (P = 0; P < 3; P++) Cn  = Math.max(Cn,  Math.abs(basis[j].sBar[P]));
+    for (P = 3; P < 6; P++) Csn = Math.max(Csn, Math.abs(basis[j].sBar[P]));
+  }
+  var coupling = Csn / Math.max(Cn, 1e-300);
+  var tolC = (opts.shearCouplingTol != null) ? opts.shearCouplingTol : 1e-3;
+  var shearCoupled = coupling > tolC;
+  if (shearCoupled) {
+    for (j = 3; j < 6; j++) { var ps = extractPrestressCPU(solid, C_s, C_v, N, j, ws, opts); basis.push(ps); cgIters += ps.cgIters; }
+  }
+  var nb = basis.length;   /* 3 (decoupled) or 6 (full) */
+
+  /* C[P][j] = −σ̄_P(F^(j))  (F^(j) is for ε̄ = −e_j) */
+  var Cb = new Float64Array(nb * nb);
+  for (P = 0; P < nb; P++) for (j = 0; j < nb; j++) Cb[P * nb + j] = -basis[j].sBar[P];
+  var Sb = bk_invSmall(Cb, nb);
+  if (!Sb) throw new Error('uniaxial prestress: effective stiffness is singular at N=' + N);
+  /* 6×6 reporting copies: every solved column is filled (all 6 rows, so the
+     normal–shear block is visible even when decoupled); unsolved shear
+     columns stay 0.  S6 holds the inverse of the solved block only. */
+  var C6 = new Float64Array(36), S6 = new Float64Array(36);
+  for (j = 0; j < nb; j++) for (P = 0; P < 6; P++) C6[P * 6 + j] = -basis[j].sBar[P];
+  for (P = 0; P < nb; P++) for (j = 0; j < nb; j++) S6[P * 6 + j] = Sb[P * nb + j];
+
+  var byAxis = {}, residN = 0, residA = 0;
+  for (var ai = 0; ai < axes.length; ai++) {
+    var a = axes[ai];
+    var sig = [new Float64Array(N3), new Float64Array(N3), new Float64Array(N3),
+               new Float64Array(N3), new Float64Array(N3), new Float64Array(N3)];
+    var Ea = 1 / Sb[a * nb + a];                      /* uniaxial modulus along a (MPa) */
+    if (!(Ea > 0) || !isFinite(Ea)) throw new Error('uniaxial prestress: non-positive axial compliance on axis ' + a);
+    /* σ⁰_uni = Σ_j w_j·F^(j),  w_j = E_a·S[j][a]  (macro strain ε̄ = −E_a·S·e_a, ε̄_a = −1) */
+    for (j = 0; j < nb; j++) {
+      var wj = Ea * Sb[j * nb + a];
+      if (wj === 0) continue;
+      var Fj = basis[j].sigma0;
+      for (P = 0; P < 6; P++) { var dst = sig[P], src = Fj[P]; for (var q = 0; q < N3; q++) dst[q] += wj * src[q]; }
+    }
+    var sBar = [0, 0, 0, 0, 0, 0];
+    for (P = 0; P < 6; P++) { var s = 0, sp = sig[P]; for (var q2 = 0; q2 < N3; q2++) s += sp[q2]; sBar[P] = s / N3; }
+    for (P = 0; P < 6; P++) {
+      var dv = Math.abs(sBar[P] - (P === a ? -Ea : 0)) / Ea;   /* relative to the axial reference stress */
+      if (P < nb) residN = Math.max(residN, dv);
+      residA = Math.max(residA, dv);
+    }
+    byAxis[a] = { sigma0: sig, sBar: sBar, Eaxis: Ea };
+  }
+  return { byAxis: byAxis, C: C6, S: S6, shearCoupled: shearCoupled, coupling: coupling,
+           nSolves: nb, cgIters: cgIters, residNormal: residN, residAll: residA };
+}
+
+/* bk_uniaxialPrestressCached — single-entry cache around
+   bk_uniaxialPrestressSet (all three axes combined), keyed on the solid's
+   content hash + materials + N + scheme + solve tolerances.  Holds
+   3–6 basis-combined fields (≈ 3·6·N³·8 B: 4.7 MB at N=32, 38 MB at
+   N=64); replaced, not grown. */
+var _bkUniCache = null;
+function bk_uniaxialPrestressCached(solid, C_s, C_v, N, ws, opts) {
+  opts = opts || {};
+  var N3 = N * N * N, h = 2166136261;
+  for (var i = 0; i < N3; i++) { h ^= solid[i] ? 0x9e : 0x37; h = Math.imul(h, 16777619); }   /* FNV-1a over the voxel sequence */
+  var key = [N, h >>> 0, (ws && ws.scheme) || 'willot', opts.precond || 'g0',
+             opts.cgTol || 1e-10, opts.cgMaxiter || 3000, opts.shearCouplingTol,
+             Array.prototype.join.call(C_s, ','), Array.prototype.join.call(C_v, ',')].join('|');
+  if (_bkUniCache && _bkUniCache.key === key) return _bkUniCache.set;
+  _bkUniCache = null;                                   /* drop the old fields before allocating */
+  var set = bk_uniaxialPrestressSet(solid, C_s, C_v, N, [0, 1, 2], ws, opts);
+  _bkUniCache = { key: key, set: set };
+  return set;
+}
+
 /* ============================================================
    bucklingFromSolid — q=0 cell-periodic buckling on a rasterized
    solid.  For each compression axis: pre-stress → matrix-free
@@ -1209,9 +1391,15 @@ function extractPrestressCPU(solid, C_s, C_v, N, axisVoigt, ws, opts) {
    λ = 1/θ_max.  λ_cr = min over the requested axes.
 
    opts: { block (default 8), axes (default [0,1,2]),
-           eigIters, eigTol, cgTol, cgMaxiter }
-   Returns { lambda_cr, pcr, critAxis, perAxis:[{axis,lambda,sBar}],
-             mode (flat critical eigenvector), N }.
+           eigIters, eigTol, cgTol, cgMaxiter,
+           loading ('uniaxial' default | 'confined'; see header),
+           shearCouplingTol (uniaxial only, default 1e-3) }
+   Returns { lambda_cr, pcr, critAxis, loading,
+             perAxis:[{axis,lambda,sBar,Eaxis,cgIters,mode,mWave}],
+             mode (flat critical eigenvector), N,
+             prestress (uniaxial only: {shearCoupled, coupling,
+               nSolves, residNormal, residAll}) }.
+   lambda = critical axial macro strain (both modes); pcr = λ·|sBar| MPa.
    ============================================================ */
 /* bk_modeLocalization — RMS spatial frequency of a buckling mode within the
    solid, in waves per cell:  m = (N/2pi)*sqrt( SUM_solid|grad phi|^2 / SUM_solid|phi|^2 ),
@@ -1268,9 +1456,24 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
 
   var perAxis = [], lambdaCr = Infinity, critAxis = -1, critMode = null, critSbar = 0;
 
+  /* Uniaxial (default): one set of 3 (or 6) basis prestress solves serves
+     every axis.  The 16e pool sends ONE axis per task; a worker that gets
+     several axes of the same design (always, on a 1-worker pool) reuses the
+     set via bk_uniaxialPrestressCached, so the pool needs no two-phase
+     protocol.  One prestress solve is ~4–5% of an axis task at N=16–32. */
+  var loading = (opts.loading === 'confined') ? 'confined' : 'uniaxial';
+  var uni = (loading === 'uniaxial') ? bk_uniaxialPrestressCached(solid, C_s, C_v, N, ws, opts) : null;
+
   for (var ai = 0; ai < axes.length; ai++) {
     var axis = axes[ai];
-    var pre = extractPrestressCPU(solid, C_s, C_v, N, axis, ws, opts);
+    var pre, Eaxis;
+    if (uni) {
+      pre = { sigma0: uni.byAxis[axis].sigma0, sBar: uni.byAxis[axis].sBar, cgIters: uni.cgIters };
+      Eaxis = uni.byAxis[axis].Eaxis;                   /* uniaxial modulus at the buckling grid (MPa) */
+    } else {
+      pre = extractPrestressCPU(solid, C_s, C_v, N, axis, ws, opts);
+      Eaxis = Math.abs(pre.sBar[axis]);                 /* confined (constrained) modulus (MPa) */
+    }
     var sig0 = pre.sigma0, sBarAxis = pre.sBar[axis];
 
     var applyA = function (x, out) { bk_flatToField(x, N3, uf); applyKgcpu(uf, of, sig0, N, ws); bk_fieldToFlatNeg(of, N3, out); };
@@ -1289,7 +1492,10 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
     } else {
       pairs = bk_lobpcgGen(applyA, applyB, applyMinv, n, m, {
         project: function (v) { bk_zeroMeanFlat(v, N3); },
-        iters: opts.eigIters || 60, tol: opts.eigTol || 1e-6
+        iters: opts.eigIters || 60, tol: opts.eigTol || 1e-6,
+        nConv: opts.eigNConv || 1,          /* only the critical mode sets λ_cr */
+        nStable: opts.eigNStable || 2,      /* two consecutive sub-tol sweeps */
+        resTol: opts.eigResTol || 0.25      /* leading-pair residual guard (measured) */
       });
     }
 
@@ -1298,12 +1504,21 @@ function bucklingFromSolid(solid, C_s, C_v, N, opts) {
     for (var pi = 0; pi < pairs.length; pi++) {
       if (pairs[pi].theta > 1e-9) { var lam = 1 / pairs[pi].theta; if (lam < lamAxis) { lamAxis = lam; modeAxis = pairs[pi].vec; } }
     }
-    perAxis.push({ axis: axisName[axis], lambda: lamAxis, sBar: sBarAxis, cgIters: pre.cgIters, mode: modeAxis, mWave: bk_modeLocalization(modeAxis, solid, N) });
+    /* eigConverged: the eigensolver's own flag (false = iteration cap hit
+       before tol).  An unconverged run over-predicts λ (θ_max climbs toward
+       its limit from below), so the UI flags it rather than trusting it. */
+    perAxis.push({ axis: axisName[axis], lambda: lamAxis, sBar: sBarAxis, Eaxis: Eaxis, cgIters: pre.cgIters, eigIters: pairs._iters, eigConverged: pairs._converged !== false, mode: modeAxis, mWave: bk_modeLocalization(modeAxis, solid, N) });
     if (lamAxis < lambdaCr) { lambdaCr = lamAxis; critAxis = axis; critMode = modeAxis; critSbar = sBarAxis; }
   }
 
+  /* λ = critical axial strain in both modes; pcr = λ·|σ̄_axis| (MPa):
+     uniaxial σ̄_axis = −E_a (free laterals), confined σ̄_axis = −C_conf,a */
   var pcr = isFinite(lambdaCr) ? lambdaCr * Math.abs(critSbar) : Infinity;
-  return { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis >= 0 ? axisName[critAxis] : null, perAxis: perAxis, mode: critMode, N: N };
+  var eigConverged = true;
+  for (var ec = 0; ec < perAxis.length; ec++) if (perAxis[ec].eigConverged === false) eigConverged = false;
+  var out = { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis >= 0 ? axisName[critAxis] : null, loading: loading, perAxis: perAxis, mode: critMode, N: N, eigConverged: eigConverged };
+  if (uni) out.prestress = { shearCoupled: uni.shearCoupled, coupling: uni.coupling, nSolves: uni.nSolves, residNormal: uni.residNormal, residAll: uni.residAll };
+  return out;
 }
 
 /* ============================================================
@@ -1362,9 +1577,10 @@ function homogenizeBucklingCPU(recipe, N, opts) {
     var axBuck = (opts && opts.axes && opts.axes.length) ? opts.axes : [0, 1, 2];
     var anames = ['xx', 'yy', 'zz'], paStub = [];
     for (var pa2 = 0; pa2 < axBuck.length; pa2++) {
-      paStub.push({ axis: anames[axBuck[pa2]], lambda: Infinity, sBar: 0, cgIters: 0, mode: null, mWave: 0 });
+      paStub.push({ axis: anames[axBuck[pa2]], lambda: Infinity, sBar: 0, Eaxis: NaN, cgIters: 0, mode: null, mWave: 0 });
     }
     return { lambda_cr: Infinity, pcr: Infinity, critAxis: null, perAxis: paStub,
+             loading: (opts && opts.loading === 'confined') ? 'confined' : 'uniaxial',
              mode: null, N: N, rho: inside0 / N3b, skip_reason: skipReason };
   }
 
@@ -1525,6 +1741,9 @@ function annotateBucklingPredict(design) {
          zero-mean subspace, solve the dense generalized eigenproblem,
          and confirm the matrix-free λ matches it.
      B3. Synthetic porous structure at N=8: λ_cr finite & positive.
+     B1u / B2u. Same as B1 / B2 for the default uniaxial-stress loading
+         (B1/B2 pin the legacy confined path explicitly).
+     B4. Confined prestress obeys the Voigt bound / matches C_eff.
 
    Returns { passed, gates }.
    ════════════════════════════════════════════════════════════ */
@@ -1535,7 +1754,7 @@ function runBucklingCPUTest() {
 
   /* B1 — uniform-medium pre-stress */
   (function () {
-    var N = 4, N3 = N * N * N, ws = getBucklingWorkspaceCPU(N);
+    var N = 4, N3 = N * N * N, ws = getBucklingWorkspaceCPU(N); ws.scheme = 'willot';
     var solid = new Uint8Array(N3); solid.fill(1);
     var pre = extractPrestressCPU(solid, C_s, C_v, N, 2, ws, {});   /* zz */
     /* σ⁰ should be uniform = C_s·(−e_zz): the C_s column 2 negated */
@@ -1547,12 +1766,20 @@ function runBucklingCPUTest() {
     }
     var sBarErr = 0; for (var P2 = 0; P2 < 6; P2++) sBarErr = Math.max(sBarErr, Math.abs(pre.sBar[P2] - (-C_s[P2 * 6 + 2])));
     gates.B1_uniform_prestress = { maxFieldDev: maxDev, sBarErr: sBarErr, pass: maxDev < 1e-6 && sBarErr < 1e-6 };
+    /* B1u — uniaxial-stress superposition on the uniform solid: σ⁰ must be
+       exactly uniform −E_s·e_zz (unit axial strain, laterals free: σ_xx =
+       σ_yy = shears = 0), and the recovered axial compliance must be 1/E_s. */
+    var uni = bk_uniaxialPrestressSet(solid, C_s, C_v, N, [2], ws, {});
+    var su = uni.byAxis[2].sigma0, maxDevU = 0;
+    for (var Pu = 0; Pu < 6; Pu++) { var wu = (Pu === 2) ? -Es : 0; for (var iu = 0; iu < N3; iu++) { var du = Math.abs(su[Pu][iu] - wu) / Es; if (du > maxDevU) maxDevU = du; } }
+    var eRel = Math.abs(uni.S[14] * Es - 1);
+    gates.B1u_uniform_uniaxial = { maxFieldDev: maxDevU, S33xEs_minus1: eRel, shearCoupled: uni.shearCoupled, pass: maxDevU < 1e-9 && eRel < 1e-9 };
   })();
 
   /* B2 — dense N=4 cross-check */
   (function () {
     var N = 4, N3 = N * N * N, dof = 3 * N3;
-    var ws = getBucklingWorkspaceCPU(N);
+    var ws = getBucklingWorkspaceCPU(N); ws.scheme = 'willot';   /* match bucklingFromSolid's default scheme */
     /* synthetic two-phase solid (varying σ⁰): solid where a coarse field > 0 */
     var solid = new Uint8Array(N3);
     for (var i = 0; i < N; i++) for (var j = 0; j < N; j++) for (var k = 0; k < N; k++) {
@@ -1581,6 +1808,10 @@ function runBucklingCPUTest() {
     }
     var Kc  = assemble(function (e, o) { applyKcpu(e, o, solid, C_s, C_v, N, ws); }, false);
     var Ac  = assemble(function (e, o) { applyKgcpu(e, o, sig0, N, ws); }, true);   /* A = −K_g */
+    /* uniaxial-stress prestress on the same axis (superposed basis fields) */
+    var uniD = bk_uniaxialPrestressSet(solid, C_s, C_v, N, [axis], ws, { cgTol: 1e-12, cgMaxiter: 5000 });
+    var sig0u = uniD.byAxis[axis].sigma0;
+    var Acu = assemble(function (e, o) { applyKgcpu(e, o, sig0u, N, ws); }, true);
 
     /* range(K) basis from K's eigendecomposition — robustly excludes
        the constant + Nyquist nullspace of the spectral operators, so
@@ -1602,15 +1833,31 @@ function runBucklingCPUTest() {
       var KQb = denseApply(Kc, Q[b]), AQb = denseApply(Ac, Q[b]);
       for (var aa = 0; aa < s; aa++) { Kr[aa * s + b] = bk_dot(Q[aa], KQb, dof); Ar[aa * s + b] = bk_dot(Q[aa], AQb, dof); }
     }
+    function denseLam(Acols) {
+      var Ar2 = new Float64Array(s * s);
+      for (var b3 = 0; b3 < s; b3++) { var AQ = denseApply(Acols, Q[b3]); for (var a3 = 0; a3 < s; a3++) Ar2[a3 * s + b3] = bk_dot(Q[a3], AQ, dof); }
+      var g = bk_genEigSPD(Ar2, Kr, s), lmin = Infinity;
+      for (var t3 = 0; t3 < s; t3++) { if (g.values[t3] > 1e-9) { var l3 = 1 / g.values[t3]; if (l3 < lmin) lmin = l3; } }
+      return lmin;
+    }
     var ge = bk_genEigSPD(Ar, Kr, s);     /* Ar z = θ Kr z */
     var lamDense = Infinity;
     for (var t2 = 0; t2 < s; t2++) { if (ge.values[t2] > 1e-9) { var lam = 1 / ge.values[t2]; if (lam < lamDense) lamDense = lam; } }
 
-    /* matrix-free on the same axis */
-    var mf = bucklingFromSolid(solid, C_s, C_v, N, { axes: [axis], block: 10, eigIters: 200, eigTol: 1e-11, cgTol: 1e-12, cgMaxiter: 5000 });
+    /* matrix-free on the same axis — legacy confined loading (matches sig0 above) */
+    var mf = bucklingFromSolid(solid, C_s, C_v, N, { axes: [axis], block: 10, eigIters: 200, eigTol: 1e-11, cgTol: 1e-12, cgMaxiter: 5000, loading: 'confined' });
     var lamMF = mf.lambda_cr;
     var rel = Math.abs(lamMF - lamDense) / Math.max(Math.abs(lamDense), 1e-30);
     gates.B2_dense_crosscheck = { subspaceDof: s, lambda_dense: lamDense, lambda_matrixfree: lamMF, rel: rel, pass: isFinite(lamDense) && isFinite(lamMF) && rel < 1e-4 };
+
+    /* B2u — same dense gate for the default uniaxial-stress loading, plus the
+       combined field's macro stress (−1 on axis, 0 elsewhere). */
+    var lamDenseU = denseLam(Acu);
+    var mfu = bucklingFromSolid(solid, C_s, C_v, N, { axes: [axis], block: 10, eigIters: 200, eigTol: 1e-11, cgTol: 1e-12, cgMaxiter: 5000 });
+    var relU = Math.abs(mfu.lambda_cr - lamDenseU) / Math.max(Math.abs(lamDenseU), 1e-30);
+    gates.B2u_dense_uniaxial = { lambda_dense: lamDenseU, lambda_matrixfree: mfu.lambda_cr, pcr: mfu.pcr, rel: relU,
+                                 sBarResid: uniD.residAll, shearCoupled: uniD.shearCoupled,
+                                 pass: isFinite(lamDenseU) && isFinite(mfu.lambda_cr) && relU < 1e-4 && uniD.residAll < 1e-6 };
   })();
 
   /* B3 — synthetic porous structure at N=8: λ_cr finite & positive */

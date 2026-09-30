@@ -252,7 +252,7 @@ function buildMergedCurvePlot(){
 
   var html = '<div class="mp-head">' +
     '<div class="mp-title">Stress\u2013Strain \u00b7 Comparison</div>' +
-    '<div class="mp-sub">UNIAXIAL \u00b7 ' + axisLabel + ' \u00b7 J2 plasticity + geometric NL \u00b7 N=' + nLabel + ' \u00b7 \u03b5\u2264' + capPct + '%</div>' +
+    '<div class="mp-sub">UNIAXIAL \u00b7 ' + axisLabel + ' \u00b7 J2 plasticity (small strain) \u00b7 N=' + nLabel + ' \u00b7 \u03b5\u2264' + capPct + '%</div>' +
     '</div>' +
     '<div class="mp-canvas">' +
     '<svg viewBox="0 0 800 360" preserveAspectRatio="none">';
@@ -316,7 +316,9 @@ function buildMergedCurvePlot(){
     var letter = ld.label.split('\u00b7').pop().trim();
     var yieldTxt = (lnl.yielded && isFinite(lnl.sigma_y_eff))
       ? ('\u03c3_y = ' + lnl.sigma_y_eff.toFixed(1) + ' MPa' + (lnl.truncated ? ' (partial)' : ''))
-      : ('no yield \u2264 ' + Math.round((lnl.epsCap || 0.05) * 100) + '%' + (isFinite(lnl.sigmaCap) ? (' (\u03c3_y > ' + lnl.sigmaCap.toFixed(0) + ' MPa)') : ''));
+      : (lnl.truncReason === 'step-budget' && isFinite(lnl.eAxisMax))
+        ? ('stopped at \u03b5=' + (lnl.eAxisMax * 100).toFixed(2) + '% (step budget) \u2014 no yield in range reached' + (isFinite(lnl.sigmaCap) ? (' (\u03c3_y > ' + lnl.sigmaCap.toFixed(0) + ' MPa)') : ''))
+        : ('no yield \u2264 ' + Math.round((lnl.epsCap || 0.05) * 100) + '%' + (isFinite(lnl.sigmaCap) ? (' (\u03c3_y > ' + lnl.sigmaCap.toFixed(0) + ' MPa)') : ''));
     var buckTxt = (lpcr != null && ((!lnl.yielded) || (isFinite(lnl.sigma_y_eff) && lpcr < lnl.sigma_y_eff)))
       ? ' \u00b7 buckling-limited (\u03c3_cr ' + lpcr.toFixed(1) + ')'
       : '';

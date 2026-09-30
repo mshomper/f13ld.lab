@@ -558,7 +558,7 @@ NonlinearSolverFull.prototype.upload = function (recipe, opts) {
   }
   var inside = 0; for (var v = 0; v < solid.length; v++) inside += solid[v];
   this.rho = inside / solid.length;
-  var mat = recipe.material || NL_MAT_DEFAULT;
+  var mat = nlResolveMaterial(recipe.material);   /* 16f: merge over NL_MAT_DEFAULT so plasticity keys (sigY0, Voce) are never dropped */
   var m = nlMakeMaterial(mat);
   this.material = m;
   var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * NL_VOID_CONTRAST, m.nu), C_0 = isoC(m.E, m.nu);
@@ -841,7 +841,7 @@ async function runNonlinearGPUTest(N, axis) {
   solver.destroy();
   if (g.error) { console.error('[16g] plastic crush: ' + g.error); return g; }
 
-  var c = nonlinearCrushCPU(recipe, N, axis, { control: 'strain', epsTarget: 0.02, nSteps: 10 });
+  var c = nonlinearCrushCPU(recipe, N, axis, { control: 'strain', epsTarget: 0.02, nSteps: 10, kneeRefine: false });   /* crushStrain has no knee refinement: keep the step grids identical */
   var relSy = Math.abs(g.sigma_y_eff - c.sigma_y_eff) / Math.max(1, Math.abs(c.sigma_y_eff));
   var relE0 = Math.abs(g.E0 - c.E0) / Math.max(1, Math.abs(c.E0));
   var worstC = 0;
@@ -889,7 +889,10 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
   var macroTol = opts.macroTol != null ? opts.macroTol : 5e-3;
   var macroMax = opts.macroMax != null ? opts.macroMax : 4;
   var verbose = !!opts.verbose;
-  var relax = opts.macroRelax != null ? opts.macroRelax : 0.85;
+  /* (opts.macroRelax was declared here but never applied: the macro update is
+     a plain modified-Newton step with the elastic free-free compliance.
+     Removed as dead code; the algorithm is unchanged.) */
+  var kneeRefine = opts.kneeRefine !== false;   /* default ON: half steps through the 0.2% knee (16f nlKneeStepFactor) */
   var es = this.es, d = es.device;
 
   var _nlNow = (typeof performance !== 'undefined') ? function(){ return performance.now(); } : function(){ return Date.now(); };
@@ -915,12 +918,16 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
      (epp_n) right after each step commits, before the next step's snapshot. */
   var alphaSteps = [], alphaMax = 0;
   var maxSteps = Math.ceil(nSteps * 1.5);  /* guard: dStep recovers each step, so a tight cap suffices */
+  if (kneeRefine) maxSteps += NL_KNEE_REFINE_TAIL + 2 * NL_KNEE_LOOKAHEAD;   /* the refined knee window gets its own budget */
   var kneeStep = -1;                      /* step at which the 0.2%-offset knee first appears */
+  var lateralResMax = 0;                  /* worst accepted |sigma_lateral| / |sigma_axial| (macro-tol misses are accepted) */
   var eb = [0, 0, 0, 0, 0, 0];
   var ebFreePrev = null, eAxisPrev = 0;
 
   while (eAxis < capEps - 1e-9 && step < maxSteps) {
-    var dStep = Math.min(nominalStep, capEps - eAxis);   /* nominal stride, clamped to land exactly on the cap */
+    var dNom = nominalStep;
+    if (kneeRefine) dNom *= nlKneeStepFactor(curve, E0, 0.002, nominalStep, step, kneeStep);
+    var dStep = Math.min(dNom, capEps - eAxis);   /* nominal (or knee-refined) stride, clamped to land exactly on the cap */
     /* snapshot strain + committed history for cutback and macro-loop baseline */
     var encS = d.createCommandEncoder();
     es._copyPair(encS, es.eps, { n: this.snap_n, s: this.snap_s });
@@ -945,7 +952,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
         var esc = trial / eAxisPrev;
         for (var ex = 0; ex < nf; ex++) eb[freeIdx[ex]] = ebFreePrev[ex] * esc;
       }
-      var fieldDiverged = false;
+      var fieldDiverged = false, latRel = 0;
       for (var mit = 0; mit < macroMax; mit++) {
         /* hold committed history at the previous load step through the macro loop */
         var encB = d.createCommandEncoder();
@@ -955,7 +962,8 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
         if (!res.converged) { fieldDiverged = true; break; }
         var sn = 0, sref = Math.max(Math.abs(res.sigma_bar[axis]), 1e-6);
         for (var f = 0; f < nf; f++) { var sv = res.sigma_bar[freeIdx[f]]; sn += sv * sv; }
-        if (Math.sqrt(sn) / sref < macroTol) break;   /* lateral stress ~ 0: macro converged */
+        latRel = Math.sqrt(sn) / sref;
+        if (latRel < macroTol) break;   /* lateral stress ~ 0: macro converged */
         for (var r = 0; r < nf; r++) {
           var dd = 0; for (var c = 0; c < nf; c++) dd += Sff[r * nf + c] * res.sigma_bar[freeIdx[c]];
           eb[freeIdx[r]] -= dd;
@@ -964,7 +972,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       /* Accept whenever the FIELD Newton converged. A macro-tolerance miss is
          benign (lateral stress is already small; f32 + low axial stress can keep
          it above a tight relative tol). Cut back ONLY on field divergence —
-         matches the 16f oracle. */
+         matches the 16f oracle. The residual is recorded (lateralResMax). */
       if (!fieldDiverged) { ok = true; break; }
       var encR = d.createCommandEncoder();
       es._copyPair(encR, { n: this.snap_n, s: this.snap_s }, es.eps);
@@ -981,12 +989,13 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       var ySalv = nlOffsetYieldEx(curve, E0, 0.002);
       if (ySalv.yielded && curve.length >= 2) {
         console.warn('[crush] salvaged sigma_y_eff=' + ySalv.sigma.toFixed(1) + ' MPa from ' + curve.length + ' steps (truncated at eps=' + eAxis.toFixed(4) + ')');
-        return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: ySalv.sigma, yielded: true, E0: E0, N: this.N, truncated: true, atStep: step + 1, eAxisMax: eAxis, epsCap: capEps, alphaSteps: alphaSteps, alphaMax: alphaMax };
+        return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: ySalv.sigma, yielded: true, E0: E0, N: this.N, truncated: true, truncReason: 'diverged', atStep: step + 1, eAxisMax: eAxis, epsCap: capEps, alphaSteps: alphaSteps, alphaMax: alphaMax, lateralResMax: lateralResMax };
       }
       return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis, atStep: step + 1, eAxis: eAxis, lastRelRes: res ? res.relRes : null };
     }
     eAxis = trial;
     curve.push({ eps: eAxis, sigma: res.sigma_bar[axis] });
+    if (latRel > lateralResMax) lateralResMax = latRel;
     ebFreePrev = freeIdx.map(function (fi) { return eb[fi]; });
     eAxisPrev = eAxis;
     var _nlTstep = _nlNow(); _nlCgTotal += res.totalCgIters;
@@ -1004,23 +1013,32 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       alphaSteps.push({ eps: eAxis, alpha: aF });
     }
     /* adaptive early-stop: once the 0.2%-offset knee appears, take 3 more steps
-       to draw cleanly past it, then stop — no need to grind to the cap. */
+       (NL_KNEE_REFINE_TAIL half steps when knee refinement is on — same strain
+       extent) to draw cleanly past it, then stop — no need to grind to the cap. */
     if (kneeStep < 0 && nlOffsetYieldEx(curve, E0, 0.002).yielded) kneeStep = step;
-    if (kneeStep >= 0 && step >= kneeStep + 3) break;
+    if (kneeStep >= 0 && step >= kneeStep + (kneeRefine ? NL_KNEE_REFINE_TAIL : 3)) break;
   }
+  /* Step-budget truncation: cutbacks exhausted maxSteps before the curve
+     reached the cap (and no knee early-stop fired). Without this flag the UI
+     reported "no yield (> sigma_cap)" at a strain that never reached the cap. */
+  var budgetHit = (kneeStep < 0) && (eAxis < capEps - 1e-9);
+  if (budgetHit) console.warn('[crush] step budget (' + maxSteps + ') exhausted at eps=' + (eAxis * 100).toFixed(2) + '% < cap ' + (capEps * 100).toFixed(0) + '% (cutbacks)');
+  if (lateralResMax > 0.02) console.warn('[crush] macro lateral stress residual up to ' + (lateralResMax * 100).toFixed(1) + '% of axial (steps accepted on field convergence)');
   console.log('[crush-timing] DONE N=' + this.N + '  steps=' + step + '  total=' + (_nlNow() - _nlRun0).toFixed(0) + 'ms  (' +
               ((_nlNow() - _nlRun0) / Math.max(1, step)).toFixed(0) + ' ms/step avg)  cg(sum of accepted-solve iters)=' + _nlCgTotal);
   var yEx = nlOffsetYieldEx(curve, E0, 0.002);
-  return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: yEx.sigma, yielded: yEx.yielded, E0: E0, N: this.N, epsCap: capEps, eAxisMax: eAxis, alphaSteps: alphaSteps, alphaMax: alphaMax };
+  return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: yEx.sigma, yielded: yEx.yielded, E0: E0, N: this.N, epsCap: capEps, eAxisMax: eAxis, alphaSteps: alphaSteps, alphaMax: alphaMax,
+           truncated: budgetHit, truncReason: budgetHit ? 'step-budget' : null, lateralResMax: lateralResMax };
 };
 
 
-/* Public crush entry — physical axis (0=xx,1=yy,2=zz). Maps to the
-   solver-internal frame via SWAP=[2,1,0,5,4,3] (matches 16b). */
+/* Public crush entry — physical axis (0=xx,1=yy,2=zz).  Since v0.7.2 the
+   solver frame is the physical frame (see the SWAP note in 16b
+   solveDesignElasticFull), so the axis passes straight through.  Before the
+   fix, selecting ZZ crushed along physical X. */
 NonlinearSolverFull.prototype.crush = async function (physicalAxis, opts) {
   opts = opts || {};
-  var SWAP = [2, 1, 0, 5, 4, 3];
-  var axInternal = SWAP[physicalAxis];
+  var axInternal = physicalAxis;
   if ((opts.control || 'stress') === 'strain') return await this.crushStrain(axInternal, opts);
   return await this.crushStress(axInternal, opts);
 };
@@ -1069,6 +1087,9 @@ async function runNonlinearStressTest(N) {
   var relE0 = Math.abs(g.E0 - c.E0) / Math.max(1, Math.abs(c.E0));
   var worstC = 0, nC = Math.min(g.curve.length, c.curve.length);
   for (var i = 0; i < nC; i++) {
+    /* both sides knee-refine with the same predictor, but f32 vs f64 can flip a
+       marginal half-step decision; compare only points on the same strain grid. */
+    if (Math.abs(g.curve[i].eps - c.curve[i].eps) > 1e-7) break;
     var sc = Math.max(1, Math.abs(c.curve[i].sigma));
     var r = Math.abs(g.curve[i].sigma - c.curve[i].sigma) / sc;
     if (r > worstC) worstC = r;

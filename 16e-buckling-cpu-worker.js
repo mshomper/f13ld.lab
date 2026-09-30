@@ -23,24 +23,40 @@
      computeBucklingCPU(recipe, N, opts, onProgress) -> Promise<result>
      F13LD_buckleBench(recipe, N)                     -> console benchmark
      F13LD_bucklePoolInfo()                           -> { size, spawned, busy }
+     cancelBucklingCPU(reason)                        -> number of jobs cancelled
 
    result = {
-     lambda_cr, pcr, critAxis, rho,
-     perAxis: [ { axis, lambda, sBar, cgIters } ],
+     lambda_cr, pcr, critAxis, rho, loading,
+     perAxis: [ { axis, lambda, sBar, Eaxis, cgIters, mWave, prestress } ],
      modes:   { xx|yy|zz: { u_prime:[Float32,Float32,Float32],
                             sigma_vm:null, N, eps_bar:[x,y,z] } }
    }
    The modes fieldset matches LabRaymarcher.uploadFields, so a buckling
    mode shape reuses the Deformed-tab warp path directly.
+
+   Loading (16c header): opts.loading 'uniaxial' (default, free
+   lateral faces — matches the nonlinear crush tab) | 'confined'
+   (legacy).  lambda = critical axial macro strain, pcr = lambda *
+   |sBar| = critical axial stress (MPa) in both modes.  Uniaxial
+   costs 3 (6 if shear-coupled) prestress solves per axis task
+   instead of 1; measured ~4-5% of an axis task at N=16/32 with
+   these defaults, so each worker just repeats them (no two-phase
+   pool).
    ============================================================ */
 
 /* Reference-compute defaults: small block (only the critical mode
-   matters), loose eigen / inner-CG tolerances (subspace iteration
-   tolerates inexact solves), capped CG.  λ_cr lands within ~1% of the
-   tight-tolerance value while running several times faster. */
+   matters), screening eigen tolerance, capped CG.
+   eigIters was 30: LOBPCG from a random start routinely hit that cap long
+   before tol, over-predicting p_cr 2-9x on Schwarz P (N=8: 1070-1395 vs
+   142 MPa converged; N=16: 90-274 vs 41.6) and varying run to run.  With the
+   same tol and a 200 cap, N=16 lands on 41.6 MPa every run (~3x the old
+   time; Sprint B speedups are aimed at recovering this).  The solver's
+   convergence flag is carried to the card, which turns amber if the cap is
+   still hit. */
 var BUCKLE_CPU_DEFAULTS = {
+  loading:   'uniaxial',   /* free-sided uniaxial stress; 'confined' = legacy laterally-confined strain */
   block:     4,
-  eigIters:  30,
+  eigIters:  200,
   eigTol:    1e-3,
   cgTol:     3e-3,
   cgMaxiter: 250
@@ -60,7 +76,7 @@ var BUCKLE_WORKER_FILES = [
 /* Bump on any solver-file change so the worker's importScripts refetches
    instead of serving a stale cached copy (the blob worker has its own cache,
    separate from the main page). */
-var BUCKLE_SOLVER_VERSION = 'predict-badge-3';
+var BUCKLE_SOLVER_VERSION = 'uniaxial-load-2';
 
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes
@@ -80,7 +96,7 @@ var BUCKLE_WORKER_ONMESSAGE =
   '      mode = { u_prime:[ux,uy,uz], sigma_vm:null, N:N, eps_bar:[0,0,0] };\n' +
   '      transfer.push(ux.buffer, uy.buffer, uz.buffer);\n' +
   '    }\n' +
-  '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, cgIters:pa.cgIters, mWave:pa.mWave }, mode: mode, rho: one.rho, skip_reason: one.skip_reason }, transfer);\n' +
+  '    postMessage({ id: job.id, type:"done", perAxis:{ axis:pa.axis, lambda:pa.lambda, sBar:pa.sBar, Eaxis:pa.Eaxis, cgIters:pa.cgIters, eigIters:pa.eigIters, eigConverged:pa.eigConverged, mWave:pa.mWave, prestress:(one.prestress || null) }, mode: mode, rho: one.rho, loading: one.loading, skip_reason: one.skip_reason }, transfer);\n' +
   '  } catch (err){ postMessage({ id: job.id, type:"error", message: (err && err.message) || String(err) }); }\n' +
   '};\n';
 
@@ -174,6 +190,31 @@ BucklingPool.prototype.run = function(task){
   });
 };
 
+/* Sprint A — cancel every queued and in-flight task.  Busy workers are
+   terminated (a single-axis eigensolve cannot be interrupted any other way)
+   and dropped, so the pool respawns fresh ones lazily; idle workers are kept
+   (their importScripts are already paid for).  Each pending run() promise
+   rejects with an Error whose .cancelled = true.  Returns the count. */
+BucklingPool.prototype.cancelAll = function(reason){
+  var msg = 'buckling ' + (reason || 'cancelled'), n = 0, id;
+  var keep = [];
+  for (var i = 0; i < this.workers.length; i++){
+    var rec = this.workers[i];
+    if (rec.busy){ try { rec.worker.terminate(); } catch (e) { /* ignore */ } }
+    else keep.push(rec);
+  }
+  this.workers = keep;
+  this.queue.length = 0;
+  var jobs = this.jobs;
+  this.jobs = {};
+  for (id in jobs){
+    if (!jobs.hasOwnProperty(id)) continue;
+    var err = new Error(msg); err.cancelled = true;
+    jobs[id].reject(err); n++;
+  }
+  return n;
+};
+
 /* Lazily-created module singleton pool. */
 var _bucklePool = null;
 function getBucklingPool(){
@@ -182,6 +223,12 @@ function getBucklingPool(){
   var size = Math.max(1, Math.min(hw - 1, 8));
   _bucklePool = new BucklingPool(size);
   return _bucklePool;
+}
+
+/* Sprint A — main-thread entry used by Cancel / new Run (50-controls.js).
+   No-op (returns 0) if the pool was never created. */
+function cancelBucklingCPU(reason){
+  return _bucklePool ? _bucklePool.cancelAll(reason) : 0;
 }
 
 function F13LD_bucklePoolInfo(){
@@ -222,10 +269,11 @@ function computeBucklingCPU(recipe, N, opts, onProgress){
   }
 
   return Promise.all(tasks).then(function(msgs){
-    var perAxis = [], modes = {}, lambdaCr = Infinity, critAxis = null, critSbar = 0, rho = 0, skipReason = null;
+    var perAxis = [], modes = {}, lambdaCr = Infinity, critAxis = null, critSbar = 0, rho = 0, skipReason = null, loading = merged.loading;
     for (var i = 0; i < msgs.length; i++){
       var m = msgs[i];
       rho = m.rho;
+      if (m.loading) loading = m.loading;
       if (m.skip_reason && !skipReason) skipReason = m.skip_reason;
       perAxis.push(m.perAxis);
       if (m.mode){
@@ -251,8 +299,10 @@ function computeBucklingCPU(recipe, N, opts, onProgress){
     /* keep perAxis in xx,yy,zz order regardless of completion order */
     var order = { xx: 0, yy: 1, zz: 2 };
     perAxis.sort(function(a, b){ return (order[a.axis] || 0) - (order[b.axis] || 0); });
-    var pcr = isFinite(lambdaCr) ? lambdaCr * Math.abs(critSbar) : Infinity;
-    return { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: rho, perAxis: perAxis, modes: modes, skip_reason: skipReason };
+    var pcr = isFinite(lambdaCr) ? lambdaCr * Math.abs(critSbar) : Infinity;   /* critical axial stress, MPa (both loadings) */
+    var eigConverged = true;
+    for (var ec = 0; ec < perAxis.length; ec++) if (perAxis[ec].eigConverged === false) eigConverged = false;
+    return { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: rho, loading: loading, perAxis: perAxis, modes: modes, skip_reason: skipReason, eigConverged: eigConverged };
   });
 }
 

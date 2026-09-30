@@ -17,7 +17,7 @@ var GRID_STATE = {
 };
 
 /* Buckling runs on the CPU reference oracle (16c) at a much smaller grid
-   than the GPU elastic/thermal path — ~per-axis seconds at N=8.  Its
+   than the GPU elastic/thermal path — seconds per axis at N=16, minutes at N=64.  Its
    resolution is configured separately from the main Grid pill. */
 var BUCKLE_STATE = {
   N: 32             // 16 | 32 | 64 (resolves thin-wall shells); radix-2 FFT -> powers of two only
@@ -31,17 +31,19 @@ var BUCKLE_STATE = {
 var BUCKLE_BY_DESIGN = {};
 
 /* Nonlinear crush resolution + load axis (GPU J2 plasticity, 16g).
-   N=8 fast / N=16 more accurate; axis xx/yy/zz -> crush() physical 0/1/2. */
+   Nonlin pill cycles 16 -> 32 -> 64 (radix-2 FFT); axis xx/yy/zz -> crush() physical 0/1/2. */
 var NONLIN_STATE = { N: 32, axis: 'zz', cap: 0.05 };
 
 /* Transient per-design nonlinear results (id -> { sigma_y_eff, E0, curve,
    axis, N, truncated } | { error }).  Feeds the sigma-epsilon curve tab, the
-   sigma_y(z) metric, and the P_cr/P_y seam (replaces provisional 880 MPa). */
+   sigma_y(z) metric, and the P_cr/P_y seam (replaces provisional SIGMA_Y_TI64_MPA). */
 var NONLIN_BY_DESIGN = {};
 
 /* Provisional yield stress for P_cr/P_y until the nonlinear solver supplies
-   a real macroscopic sigma_y.  Solid Ti-6Al-4V, MPa. */
-var SIGMA_Y_TI64_MPA = 880;
+   a real macroscopic sigma_y.  Solid Ti-6Al-4V, MPa.  Derived from the crush
+   material (16f NL_MAT_DEFAULT.sigY0_MPa, 950) so the seam and the solver
+   cannot drift apart; 950 literal only if 16f failed to load. */
+var SIGMA_Y_TI64_MPA = (typeof NL_MAT_DEFAULT !== 'undefined' && isFinite(NL_MAT_DEFAULT.sigY0_MPa)) ? NL_MAT_DEFAULT.sigY0_MPa : 950;
 
 /* Connectivity gate — keep only the largest periodically-connected solid
    component before every solve (prunes floating islands).  Default on; the
@@ -64,6 +66,11 @@ var RUN_STATE = {
   token: 0,
   finishedToken: -1,
   activeWorkers: 0,
+  /* Sprint A — sweep serialization: sweepDone chains every sweep so a new one
+     starts only after the previous (cancelled) one has returned; sweepLive is
+     the token of the sweep currently executing (0 = none). */
+  sweepDone: null,
+  sweepLive: 0,
   /* Phase-6 tie-up #4 — wall-clock anchors for the live ETA + per-mode timing. */
   t0: 0,
   estTotalSec: 0
@@ -120,7 +127,7 @@ function paintGridPill(){
 }
 
 /* ============================================================
-   BUCKLE GRID PILL — cycles the CPU buckling resolution 8 ⇄ 16.
+   BUCKLE GRID PILL — cycles the CPU buckling resolution 16 → 32 → 64.
    ============================================================ */
 function onBucklePillClick(){
   BUCKLE_STATE.N = (BUCKLE_STATE.N === 16) ? 32 : (BUCKLE_STATE.N === 32) ? 64 : 16;
@@ -135,7 +142,7 @@ function paintBucklePill(){
 }
 
 /* ============================================================
-   NONLIN GRID PILL — cycles GPU nonlinear crush resolution 8 ⇄ 16,
+   NONLIN GRID PILL — cycles GPU nonlinear crush resolution 16 → 32 → 64,
    plus the load-axis dropdown handler.
    ============================================================ */
 function onNonlinPillClick(){
@@ -187,13 +194,14 @@ function paintNonlinCapPill(){
 /* Reference seconds-per-design at each mode's reference grid (uncalibrated). */
 var RUN_REF = {
   elastic:   { sec: 2.0,  refN: 64 },   /* full-Voigt 6-LC @ N=64 */
-  buckling:  { sec: 18.0, refN: 8  },   /* 3-axis pool @ N=8 (README desktop figure) */
+  buckling:  { sec: 144.0, refN: 16 },  /* 3-axis pool @ N=16 — the measured 17.6 s @ N=8 desktop figure
+                                           (docs/BUCKLING.md) scaled by (16/8)^3; N=8 is no longer offered */
   nonlinear: { sec: 90.0, refN: 16, refCap: 0.05 }  /* sync-bound crush @ N=16, 5% cap */
 };
 
 /* Calibration: measured seconds-per-design keyed by mode → { sec, N, cap }.
    Persisted so the estimate is already calibrated on the next page load. */
-var RUN_CALIB_KEY = 'f13ld.lab.timing.v1';
+var RUN_CALIB_KEY = 'f13ld.lab.timing.v2';   /* Sprint A — v1 values were biased low (cached designs counted) */
 var RUN_CALIB = (function(){
   try { var j = localStorage.getItem(RUN_CALIB_KEY); if (j) return JSON.parse(j); } catch(e){}
   return {};
@@ -216,7 +224,7 @@ function modePerDesignSec(mode){
     return base;
   }
   if (mode === 'buckling'){
-    var bN = (typeof BUCKLE_STATE !== 'undefined') ? BUCKLE_STATE.N : 8;
+    var bN = BUCKLE_STATE.N;
     return cal ? cal.sec * gridScale(bN, cal.N) : ref.sec * gridScale(bN, ref.refN);
   }
   if (mode === 'nonlinear'){
@@ -314,10 +322,24 @@ function startRun(){
      N reported in the run status all agree with the grid passed to the solver. */
   var runN = GRID_STATE.N;
 
-  /* Kick off the real sweep.  Don't await here — we let the function run in
-     the background while the UI stays responsive (each design's compute is
-     itself async, yielding to the browser between FFTs and readbacks). */
-  runRealSweep(runN, RUN_STATE.token);
+  /* Kick off the real sweep in the background (UI stays responsive; each
+     design's compute is itself async).  Sprint A — sweeps are SERIALIZED: a
+     cancelled sweep may still be awaiting one GPU solve it cannot abort, and it
+     shares window.__sharedFFT(Batched) with any new sweep, so either could
+     destroy the other's plan.  The new sweep starts only once the old one has
+     hit its next token check and returned.  Any throw now ends the run cleanly
+     via onSweepCrashed (was fire-and-forget: a throw left the spinner on). */
+  var myToken = RUN_STATE.token;
+  if (RUN_STATE.sweepLive) paintRunStatus('Stopping previous run — waiting for its in-flight solve…');
+  RUN_STATE.sweepDone = (RUN_STATE.sweepDone || Promise.resolve()).then(function(){
+    if (myToken !== RUN_STATE.token) return;          /* cancelled while waiting */
+    RUN_STATE.sweepLive = myToken;
+    return runRealSweep(runN, myToken);
+  }).catch(function(err){
+    onSweepCrashed(err, myToken);
+  }).then(function(){
+    if (RUN_STATE.sweepLive === myToken) RUN_STATE.sweepLive = 0;
+  });
 }
 
 
@@ -356,15 +378,23 @@ async function runRealSweep(N, runToken){
   var designs  = LAB_STATE.designs;
   var nDesigns = designs.length;
   var t0 = performance.now();
+  /* Sprint A — per-run token guard.  startRun() and cancelRun() both bump
+     RUN_STATE.token, so every await-resume checks stale() rather than the
+     shared RUN_STATE.cancelled flag (which a new run used to reset to false,
+     letting a cancelled sweep resume alongside it). */
+  function stale(){ return runToken !== RUN_STATE.token; }
+  var nFresh = { elastic: 0, nonlinear: 0, buckling: 0 };   /* Sprint A — calibrate on fresh solves only */
 
   var doElastic = !!PHYS_STATE.elastic;
   var doBuckle  = !!PHYS_STATE.buckle;
   var doNonlin  = !!PHYS_STATE.nonlin && typeof NonlinearSolverFull === 'function';
 
   /* WebGPU is required only for the elastic / GPU path. */
-  if (doElastic && typeof ensureDevice === 'function'){
+  if ((doElastic || doNonlin) && typeof ensureDevice === 'function'){   /* Sprint A — nonlinear builds an FFTPlan too */
     var ok = false;
     try { ok = await ensureDevice(); } catch (e) { ok = false; }
+    if (stale()) return;
+    if (!ok && !doElastic){ doNonlin = false; ok = true; console.warn('[run] WebGPU unavailable — skipping nonlinear'); }
     if (!ok){
       paintRunStatus('WebGPU unavailable — cannot run real elastic solver');
       paintSolverPill('webgpu unavailable', 'bad');
@@ -378,6 +408,11 @@ async function runRealSweep(N, runToken){
   for (var ri = 0; ri < nDesigns; ri++){
     recipes.push((typeof recipeForDesign === 'function') ? recipeForDesign(designs[ri]) : null);
   }
+  /* Sprint A — content fingerprint (sorted-key JSON hash, includes material)
+     folded into every cache signature, so an id collision or an edited recipe
+     can never be served another design's cached result. */
+  var recipeFp = [];
+  for (var rfi = 0; rfi < nDesigns; rfi++) recipeFp.push(recipes[rfi] ? recipeFingerprint(recipes[rfi]) : '');
   var nBuckleDesigns = 0;
   if (doBuckle){ for (var bi = 0; bi < nDesigns; bi++){ if (recipes[bi]) nBuckleDesigns++; } }
   var nNonlinDesigns = 0;
@@ -393,7 +428,7 @@ async function runRealSweep(N, runToken){
   /* ---------- Phase 1 · Elastic (GPU) ---------- */
   if (doElastic){
     for (var i = 0; i < nDesigns; i++){
-      if (RUN_STATE.cancelled) return;
+      if (stale()) return;
       RUN_STATE.currentIndex = i;
       var d = designs[i];
       bumpProgress();
@@ -405,10 +440,10 @@ async function runRealSweep(N, runToken){
         continue;
       }
 
-      /* Skip recompute when nothing this mode depends on changed (grid N +
-         prune flag).  A design's geometry is immutable for its id, so the
-         settings signature is sufficient. */
-      var elSig = 'N' + N + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0);
+      /* Skip recompute when nothing this mode depends on changed: grid N,
+         prune flag, solver path (full 6-LC Voigt) and the recipe/material
+         fingerprint (Sprint A — ids alone are not unique across imports). */
+      var elSig = 'N' + N + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0) + '|full6|r' + recipeFp[i];
       if (d.results && !d.results._error && d.results._elasticSig === elSig){
         paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · cached');
         doneUnits++; bumpProgress();
@@ -418,9 +453,10 @@ async function runRealSweep(N, runToken){
       renderDesignGrid();
 
       var elasticResult = null, solveErr = null;
+      nFresh.elastic++;
       try { elasticResult = await solveDesignElasticFull(recipe, N, { pruneLargest: GEOM_STATE.pruneLargest }); }
       catch (err){ solveErr = err; console.error('[run] design ' + d.id + ' elastic solve failed:', err); }
-      if (RUN_STATE.cancelled) return;
+      if (stale()) return;
 
       if (solveErr || !elasticResult || !elasticResult.valid){
         d.results = stubResults();
@@ -450,7 +486,7 @@ async function runRealSweep(N, runToken){
     }
   }
 
-  if (RUN_STATE.cancelled) return;
+  if (stale()) return;
 
   RUN_TIMING.elastic = performance.now() - tEl0;
   var tNl0 = performance.now();
@@ -460,11 +496,11 @@ async function runRealSweep(N, runToken){
     var axisMap = { xx: 0, yy: 1, zz: 2 };
     var nlAxis = (axisMap[NONLIN_STATE.axis] != null) ? axisMap[NONLIN_STATE.axis] : 2;
     var nlfft;
-    if (window.__sharedFFT && window.__sharedFFT.N === nlN){ nlfft = window.__sharedFFT; }
+    if (window.__sharedFFT && window.__sharedFFT.N === nlN && window.__sharedFFT.device === WGPU.device){ nlfft = window.__sharedFFT; }
     else { if (window.__sharedFFT) window.__sharedFFT.destroy(); nlfft = new FFTPlan(nlN); window.__sharedFFT = nlfft; }
 
     for (var ni = 0; ni < nDesigns; ni++){
-      if (RUN_STATE.cancelled) return;
+      if (stale()) return;
       RUN_STATE.currentIndex = ni;
       var dn = designs[ni];
       var rcpN = recipes[ni];
@@ -477,7 +513,7 @@ async function runRealSweep(N, runToken){
 
       /* Skip recompute when grid/axis/cap/prune are unchanged and a valid
          result (with captured α) is already cached. */
-      var nlSig = 'N' + nlN + '|a' + NONLIN_STATE.axis + '|c' + NONLIN_STATE.cap + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0);
+      var nlSig = 'N' + nlN + '|a' + NONLIN_STATE.axis + '|c' + NONLIN_STATE.cap + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0) + '|r' + recipeFp[ni];
       var nlExist = NONLIN_BY_DESIGN[dn.id];
       if (nlExist && !nlExist.error && nlExist._sig === nlSig && nlExist.alphaSteps){
         paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · cached');
@@ -486,7 +522,10 @@ async function runRealSweep(N, runToken){
       }
       var nlEstSteps = Math.max(8, Math.round(NONLIN_STATE.cap / 0.003125));
       var onNlStep = function(stepIdx, eps, sig){
-        if (RUN_STATE.cancelled) return;
+        /* Sprint A — throwing here aborts crush() at the next load step (16g
+           calls onStep outside any try), so Cancel / a new Run no longer waits
+           out a whole crush curve. */
+        if (stale()) throw new Error('run superseded');
         doneUnits = baseUnits + 4 * Math.min(stepIdx / nlEstSteps, 0.95);
         bumpProgress();
         paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · N=' + nlN +
@@ -494,13 +533,14 @@ async function runRealSweep(N, runToken){
                        ' · ε=' + (eps * 100).toFixed(2) + '% · σ=' + sig.toFixed(1) + ' MPa');
       };
       var nlSolver = null, nlErr = null, nlOut = null;
+      nFresh.nonlinear++;
       try {
         nlSolver = new NonlinearSolverFull(nlN, nlfft);
         nlSolver.upload(rcpN, { pruneLargest: GEOM_STATE.pruneLargest });
         nlOut = await nlSolver.crush(nlAxis, { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: onNlStep, captureAlpha: true /* tie-up #5 — per-step plastic-strain field for the Nonlinear-tab scrubber */ });
-      } catch (e){ nlErr = e; console.error('[run] nonlinear solve failed for ' + dn.id + ':', e); }
+      } catch (e){ nlErr = e; if (!stale()) console.error('[run] nonlinear solve failed for ' + dn.id + ':', e); }
       if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
-      if (RUN_STATE.cancelled) return;
+      if (stale()) return;
 
       if (nlErr || !nlOut || nlOut.error || !isFinite(nlOut.sigma_y_eff)){
         NONLIN_BY_DESIGN[dn.id] = { error: (nlErr && nlErr.message) || (nlOut && nlOut.error) || 'failed', N: nlN };
@@ -508,6 +548,9 @@ async function runRealSweep(N, runToken){
         NONLIN_BY_DESIGN[dn.id] = {
           sigma_y_eff: nlOut.sigma_y_eff, yielded: !!nlOut.yielded, E0: nlOut.E0, curve: nlOut.curve,
           axis: NONLIN_STATE.axis, N: nlN, truncated: !!nlOut.truncated,
+          truncReason: nlOut.truncReason || null,   /* 'step-budget' | 'diverged' | null */
+          eAxisMax: (nlOut.eAxisMax != null ? nlOut.eAxisMax : null),
+          lateralResMax: (nlOut.lateralResMax != null ? nlOut.lateralResMax : null),
           epsCap: (nlOut.epsCap != null ? nlOut.epsCap : NONLIN_STATE.cap),
           sigmaCap: (nlOut.curve && nlOut.curve.length ? nlOut.curve[nlOut.curve.length - 1].sigma : null),
           /* tie-up #1/#5 — α progression for the Nonlinear field tab (transient; never localStorage'd) */
@@ -521,7 +564,7 @@ async function runRealSweep(N, runToken){
     renderDesignGrid();
   }
 
-  if (RUN_STATE.cancelled) return;
+  if (stale()) return;
 
   RUN_TIMING.nonlinear = performance.now() - tNl0;
   var tBk0 = performance.now();
@@ -531,48 +574,46 @@ async function runRealSweep(N, runToken){
     paintRunStatus('<span class="v">Buckling</span> · N=' + bN + ' · ' + nBuckleDesigns + ' design(s) · pool solving…');
     renderDesignGrid();
 
-    var bkSig = 'N' + bN + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0);
+    var bkSigBase = 'N' + bN + '|p' + (GEOM_STATE.pruneLargest ? 1 : 0) + '|g' + (window.BUCKLE_GPU ? 1 : 0);
     var jobs = [];
     for (var k = 0; k < nDesigns; k++){
       if (!recipes[k]) continue;
-      /* Skip recompute when buckling grid + prune are unchanged and a valid
-         result is cached. */
+      /* Skip recompute when buckling grid + prune + solver path (GPU/CPU) +
+         recipe fingerprint are unchanged and a valid result is cached. */
+      var bkSig = bkSigBase + '|r' + recipeFp[k];
       var bkExist = BUCKLE_BY_DESIGN[designs[k].id];
       if (bkExist && !bkExist.error && bkExist._sig === bkSig){
+        applyBuckleYield(bkExist, designs[k].id);   /* Sprint A — re-derive P_cr/P_y from the CURRENT nonlinear yield */
         doneUnits += 3; bumpProgress();
         continue;
       }
-      (function(design, recipe){
+      (function(design, recipe, sig){
         RUN_STATE.activeWorkers++;            /* tie-up #3 — live-activity flag up while this axis-set is in flight */
+        nFresh.buckling++;
         jobs.push(
           (typeof computeBuckling === 'function' ? computeBuckling : computeBucklingCPU)(recipe, bN, { pruneLargest: GEOM_STATE.pruneLargest }, function(p){
+            if (stale()) return;              /* Sprint A — superseded job: no UI writes */
             doneUnits++; bumpProgress();
             paintRunStatus('<span class="v">Buckling</span> · ' + (design.label || design.id) +
                            ' · ' + p.axis + ' (' + p.done + '/' + p.total + ') · N=' + bN);
           }).then(function(res){
+            if (stale()) return;              /* Sprint A — discard; the new run owns activeWorkers + BUCKLE_BY_DESIGN */
             RUN_STATE.activeWorkers--;        /* tie-up #3 */
-            var nl = NONLIN_BY_DESIGN[design.id];
-            var haveY = !!(nl && nl.yielded && isFinite(nl.sigma_y_eff));
-            var boundBasis = (nl && isFinite(nl.sigmaCap)) ? nl.sigmaCap : null;  /* cap stress = lower bound on true yield */
-            var sigY = haveY ? nl.sigma_y_eff : (boundBasis != null ? boundBasis : SIGMA_Y_TI64_MPA);
-            res.pcr_py = isFinite(res.pcr) ? res.pcr / sigY : Infinity;
-            res.failure_mode = (res.pcr_py >= 1) ? 'Yield-limited' : 'Buckling-limited';
-            res.sigma_y_ref = sigY;
-            res.provisional = !haveY;
-            res.yieldBound = (!haveY && boundBasis != null);  /* pcr_py is an UPPER bound: true sigma_y >= cap stress */
+            applyBuckleYield(res, design.id);
             res.N = bN;
-            res._sig = bkSig;
+            res._sig = sig;
             BUCKLE_BY_DESIGN[design.id] = res;
           }).catch(function(e){
+            if (stale()) return;              /* Sprint A — cancelled/superseded (incl. pool cancelAll rejections) */
             RUN_STATE.activeWorkers--;        /* tie-up #3 */
             BUCKLE_BY_DESIGN[design.id] = { error: (e && e.message) || String(e), N: bN };
             console.error('[run] buckling failed for ' + design.id + ':', e);
           })
         );
-      })(designs[k], recipes[k]);
+      })(designs[k], recipes[k], bkSig);
     }
     await Promise.all(jobs);
-    if (RUN_STATE.cancelled) return;
+    if (stale()) return;
     renderDesignGrid();
   }
 
@@ -584,9 +625,11 @@ async function runRealSweep(N, runToken){
   /* tie-up #4 — fold measured per-mode wall-times into the calibration store
      so the next estimate is machine-accurate; log the actuals to the console. */
   if (nDesigns > 0){
-    if (doElastic)                       RUN_CALIB.elastic   = { sec: (RUN_TIMING.elastic   / 1000) / nDesigns,        N: N };
-    if (doNonlin && nNonlinDesigns > 0)  RUN_CALIB.nonlinear = { sec: (RUN_TIMING.nonlinear / 1000) / nNonlinDesigns,  N: NONLIN_STATE.N, cap: NONLIN_STATE.cap };
-    if (doBuckle && nBuckleDesigns > 0)  RUN_CALIB.buckling  = { sec: (RUN_TIMING.buckling  / 1000) / nBuckleDesigns,  N: ((typeof BUCKLE_STATE !== 'undefined') ? BUCKLE_STATE.N : 8) };
+    /* Sprint A — divide by FRESHLY solved designs only: cached designs cost
+       ~0 ms and used to drag the per-design figure low. */
+    if (doElastic && nFresh.elastic > 0)   RUN_CALIB.elastic   = { sec: (RUN_TIMING.elastic   / 1000) / nFresh.elastic,   N: N };
+    if (doNonlin && nFresh.nonlinear > 0)  RUN_CALIB.nonlinear = { sec: (RUN_TIMING.nonlinear / 1000) / nFresh.nonlinear, N: NONLIN_STATE.N, cap: NONLIN_STATE.cap };
+    if (doBuckle && nFresh.buckling > 0)   RUN_CALIB.buckling  = { sec: (RUN_TIMING.buckling  / 1000) / nFresh.buckling,  N: BUCKLE_STATE.N };
     saveRunCalib();
     console.log('[run] per-mode wall-time (s) — elastic ' + (RUN_TIMING.elastic/1000).toFixed(1) +
                 ' · nonlinear ' + (RUN_TIMING.nonlinear/1000).toFixed(1) +
@@ -610,6 +653,55 @@ async function runRealSweep(N, runToken){
   }
   paintRunStatus(msg);
   finishRun(runToken);
+}
+
+
+/* Sprint A — derive P_cr/P_y + failure mode for a buckling result from the
+   CURRENT nonlinear yield (fresh solves and cache hits alike, so a newer
+   crush run is always reflected).  Logic unchanged from the inline version. */
+function applyBuckleYield(res, designId){
+  var nl = NONLIN_BY_DESIGN[designId];
+  var haveY = !!(nl && nl.yielded && isFinite(nl.sigma_y_eff));
+  var boundBasis = (nl && isFinite(nl.sigmaCap)) ? nl.sigmaCap : null;  /* cap stress = lower bound on true yield */
+  var sigY = haveY ? nl.sigma_y_eff : (boundBasis != null ? boundBasis : SIGMA_Y_TI64_MPA);
+  res.pcr_py = isFinite(res.pcr) ? res.pcr / sigY : Infinity;
+  res.failure_mode = (res.pcr_py >= 1) ? 'Yield-limited' : 'Buckling-limited';
+  res.sigma_y_ref = sigY;
+  res.provisional = !haveY;
+  res.yieldBound = (!haveY && boundBasis != null);  /* pcr_py is an UPPER bound: true sigma_y >= cap stress */
+  return res;
+}
+
+/* Sprint A — recipe fingerprint for cache signatures.  stableStringify is
+   JSON with object keys sorted at every level (typed arrays as plain arrays,
+   functions/undefined dropped), so key order never changes the hash; two
+   FNV-1a 32-bit passes with different offset bases give a 64-bit hex id. */
+function stableStringify(v){
+  if (v === null || v === undefined || typeof v === 'function') return 'null';
+  if (typeof v !== 'object') return (typeof v === 'number' && !isFinite(v)) ? JSON.stringify(String(v)) : JSON.stringify(v);
+  if (Array.isArray(v) || (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(v) && v.length != null)){
+    var parts = [];
+    for (var i = 0; i < v.length; i++) parts.push(stableStringify(v[i]));
+    return '[' + parts.join(',') + ']';
+  }
+  var keys = Object.keys(v).sort(), out = [];
+  for (var k = 0; k < keys.length; k++){
+    var val = v[keys[k]];
+    if (val === undefined || typeof val === 'function') continue;
+    out.push(JSON.stringify(keys[k]) + ':' + stableStringify(val));
+  }
+  return '{' + out.join(',') + '}';
+}
+function fnv1a32(str, basis){
+  var h = basis >>> 0;
+  for (var i = 0; i < str.length; i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h >>> 0;
+}
+function recipeFingerprint(recipe){
+  if (!recipe) return '';
+  var s = stableStringify(recipe);
+  function hex(h){ return ('0000000' + h.toString(16)).slice(-8); }
+  return hex(fnv1a32(s, 0x811c9dc5)) + hex(fnv1a32(s, 0x01000193 ^ s.length));
 }
 
 
@@ -757,6 +849,21 @@ function finishRunFailed(reason){
   setSolverSpinner(false);
 }
 
+/* Sprint A — any throw out of runRealSweep lands here.  Only the LIVE run is
+   torn down (a superseded sweep's crash is just logged); bumping the token
+   makes any of its still-pending async work stale. */
+function onSweepCrashed(err, runToken){
+  console.error('[run] sweep crashed:', err);
+  if (runToken !== RUN_STATE.token) return;
+  RUN_STATE.token++;
+  RUN_STATE.activeWorkers = 0;
+  if (typeof cancelBucklingCPU === 'function') cancelBucklingCPU('run failed');
+  finishRunFailed((err && err.message) || String(err));
+  paintSolverPill('run failed · see console', 'bad');
+  if (typeof updateActionButtons === 'function') updateActionButtons();
+  try { renderDesignGrid(); } catch (e2){ console.error('[run] render after crash failed:', e2); }
+}
+
 function finishRun(runToken){
   /* tie-up #3 — completion gate.  finishRun is the SOLE writer of the
      "run complete" pill, so the mid-run-on-tab-switch report means it was
@@ -827,12 +934,15 @@ function cancelRun(){
     RUN_STATE.timer = null;
   }
   /* Set the cancel flag — the async runRealSweep loop checks this between
-     designs and aborts.  A solve-in-progress will still complete (we don't
-     have mid-solve cancellation in the GPU CG loop), but no further designs
-     are started.  This typically aborts within seconds at N=32. */
+     designs and aborts.  An elastic GPU solve in progress still completes (no
+     mid-solve cancellation in the CG loop) and its result is discarded; a
+     nonlinear crush aborts at its next load step; buckling workers are
+     terminated outright (Sprint A). */
   RUN_STATE.cancelled = true;
   RUN_STATE.running = false;
   RUN_STATE.token++;                 /* tie-up #3 — invalidate any in-flight finishRun for the cancelled run */
+  RUN_STATE.activeWorkers = 0;       /* Sprint A — stale jobs no longer decrement (token-gated) */
+  if (typeof cancelBucklingCPU === 'function') cancelBucklingCPU('cancelled');
   RUN_STATE.progress = 0;
   RUN_STATE.currentIndex = 0;
   LAB_STATE.runHasCompleted = false;

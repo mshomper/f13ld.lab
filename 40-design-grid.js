@@ -14,19 +14,20 @@
    normal block).  Buckling, yield, thermal aren't wired up yet — the run
    pipeline writes 0 for them.  When we know a run completed and the value
    is exactly 0, render "—" instead of "0.00 MPa" so users aren't misled.
-   For pre-run mock data the same fields have nonzero defaults from
-   00-mock-data.js, so this only kicks in for real-run output. */
+   Sprint A — the demo designs no longer carry invented results, so a 0 /
+   missing value is ALWAYS a sentinel (also mid-run or after a cancel), not
+   only once a run has completed. */
 function fmtComputed(value, suffix, digits){
-  if (LAB_STATE.runHasCompleted && value === 0) return '—';
+  if (value == null || value === 0 || !isFinite(value)) return '—';
   return value.toFixed(digits != null ? digits : 2) + (suffix || '');
 }
 function failureModeText(r){
-  if (LAB_STATE.runHasCompleted && r.failure_mode === 'not-computed') return '(not computed)';
-  if (LAB_STATE.runHasCompleted && r.failure_mode === 'no-data')      return '(no kernel)';
-  return r.failure_mode;
+  if (r.failure_mode === 'not-computed') return '(not computed)';
+  if (r.failure_mode === 'no-data')      return '(no kernel)';
+  return r.failure_mode || '—';
 }
 function pcrPyDeltaClass(r){
-  if (LAB_STATE.runHasCompleted && r.pcr_py === 0) return 'neut';
+  if (!r.pcr_py || !isFinite(r.pcr_py)) return 'neut';   /* Sprint A — sentinel at any time (see fmtComputed) */
   return r.pcr_py < 1 ? 'warn' : 'neut';   /* status, not comparison → amber */
 }
 
@@ -60,9 +61,72 @@ function loadCapacityCell(d){
   return { lbl:'Load Capacity', val:fmtForceN(lc.N), delta:[lc.mode + ' \u00b7 ' + lc.cell_mm + ' mm cell', govCls] };
 }
 
+/* Sprint A — relative density shown on cards.  After a solve: the voxel
+   density the elastic solver actually meshed (d.results.rho at run N), with
+   the imported nominal value alongside when it differs by > 2 points.
+   Before a solve: the imported nominal value, labelled as such, or "—".
+   Built-in demos carry no nominal (their old 0.42/0.38/0.40 were invented;
+   raw_json gates out stale values restored from localStorage). */
+function densityText(d){
+  var r = d && d.results;
+  var solved = (r && !r._error && isFinite(r.rho) && r.rho > 0) ? r.rho : null;
+  var nominal = (d && d.raw_json && d.rho_rel != null && isFinite(d.rho_rel)) ? +d.rho_rel : null;
+  if (solved != null){
+    var t = solved.toFixed(2);
+    if (nominal != null && Math.abs(nominal - solved) > 0.02) t += ' (nominal ' + nominal.toFixed(2) + ')';
+    return t;
+  }
+  return (nominal != null) ? (nominal.toFixed(2) + ' nominal') : '\u2014';
+}
+
+/* Sprint A — pre-run placeholder tiles: same rows/labels as the real card so
+   the layout does not jump, but no numbers until a solve produces them. */
+function preRunStats(d, mode){
+  var p = ['run to compute', 'neut'];
+  if (mode === 'thermal'){
+    return [
+      { lbl:'Thermal Conductivity', val:'\u2014', delta:['solver not yet available', 'neut'] },
+      { lbl:'Relative Density',     val:densityText(d), delta:p },
+      { lbl:'Modulus Z',            val:'\u2014', delta:p },
+      { lbl:'Anisotropy',           val:'\u2014', delta:p }
+    ];
+  }
+  if (mode === 'buckle'){
+    return [
+      { lbl:'Buckling Strength',       val:'\u2014', delta:p },
+      { lbl:'Buckling-to-Yield Ratio', val:'\u2014', delta:p },
+      { lbl:'Load Capacity',           val:'\u2014', delta:p },
+      { lbl:'Critical Load Factor',    val:'\u2014', delta:p },
+      { lbl:'Modulus Z',               val:'\u2014', delta:p }
+    ];
+  }
+  return [
+    { lbl:'Modulus X', val:'\u2014', delta:p },
+    { lbl:'Modulus Y', val:'\u2014', delta:p },
+    { lbl:'Modulus Z', val:'\u2014', delta:p },
+    { lbl:'Anisotropy', val:'\u2014', delta:p },
+    { lbl:'Yield Strength', val:'\u2014', delta:p },
+    { lbl:'Buckling-to-Yield Ratio', val:'\u2014', delta:p },
+    { lbl:'Load Capacity', val:'\u2014', delta:p }
+  ];
+}
+
 function statsForDesign(d, mode){
   var r = d.results;
-  if (!r) return [];
+  if (!r){
+    /* Sprint A — was [] (no drawer).  With no elastic results but buckling /
+       nonlinear data present (elastic toggled off), fall through with an
+       all-sentinel block so those real numbers still render. */
+    var hasOther = (typeof BUCKLE_BY_DESIGN !== 'undefined' && BUCKLE_BY_DESIGN[d.id]) ||
+                   (typeof NONLIN_BY_DESIGN !== 'undefined' && NONLIN_BY_DESIGN[d.id]);
+    if (!hasOther) return preRunStats(d, mode);
+    r = (typeof stubResults === 'function') ? stubResults() : { E11:0, E22:0, E33:0, zener:0, pcr_py:0, sigma_y_z:0, kappa_z:0 };
+    r.failure_mode = 'not-computed';
+  }
+  /* Sprint A — sentinel-safe elastic cells (0 = not computed, never "-100% vs B"). */
+  function dv(key){ return (r[key] && isFinite(r[key])) ? deltaVsBaseline(r[key], key, d.id) : ['\u2014','neut']; }
+  var zVal = (r.zener > 0 && isFinite(r.zener)) ? r.zener.toFixed(2) : '\u2014';
+  var zDesc = (r.zener > 0 && isFinite(r.zener)) ? zenerDescriptor(r.zener) : '\u2014';
 
   // Default: stiffness-flavored summary
   if (mode === 'geom' || mode === 'deform' || mode === 'stress' || mode === 'stiff'){
@@ -82,16 +146,18 @@ function statsForDesign(d, mode){
       yDelta = [(nld.axis||'zz').toUpperCase() + (nld.truncated ? ' · partial' : ' · crush'), 'neut'];
     } else if (nld && !nld.error) {
       yVal = isFinite(nld.sigmaCap) ? ('> ' + fmtEngMPa(nld.sigmaCap)) : 'no yield';
-      yDelta = ['no yield · ≤ ' + Math.round((nld.epsCap||0.05)*100) + '% strain', 'neut'];
+      yDelta = (nld.truncReason === 'step-budget' && isFinite(nld.eAxisMax))
+        ? ['stopped at ε=' + (nld.eAxisMax*100).toFixed(2) + '% (step budget) · no yield in range reached', 'warn']
+        : ['no yield · ≤ ' + Math.round((nld.epsCap||0.05)*100) + '% strain', 'neut'];
     } else {
       yVal = fmtComputed(r.sigma_y_z, ' MPa', 1);
       yDelta = [failureModeText(r), 'neut'];
     }
     return [
-      { lbl:'Modulus X', val:fmtEngMPa(r.E11 * 1000), delta:deltaVsBaseline(r.E11, 'E11', d.id) },
-      { lbl:'Modulus Y', val:fmtEngMPa(r.E22 * 1000), delta:deltaVsBaseline(r.E22, 'E22', d.id) },
-      { lbl:'Modulus Z', val:fmtEngMPa(r.E33 * 1000), delta:deltaVsBaseline(r.E33, 'E33', d.id) },
-      { lbl:'Anisotropy', val:r.zener.toFixed(2), delta:[zenerDescriptor(r.zener), 'neut'] },
+      { lbl:'Modulus X', val:fmtEngMPa(r.E11 * 1000), delta:dv('E11') },
+      { lbl:'Modulus Y', val:fmtEngMPa(r.E22 * 1000), delta:dv('E22') },
+      { lbl:'Modulus Z', val:fmtEngMPa(r.E33 * 1000), delta:dv('E33') },
+      { lbl:'Anisotropy', val:zVal, delta:[zDesc, 'neut'] },
       { lbl:'Yield Strength', val:yVal, delta:yDelta },
       { lbl:pcrLbl, val:pcrVal, delta:pcrDelta },
       loadCapacityCell(d)
@@ -100,10 +166,10 @@ function statsForDesign(d, mode){
   // Thermal mode prioritizes κ
   if (mode === 'thermal'){
     return [
-      { lbl:'Thermal Conductivity', val:fmtComputed(r.kappa_z, ' W/mK', 2), delta:[failureModeText(r), 'neut'] },
-      { lbl:'Relative Density',     val:d.rho_rel.toFixed(2),                delta:['baseline','neut'] },
-      { lbl:'Modulus Z',            val:fmtEngMPa(r.E33 * 1000),            delta:deltaVsBaseline(r.E33, 'E33', d.id) },
-      { lbl:'Anisotropy',           val:r.zener.toFixed(2),                  delta:[zenerDescriptor(r.zener), 'neut'] }
+      { lbl:'Thermal Conductivity', val:'\u2014',                            delta:['solver not yet available', 'neut'] },
+      { lbl:'Relative Density',     val:densityText(d),                      delta:['solver voxel \u03c1','neut'] },
+      { lbl:'Modulus Z',            val:fmtEngMPa(r.E33 * 1000),            delta:dv('E33') },
+      { lbl:'Anisotropy',           val:zVal,                                delta:[zDesc, 'neut'] }
     ];
   }
   // Buckling mode — reads BUCKLE_BY_DESIGN (Run All buckling phase), not d.results.
@@ -115,11 +181,12 @@ function statsForDesign(d, mode){
       var safeTxt = isFinite(bk.pcr_py) ? (limited ? 'buckling-limited' : 'yield-limited') : '—';
       var ratLbl = bk.provisional ? 'Buckling-to-Yield Ratio*' : 'Buckling-to-Yield Ratio';
       return [
-        { lbl:'Buckling Strength',       val:(isFinite(bk.pcr) ? fmtEngMPa(bk.pcr) : '—'),                              delta:['N='+(bk.N||'—'), 'neut'] },
+        { lbl:'Buckling Strength',       val:(isFinite(bk.pcr) ? fmtEngMPa(bk.pcr) : '—'),                              delta:(bk.eigConverged === false) ? ['not converged · N='+(bk.N||'—'), 'warn'] : ['N='+(bk.N||'—'), 'neut'] },
         { lbl:ratLbl,                    val:(isFinite(bk.pcr_py) ? ((bk.yieldBound?'< ':'')+bk.pcr_py.toFixed(2)) : '—'), delta:[safeTxt, limited ? 'warn' : 'neut'] },
         loadCapacityCell(d),
-        { lbl:'Critical Load Factor',    val:bk.lambda_cr.toExponential(2),                                            delta:['crit '+(bk.critAxis||'—'), 'neut'] },
-        { lbl:'Modulus Z',               val:modZ,                                                                     delta:deltaVsBaseline(r.E33, 'E33', d.id) }
+        /* lambda_cr = critical axial macro strain (16c header; free-sided uniaxial loading by default) — shown as a strain, not a bare multiplier */
+        { lbl:'Critical Strain',         val:(bk.lambda_cr * 100).toPrecision(3) + '%',                                delta:['crit '+(bk.critAxis||'—'), 'neut'] },
+        { lbl:'Modulus Z',               val:modZ,                                                                     delta:dv('E33') }
       ];
     }
     var note = (bk && bk.skip_reason) ? bk.skip_reason : (bk && bk.error) ? bk.error : (LAB_STATE.runHasCompleted ? 'enable Buckling + Run' : 'not run');
@@ -127,8 +194,8 @@ function statsForDesign(d, mode){
       { lbl:'Buckling Strength',       val:'—',   delta:[note, (bk && bk.skip_reason) ? 'warn' : 'neut'] },
       { lbl:'Buckling-to-Yield Ratio', val:'—',   delta:['—', 'neut'] },
       loadCapacityCell(d),
-      { lbl:'Critical Load Factor',    val:'—',   delta:['—', 'neut'] },
-      { lbl:'Modulus Z',               val:modZ,  delta:deltaVsBaseline(r.E33, 'E33', d.id) }
+      { lbl:'Critical Strain',         val:'—',   delta:['—', 'neut'] },
+      { lbl:'Modulus Z',               val:modZ,  delta:dv('E33') }
     ];
   }
   return [];
@@ -362,8 +429,9 @@ function renderDesignGrid(){
       }
     }
     else if (VIEW_STATE.mode === 'thermal'){
-      if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Enable Thermal · Run to see κ surface');
-      else svgInner = svgThermal(d.results.zener, i);
+      /* Sprint A — svgThermal(zener) drew a κ surface faked from the ELASTIC
+         anisotropy.  No thermal solver is wired, so say so plainly. */
+      svgInner = svgEmptyViewport('Thermal κ solver not yet available');
     }
     else if (VIEW_STATE.mode === 'buckle'){
       if (!useRM) {
@@ -834,12 +902,12 @@ function buildStressControl(designId, sat, axis){
 function readoutForDesign(d, mode){
   var r = d.results || {};
   var amp = getDeformAmp(d.id);
-  if (mode === 'geom')   return d.title + ' · ρ=' + d.rho_rel.toFixed(2);
+  if (mode === 'geom')   return d.title + ' · ρ=' + densityText(d);
   if (mode === 'buckle'){
     var bkr = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
     if (bkr && !bkr.error && isFinite(bkr.lambda_cr)){
       var axb = (typeof activeAxisFor === 'function') ? activeAxisFor(d, 'buckle') : 'zz';
-      return 'mode ' + axb + ' · λ_cr=' + bkr.lambda_cr.toExponential(2);
+      return 'mode ' + axb + ' · ε_cr=' + (bkr.lambda_cr * 100).toPrecision(3) + '%';
     }
     return 'Enable Buckling · Run';
   }
@@ -896,10 +964,7 @@ function readoutForDesign(d, mode){
     }
     return 'E_max = — (not computed)';
   }
-  if (mode === 'thermal'&& LAB_STATE.runHasCompleted){
-    return r.kappa_z === 0 ? 'κ_max = — (not computed)'
-                            : 'κ_max = ' + (r.kappa_z*1.04).toFixed(2) + ' W/mK';
-  }
+  if (mode === 'thermal') return 'κ = — (solver not yet available)';   /* Sprint A — no thermal solver; was kappa_z*1.04 of mock data */
   if (mode === 'buckle' && LAB_STATE.runHasCompleted){
     return r.lambda_cr === 0 ? 'λ_cr = — (not computed)'
                               : 'λ_cr = ' + r.lambda_cr.toFixed(2);
@@ -922,6 +987,14 @@ function removeDesign(designId){
   /* Dispose any LabRaymarcher attached to this design before pulling it
      from state, so its GL context and texture are freed immediately. */
   if (typeof disposeRaymarcher === 'function') disposeRaymarcher(designId);
+  if (typeof disposeStiffnessViz === 'function') disposeStiffnessViz(designId);
+  /* Sprint A — drop this id's transient per-design caches so a later design
+     reusing the id can never be served these results (the elastic cache lives
+     on the design object's d.results and leaves with it).  A run in flight is
+     cancelled: its comparison set just changed and its jobs would write here. */
+  if (typeof RUN_STATE !== 'undefined' && RUN_STATE.running && typeof cancelRun === 'function') cancelRun();
+  if (typeof BUCKLE_BY_DESIGN !== 'undefined') delete BUCKLE_BY_DESIGN[designId];
+  if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[designId];
 
   LAB_STATE.designs = LAB_STATE.designs.filter(function(d){ return d.id !== designId; });
   if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();   /* freed slot returns to the pool; survivors keep theirs */

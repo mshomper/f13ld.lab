@@ -1513,9 +1513,16 @@ async function solveDesignElasticFull(recipe, N, opts) {
   if (!WGPU.device) throw new Error('solveDesignElasticFull: ensureDevice() first');
   opts = opts || {};
 
-  /* Coordinate swap from solver to physical:
-     LC 0↔2 (xx↔zz), LC 1 (yy unchanged), LC 3↔5 (yz↔xy), LC 4 (xz unchanged) */
-  var SWAP = [2, 1, 0, 5, 4, 3];
+  /* Axis convention (Sprint A fix, v0.7.2): the solver frame IS the
+     physical frame.  buildVoxels stores physical x on the slowest index
+     (idx = i*N² + j*N + k, x=i, y=j, z=k) and buildGammaFull puts its first
+     wavenumber on that same index, so solver LC 0 is physical xx.  The old
+     X↔Z relabel (SWAP = [2,1,0,5,4,3]) mislabeled Ex/Ez, Gyz/Gxy and the
+     Poisson ratios on anisotropic designs.  The display-side mismatch that
+     motivated it is now handled where it lives: 21-raymarcher transposes
+     solver-order fields to WebGL texture order (x fastest) on upload.
+     SWAP is kept as an identity so the mapping stays explicit. */
+  var SWAP = [0, 1, 2, 3, 4, 5];
 
   /* Normalize captureFieldsLCs to physical Voigt indices (0..5), then
      translate to solver-internal LC indices via SWAP[phys] for the
@@ -1680,9 +1687,8 @@ async function solveDesignElasticFull(recipe, N, opts) {
 
      hom.fieldsByLC is keyed by solver-internal LC indices (0..5).  For
      each captured physical Voigt axis (0=xx, 1=yy, 2=zz, 3=yz, 4=xz,
-     5=xy) we look up the corresponding solver LC via SWAP, then for
-     NORMAL axes apply the X↔Z component swap inside u_prime + eps_bar
-     so the fieldset is in physical-axis coordinates.
+     5=xy) we look up the corresponding solver LC via SWAP (identity
+     since v0.7.2 — the solver frame is the physical frame).
 
      SWAP table covers all 6 indices:
        phys=0(xx)→solver=2, phys=1(yy)→1, phys=2(zz)→0,
@@ -1699,17 +1705,8 @@ async function solveDesignElasticFull(recipe, N, opts) {
       var solverIdx = SWAP[phys];
       var f = hom.fieldsByLC[solverIdx];
       if (!f) continue;
-      if (f.u_prime) {
-        /* Normal LC — swap u_prime[0] ↔ u_prime[2] and eps_bar[0] ↔
-           eps_bar[2] so the returned fieldset is in physical-axis
-           coordinates (solver internal had X↔Z relabeling). */
-        var tmpU = f.u_prime[0];
-        f.u_prime[0] = f.u_prime[2];
-        f.u_prime[2] = tmpU;
-        var tmpE = f.eps_bar[0];
-        f.eps_bar[0] = f.eps_bar[2];
-        f.eps_bar[2] = tmpE;
-      }
+      /* Solver frame = physical frame (see SWAP note above): u_prime and
+         eps_bar are already physical — no component swap. */
       fieldsByAxis[axisName[phys]] = f;
     }
   }
@@ -2578,4 +2575,53 @@ async function runMultiDesignGPUTest(N, opts) {
 if (typeof window !== 'undefined') {
   window.runFullVoigtGPUTestBatched = runFullVoigtGPUTestBatched;
   window.runMultiDesignGPUTest = runMultiDesignGPUTest;
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   Axis-convention self-test (Sprint A, v0.7.2)
+   ────────────────────────────────────────────────────────────
+   Schwarz P is cubic, so runFullVoigtGPUTest cannot see an axis
+   mislabel.  This test solves a z-stacked laminate (solid where
+   cos(z) > 0: plates normal to z).  Physics: Ex = Ey ≈ Voigt (stiff),
+   Ez ≈ Reuss (near void).  It checks the GPU against that ordering
+   and against the CPU oracle axis by axis.
+   Console: await runAxisConventionGPUTest()
+   ════════════════════════════════════════════════════════════ */
+var AXIS_TEST_ZLAMINATE = {
+  name: 'axis-test z-laminate', family: 'tpms',
+  surface: { type: 'terms', terms: [ { on: true, coef: 1,
+    factors: [ { trig: 'cos(z)', fx: 1, fy: 1, fz: 1 } ] } ] },
+  geometry: { mode: 'solid', offset: 0 },
+  material: { Es_MPa: 110000, nu: 0.34 }
+};
+
+async function runAxisConventionGPUTest(N) {
+  N = N || 16;
+  await ensureDevice();
+  var cpu = homogenizeFullCPU(AXIS_TEST_ZLAMINATE, N, { tol: 1e-5, maxiter: 400 });
+  var gpu = await solveDesignElasticFull(AXIS_TEST_ZLAMINATE, N, {});
+  function rd(a, b) { return Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b), 1e-30); }
+  var notes = [];
+  var orderOK = gpu.Ez_MPa < 0.05 * gpu.Ex_MPa && gpu.Ez_MPa < 0.05 * gpu.Ey_MPa;
+  if (!orderOK) notes.push('GPU axis order wrong: Ez should be the soft axis');
+  var pairs = [['Ex', gpu.Ex_MPa, cpu.Ex], ['Ey', gpu.Ey_MPa, cpu.Ey],
+               ['Ez', gpu.Ez_MPa, cpu.Ez], ['Gxy', gpu.Gxy_MPa, cpu.Gxy],
+               ['Gxz', gpu.Gxz_MPa, cpu.Gxz], ['Gyz', gpu.Gyz_MPa, cpu.Gyz]];
+  for (var i = 0; i < pairs.length; i++) {
+    /* Ez / Gxz / Gyz are void-dominated (tiny): compare with a looser tol */
+    var tol = (pairs[i][0] === 'Ex' || pairs[i][0] === 'Ey' || pairs[i][0] === 'Gxy') ? 0.01 : 0.05;
+    var d = rd(pairs[i][1], pairs[i][2]);
+    if (d > tol) notes.push(pairs[i][0] + ' GPU vs CPU ' + (d * 100).toFixed(2) + '% (>' + (tol * 100) + '%)');
+  }
+  var ok = notes.length === 0;
+  console.log('[axis-test] N=' + N + ' ' + (ok ? 'PASS' : 'FAIL'),
+    '\n  GPU Ex/Ey/Ez (GPa):', (gpu.Ex_MPa / 1000).toFixed(3), (gpu.Ey_MPa / 1000).toFixed(3), (gpu.Ez_MPa / 1000).toFixed(4),
+    '\n  CPU Ex/Ey/Ez (GPa):', (cpu.Ex / 1000).toFixed(3), (cpu.Ey / 1000).toFixed(3), (cpu.Ez / 1000).toFixed(4),
+    notes.length ? '\n  ' + notes.join('\n  ') : '');
+  return { ok: ok, notes: notes, gpu: gpu, cpu: cpu };
+}
+
+if (typeof window !== 'undefined') {
+  window.runAxisConventionGPUTest = runAxisConventionGPUTest;
 }

@@ -12,7 +12,7 @@
      - the effective stress-strain curve (sigma_bar vs eps_bar
        along the driven axis),
      - the per-design effective yield via 0.2% offset (sigma_y_eff)
-       — this is the number that retires the provisional 880 MPa
+       — this is the number that retires the provisional (950 MPa)
        Ti-64 seam in 50-controls (P_cr/P_y),
      - the per-voxel accumulated equivalent plastic strain field
        (alpha) for the "where it crushes" visualization.
@@ -52,7 +52,8 @@
 /* Voigt index -> tensor (i,j), 0-indexed. Mirrors 16a. */
 var NL_VOIGT_IJ = [[0,0],[1,1],[2,2],[1,2],[0,2],[0,1]];
 
-/* Default material — Ti-6Al-4V. sigY0 matches SIGMA_Y_TI64_MPA (880).
+/* Default material — Ti-6Al-4V. SIGMA_Y_TI64_MPA (50-controls) is derived
+   from sigY0_MPa below, so the provisional P_cr/P_y seam and the crush agree.
    H_MPa is the linear isotropic hardening modulus. The placeholder
    below gives a post-yield tangent Et = E*H/(E+H) ~ 1.96 GPa, a
    reasonable Ti-64 figure; CONFIRM the production value. Voce
@@ -77,6 +78,19 @@ var NL_MAT_DEFAULT = {
    CONSTITUTIVE CORE  (validated in Node — see header)
    ════════════════════════════════════════════════════════════ */
 
+/* Merge a recipe material over NL_MAT_DEFAULT. Demo / imported recipe
+   materials carry only elastic + thermal/fluid keys (Es_MPa, nu, ks_WmK,
+   muFluid_PaS); without this merge the crush silently dropped to the
+   nlMakeMaterial fallbacks (linear hardening, no Voce). Keys the recipe
+   DOES set win, including an explicit voce: null (linear hardening).
+   Shallow: the default voce object is shared by reference (never mutated). */
+function nlResolveMaterial(spec) {
+  var out = {}, k;
+  for (k in NL_MAT_DEFAULT) if (Object.prototype.hasOwnProperty.call(NL_MAT_DEFAULT, k)) out[k] = NL_MAT_DEFAULT[k];
+  if (spec) for (k in spec) if (Object.prototype.hasOwnProperty.call(spec, k) && spec[k] !== undefined) out[k] = spec[k];
+  return out;
+}
+
 /* Derive Lame / bulk constants from a material spec. */
 function nlMakeMaterial(mat) {
   mat = mat || NL_MAT_DEFAULT;
@@ -87,7 +101,7 @@ function nlMakeMaterial(mat) {
   var K   = lam + 2 * mu / 3;
   return {
     E: E, nu: nu, mu: mu, lam: lam, K: K,
-    sigY0: mat.sigY0_MPa != null ? mat.sigY0_MPa : 880,
+    sigY0: mat.sigY0_MPa != null ? mat.sigY0_MPa : 950,   /* = NL_MAT_DEFAULT.sigY0_MPa */
     H:     mat.H_MPa     != null ? mat.H_MPa     : 2000,
     voce:  mat.voce || null
   };
@@ -399,7 +413,7 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
   var inside = 0; for (var v = 0; v < N3; v++) inside += solid[v];
   var rho = inside / N3;
 
-  var matSpec = recipe.material || NL_MAT_DEFAULT;
+  var matSpec = nlResolveMaterial(recipe.material);   /* merge over NL_MAT_DEFAULT (plasticity keys) */
   var m   = nlMakeMaterial(matSpec);
   var Es  = m.E, nu = m.nu;
   var C_s = isoC(Es, nu);
@@ -430,10 +444,27 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
   var freeIdx = [];                  /* free (zero-stress) axes for stress control */
   for (var ii=0; ii<6; ii++) if (ii !== axisV) freeIdx.push(ii);
 
-  var capEps = epsTarget, nominalStep = capEps / nSteps, maxSteps = Math.ceil(nSteps * 1.5);
+  /* knee refinement (default ON, mirrors 16g): half steps through the 0.2%
+     knee; the extra steps get their own budget so the guard is unchanged. */
+  var kneeRefine = opts.kneeRefine !== false, kneeStep = -1;
+  var capEps = epsTarget, nominalStep = capEps / nSteps, maxSteps = Math.ceil(nSteps * 1.5) + (kneeRefine ? NL_KNEE_REFINE_TAIL + 2 * NL_KNEE_LOOKAHEAD : 0);
   var step = 0, eAxis = 0;
+  var Eknee = null;   /* E used by the knee predictor: elastic macro modulus (stress) or first-step secant (strain) */
+  if (control === 'stress' && Cbar_e) { var SbarK = invert6x6(Cbar_e); if (SbarK) Eknee = 1 / SbarK[axisV*6 + axisV]; }
+  /* stress control: lateral-strain seeding state (mirrors 16g crushStress) */
+  var nf0 = freeIdx.length, SffSeed = null, CfaSeed = null, ebFreePrev = null, eAxisPrev = 0;
+  if (control === 'stress') {
+    var KffSeed = new Float64Array(nf0 * nf0);
+    for (var ka = 0; ka < nf0; ka++) for (var kb = 0; kb < nf0; kb++) KffSeed[ka*nf0+kb] = Cbar_e[freeIdx[ka]*6 + freeIdx[kb]];
+    SffSeed = invertSmall(KffSeed, nf0);
+    CfaSeed = new Float64Array(nf0);
+    for (var kc = 0; kc < nf0; kc++) CfaSeed[kc] = Cbar_e[freeIdx[kc]*6 + axisV];
+  }
+  var lateralResMax = 0;
   while (eAxis < capEps - 1e-9 && step < maxSteps) {
-    var dStep = Math.min(nominalStep, capEps - eAxis);   /* nominal stride, clamped to the cap */
+    var dNom = nominalStep;
+    if (kneeRefine) dNom *= nlKneeStepFactor(curve, Eknee, 0.002, nominalStep, step, kneeStep);
+    var dStep = Math.min(dNom, capEps - eAxis);   /* nominal (or knee-refined) stride, clamped to the cap */
     var trialAxis = eAxis + dStep;
     epsBarFull[axisV] = trialAxis;
 
@@ -448,8 +479,20 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
         res = nlNewtonSolveCPU(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, opts);
       } else {
         /* uniaxial stress: modified macro-Newton on free strains so sigma_free = 0.
-           Fixed macro Jacobian = elastic Cbar_e free-free block (modified Newton). */
-        res = nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts);
+           Fixed macro Jacobian = elastic Cbar_e free-free block (modified Newton).
+           Lateral seeding mirrors 16g crushStress: elastic predictor on the first
+           step, then linear extrapolation of the previous converged laterals. */
+        if (step === 0 || ebFreePrev === null) {
+          for (var ps = 0; ps < nf0; ps++) {
+            var pred = 0; for (var pc = 0; pc < nf0; pc++) pred += SffSeed[ps*nf0+pc] * CfaSeed[pc];
+            epsBarFull[freeIdx[ps]] = -pred * trialAxis;
+          }
+        } else {
+          var esc = trialAxis / eAxisPrev;
+          for (var ex = 0; ex < nf0; ex++) epsBarFull[freeIdx[ex]] = ebFreePrev[ex] * esc;
+        }
+        res = nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts,
+                                { epTen: snapEp, alpha: snapAl });
       }
 
       if (res.converged) { ok = true; break; }
@@ -463,8 +506,15 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
     eAxis = trialAxis;
     var sAxis = res.sigma_bar[axisV];
     curve.push({ eps: eAxis, sigma: sAxis });
+    if (control === 'stress') {
+      ebFreePrev = freeIdx.map(function (fi) { return epsBarFull[fi]; });
+      eAxisPrev = eAxis;
+      if (res.lateralRel > lateralResMax) lateralResMax = res.lateralRel;
+    }
     if (E0 === null && eAxis > 0) E0 = sAxis / eAxis;  /* first-step secant ~ effective modulus */
+    if (Eknee === null) Eknee = E0;
     step++;
+    if (kneeStep < 0 && nlOffsetYieldEx(curve, Eknee, 0.002).yielded) kneeStep = step;
   }
 
   /* effective modulus: prefer elastic macro stiffness if available */
@@ -473,24 +523,43 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
     var Sbar = invert6x6(Cbar_e);
     if (Sbar) Eeff = 1 / Sbar[axisV*6 + axisV];
   }
-  var sigmaY = nlOffsetYield(curve, Eeff, 0.002);
+  var yEx = nlOffsetYieldEx(curve, Eeff, 0.002);
+  var sigmaY = yEx.sigma;
+  /* step budget exhausted (cutbacks) before reaching the cap: flag it so a
+     no-yield result is not reported as "no yield up to the cap". */
+  var budgetHit = (eAxis < capEps - 1e-9);
+  if (control === 'stress' && lateralResMax > 0.02)
+    console.warn('[nl] macro lateral stress residual up to ' + (lateralResMax * 100).toFixed(1) + '% of axial (accepted anyway)');
 
   /* equivalent plastic strain field (alpha) snapshot for viz */
   var alphaField = ws.alpha.slice();
 
   return {
     rho: rho, axis: axisV, control: control,
-    curve: curve, sigma_y_eff: sigmaY, E0: Eeff,
+    curve: curve, sigma_y_eff: sigmaY, yielded: yEx.yielded, E0: Eeff,
     alphaField: alphaField, N: N,
-    sigma_y_provisional: false
+    sigma_y_provisional: false,
+    epsCap: capEps, eAxisMax: eAxis,
+    truncated: budgetHit, truncReason: budgetHit ? 'step-budget' : null,
+    lateralResMax: (control === 'stress') ? lateralResMax : null
   };
 }
 
 /* Uniaxial-stress macro step (modified Newton). Solves the free macro
-   strain components so their averaged stress is ~0, holding eps_bar[axis]. */
-function nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts) {
-  var macroTol = opts.macroTol != null ? opts.macroTol : 1e-3;
-  var macroMax = opts.macroMax != null ? opts.macroMax : 8;
+   strain components so their averaged stress is ~0, holding eps_bar[axis].
+   Mirrors 16g crushStress: committed plastic history is restored to the
+   previous LOAD STEP (histBase) before every field solve, so rejected macro
+   iterates never accumulate plastic strain; only the last (accepted) solve's
+   commit survives. Same caps as 16g (macroTol 5e-3, macroMax 4), and a
+   macro-tolerance miss is accepted when the field Newton converged.
+   Returns the field result plus lateralRel = |sigma_free| / |sigma_axis|. */
+function nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts, histBase) {
+  var macroTol = opts.macroTol != null ? opts.macroTol : 5e-3;
+  var macroMax = opts.macroMax != null ? opts.macroMax : 4;
+  if (!histBase) {   /* standalone call: baseline = current committed history */
+    histBase = { epTen: [], alpha: ws.alpha.slice() };
+    for (var hb = 0; hb < 6; hb++) histBase.epTen.push(ws.epTen[hb].slice());
+  }
   /* free-free compliance from elastic Cbar_e (modified-Newton Jacobian) */
   var nf = freeIdx.length;
   var Kff = new Float64Array(nf*nf);
@@ -499,12 +568,16 @@ function nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, f
 
   var last = null;
   for (var mit=0; mit<macroMax; mit++) {
+    /* hold committed history at the previous load step through the macro loop */
+    for (var hr=0; hr<6; hr++) ws.epTen[hr].set(histBase.epTen[hr]);
+    ws.alpha.set(histBase.alpha);
     var res = nlNewtonSolveCPU(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, opts);
     last = res;
     if (!res.converged) return res;
-    var sFree = []; var snorm = 0, sref = Math.abs(res.sigma_bar[axisV]) + 1e-9;
+    var sFree = []; var snorm = 0, sref = Math.max(Math.abs(res.sigma_bar[axisV]), 1e-6);
     for (var f=0; f<nf; f++){ var sv = res.sigma_bar[freeIdx[f]]; sFree.push(sv); snorm += sv*sv; }
-    if (Math.sqrt(snorm)/sref < macroTol) return res;
+    res.lateralRel = Math.sqrt(snorm)/sref;
+    if (res.lateralRel < macroTol) return res;
     /* delta eps_free = -Sff * sFree */
     for (var r=0;r<nf;r++){ var dd=0; for (var c=0;c<nf;c++) dd += Sff[r*nf+c]*sFree[c]; epsBarFull[freeIdx[r]] -= dd; }
   }
@@ -533,11 +606,15 @@ function invertSmall(A, n) {
    Returns the stress at intersection, or the curve max if no crossing. */
 /* 0.2%-offset yield. nlOffsetYieldEx returns { sigma, yielded } so callers can
    tell a REAL knee (offset line crossed) from the no-crossing fallback (curve
-   stayed elastic to the end). nlOffsetYield keeps the old scalar contract. */
+   stayed elastic to the end). nlOffsetYield keeps the old scalar contract.
+   The crush curves start at the first load step, not at (0,0); the origin is
+   treated as an implicit first point (the caller's array is not touched), so
+   a curve whose FIRST point already lies below the offset line still reports
+   a crossing (on the origin->first-point segment) instead of "no yield". */
 function nlOffsetYieldEx(curve, E0, off) {
   if (!curve.length || !E0) return { sigma: null, yielded: false };
-  for (var i = 1; i < curve.length; i++) {
-    var e1 = curve[i-1].eps, s1 = curve[i-1].sigma;
+  for (var i = 0; i < curve.length; i++) {
+    var e1 = (i > 0) ? curve[i-1].eps : 0, s1 = (i > 0) ? curve[i-1].sigma : 0;
     var e2 = curve[i].eps,   s2 = curve[i].sigma;
     /* offset line value at e1, e2 */
     var l1 = E0 * (e1 - off), l2 = E0 * (e2 - off);
@@ -552,6 +629,38 @@ function nlOffsetYieldEx(curve, E0, off) {
 
 function nlOffsetYield(curve, E0, off) {
   return nlOffsetYieldEx(curve, E0, off).sigma;
+}
+
+/* Knee refinement (shared by the 16f oracle and the 16g crushStress loop).
+   The 0.2%-offset crossing is linearly interpolated on the segment that
+   brackets it; across a concave knee that chord sits BELOW the curve, so
+   coarse steps bias sigma_y low. Refining only AFTER the crossing is found
+   cannot shrink that bracket, so this predicts it: returns true when the
+   offset line is expected to be crossed within the next NL_KNEE_LOOKAHEAD
+   steps of size dNext, by extrapolating the gap g = sigma - E0*(eps - off)
+   with the last segment's slope (origin = implicit first point). On a
+   concave curve the slope keeps falling, so a one-step linear prediction
+   comes LATE; the two-step lookahead compensates.
+   Pure; does not touch the curve. */
+var NL_KNEE_LOOKAHEAD = 2;
+function nlKneeWillCross(curve, E0, off, dNext) {
+  var n = curve.length;
+  if (!n || !E0 || !(dNext > 0)) return false;
+  var e = curve[n-1].eps, sg = curve[n-1].sigma;
+  var ep = (n > 1) ? curve[n-2].eps : 0, sp = (n > 1) ? curve[n-2].sigma : 0;
+  if (!(e > ep)) return false;
+  var slope = (sg - sp) / (e - ep);
+  var g = sg - E0 * (e - off);
+  return (g + (slope - E0) * dNext * NL_KNEE_LOOKAHEAD) < 0;
+}
+/* Step-size factor for the knee window: half steps from the predicted
+   crossing until KNEE_REFINE_TAIL accepted steps past the knee (same strain
+   extent as the old 3 full steps), nominal otherwise. kneeStep = step count
+   at which nlOffsetYieldEx first reported yielded (-1 before). */
+var NL_KNEE_REFINE_TAIL = 6;
+function nlKneeStepFactor(curve, E0, off, dNominal, step, kneeStep) {
+  if (kneeStep >= 0) return (step < kneeStep + NL_KNEE_REFINE_TAIL) ? 0.5 : 1;
+  return nlKneeWillCross(curve, E0, off, dNominal) ? 0.5 : 1;
 }
 
 

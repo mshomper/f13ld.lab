@@ -14,24 +14,14 @@ var MOCK_DESIGNS = [
     family:'tpms',
     variant:'schwarz_p',
     topology:'sheet',
-    rho_rel:0.42,
+    rho_rel:null,   /* Sprint A — shown from the solver's voxel density after a run */
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
     color:'#4f86f7',
     slot:0,
-    /* mock results (populated by mock run, in real Phase 3+ these
-       come from solver output) */
-    results:{
-      E11:1.24, E22:1.24, E33:1.24,
-      G12:0.50, G13:0.50, G23:0.50,
-      nu12:0.23, nu13:0.23, nu23:0.23,
-      zener:0.91,
-      sigma_y_z:28.3, sigma_peak:42.1, hardening:0.064,
-      lambda_cr:1.84,
-      pcr_py:1.84,
-      kappa_z:0.84,
-      failure_mode:'Yield-limited'
-    }
+    /* Sprint A — no pre-baked results: every number on a card comes from a
+       solve (the old invented E/σy/κ/λ values rendered before any run). */
+    results:null
   },
   {
     id:'demo-g3f1',
@@ -41,22 +31,12 @@ var MOCK_DESIGNS = [
     family:'grain',
     variant:'spinodoid',
     topology:'sheet',
-    rho_rel:0.38,
+    rho_rel:null,
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
     color:'#a78bfa',
     slot:1,
-    results:{
-      E11:0.89, E22:0.89, E33:0.89,
-      G12:0.38, G13:0.38, G23:0.38,
-      nu12:0.31, nu13:0.31, nu23:0.31,
-      zener:1.34,
-      sigma_y_z:18.6, sigma_peak:26.2, hardening:0.041,
-      lambda_cr:0.71,
-      pcr_py:0.71,
-      kappa_z:0.91,
-      failure_mode:'Buckling-limited'
-    }
+    results:null
   },
   {
     id:'demo-rda9',
@@ -66,22 +46,12 @@ var MOCK_DESIGNS = [
     family:'grain',
     variant:'reaction_diffusion',
     topology:'sheet',
-    rho_rel:0.40,
+    rho_rel:null,
     cell_mm:4.0,
     mat_es_gpa:110, mat_nu:0.30,
     color:'#e879c9',
     slot:2,
-    results:{
-      E11:1.05, E22:1.05, E33:1.05,
-      G12:0.42, G13:0.42, G23:0.42,
-      nu12:0.27, nu13:0.27, nu23:0.27,
-      zener:1.12,
-      sigma_y_z:22.0, sigma_peak:32.4, hardening:0.052,
-      lambda_cr:1.41,
-      pcr_py:1.41,
-      kappa_z:0.86,
-      failure_mode:'Mixed mode'
-    }
+    results:null
   }
 ];
 

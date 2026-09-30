@@ -32,6 +32,12 @@ async function ensureDevice(){
   if (WGPU.initializing) return WGPU.initializing;
 
   WGPU.initializing = (async function(){
+    /* Sprint A — after a device loss the old adapter is spent (WebGPU allows
+       one device per adapter), so request a fresh one before re-creating. */
+    if (HW && HW.webgpu_available && !HW.adapter && typeof navigator !== 'undefined' && navigator.gpu){
+      try { HW.adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }); }
+      catch (eA){ HW.adapter = null; }
+    }
     if (!HW || !HW.webgpu_available || !HW.adapter){
       throw new Error('WebGPU not available · cannot initialize device');
     }
@@ -68,8 +74,16 @@ async function ensureDevice(){
         WGPU.device = null;
         WGPU.initialized = false;
         WGPU.initializing = null;
+        /* Sprint A — drop every device-bound cache so the next run rebuilds
+           on a fresh device instead of reusing plans whose buffers died with
+           this one, and retire the spent adapter (see ensureDevice). */
+        dropDeviceBoundCaches();
+        if (info.reason !== 'destroyed' && typeof HW !== 'undefined') HW.adapter = null;
         if (typeof paintHardwarePill === 'function'){
-          paintHardwarePill('WebGPU device lost · reload', 'bad');
+          paintHardwarePill('WebGPU device lost · re-run to recover', 'bad');
+        }
+        if (typeof paintSolverPill === 'function'){
+          paintSolverPill('GPU device lost · caches cleared', 'bad');
         }
       });
 
@@ -101,6 +115,21 @@ async function ensureDevice(){
   } catch (err){
     WGPU.initializing = null;
     throw err;
+  }
+}
+
+/* Sprint A — device-bound caches.  Every FFTPlan holds GPUBuffers and
+   pipelines from the device it was built on; the shared plans below are the
+   only long-lived ones (solver instances are created and destroyed per
+   solve).  Add any new cross-solve GPU cache to this list. */
+var WGPU_DEVICE_CACHE_KEYS = ['__sharedFFT', '__sharedFFTBatched'];
+function dropDeviceBoundCaches(){
+  if (typeof window === 'undefined') return;
+  for (var i = 0; i < WGPU_DEVICE_CACHE_KEYS.length; i++){
+    var k = WGPU_DEVICE_CACHE_KEYS[i], plan = window[k];
+    if (!plan) continue;
+    try { if (plan.destroy) plan.destroy(); } catch (e){ /* buffers already gone with the device */ }
+    window[k] = null;
   }
 }
 

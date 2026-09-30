@@ -296,10 +296,13 @@ function normalizeDesignJson(json, filename){
         in the geometry block but not consumed by lab solvers. */
   var cellSizeMm = (json.geometry && (json.geometry.cellSizeMm || json.geometry.cell_size_mm)) || 5.0;
 
+  /* Nominal density as declared by the source tool — shown labelled
+     "nominal" until a solve reports the voxel density.  Sprint A: null (not an
+     invented 0.40) when the JSON does not declare one. */
   var rho = json.rho_rel || json.density || json.relative_density ||
             (json.homogenization && json.homogenization.volume_fraction != null
               ? json.homogenization.volume_fraction / 100  /* external uses percentage */
-              : 0.40);
+              : null);
 
   /* ── 5. Title derivation ─────────────────────────────────── */
   var presetLabel = (json.meta && json.meta.preset) || (json.surface && json.surface.label);
@@ -487,7 +490,10 @@ function normalizeDesignJson(json, filename){
   console.log('[add-design] ' + filename + ': ' + recipeNote);
 
   /* ── 7. Pack the design entry ────────────────────────────── */
-  var id = json.id || ('user-' + Date.now().toString(36));
+  /* Sprint A — ids key the per-design caches (BUCKLE_/NONLIN_BY_DESIGN, the
+     raymarcher registry), so they must be unique among loaded designs: the
+     same file imported twice gets a -2, -3 … suffix. */
+  var id = uniqueDesignId(json.id ? String(json.id) : ('user-' + Date.now().toString(36)));
   return {
     id: id,
     label: 'DESIGN · ?',
@@ -508,6 +514,15 @@ function normalizeDesignJson(json, filename){
     raw_json: json,
     recipe: recipe
   };
+}
+
+/* Sprint A — first free id among loaded designs: base, base-2, base-3 … */
+function uniqueDesignId(base, designs){
+  designs = designs || ((typeof LAB_STATE !== 'undefined') ? LAB_STATE.designs : []);
+  var taken = {};
+  for (var i = 0; i < designs.length; i++) if (designs[i] && designs[i].id != null) taken[designs[i].id] = true;
+  if (!taken[base]) return base;
+  for (var n = 2; ; n++){ if (!taken[base + '-' + n]) return base + '-' + n; }
 }
 
 /* ----------------------------------------------------------
@@ -531,14 +546,36 @@ function ingestUrlParam(){
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(json){
-    if (LAB_STATE.designs.length >= 3) return;
-    var design = normalizeDesignJson(json, r.split('/').pop() || 'remote.json');
-    // Replace demo set with the imported one
-    LAB_STATE.designs = [design];
+    /* Sprint A — the old "3 already loaded → bail" guard ran BEFORE the
+       replace, so with the 3-design demo seed the handoff never took effect.
+       Now: demo-only set → replace it (the documented intent); a restored
+       user comparison with room → append; full user set → replace (the
+       explicit handoff wins).  Only a run in flight blocks it. */
+    if (typeof RUN_STATE !== 'undefined' && RUN_STATE.running){
+      console.warn('[add-design] ?r= ignored — a run is in progress');
+      return;
+    }
+    var old = LAB_STATE.designs, design = null;
+    var demoOnly = old.every(function(od){ return !od.raw_json && /^demo-/.test(String(od.id)); });
+    var append = !demoOnly && old.length < 3;
+    if (!append) LAB_STATE.designs = [];   /* id uniqueness is checked against the set being built */
+    try { design = normalizeDesignJson(json, r.split('/').pop() || 'remote.json'); }
+    finally { if (!design) LAB_STATE.designs = old; }   /* parse threw → keep the current set */
+    if (append){
+      LAB_STATE.designs.push(design);
+      old = [];
+    }
+    for (var oi = 0; oi < old.length; oi++){
+      if (typeof disposeRaymarcher === 'function') disposeRaymarcher(old[oi].id);
+      if (typeof disposeStiffnessViz === 'function') disposeStiffnessViz(old[oi].id);
+      if (typeof BUCKLE_BY_DESIGN !== 'undefined') delete BUCKLE_BY_DESIGN[old[oi].id];
+      if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[old[oi].id];
+    }
+    if (!append) LAB_STATE.designs = [design];   // replace demo set with the imported one
     if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();
     LAB_STATE.runHasCompleted = false;
     LAB_STATE.winningId = null;
-    LAB_STATE.baselineId = design.id;
+    if (!append) LAB_STATE.baselineId = design.id;
     updateLoadedPill();
     updateActionButtons();
     recomputeEstimate();

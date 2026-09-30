@@ -2089,7 +2089,7 @@ async function solveDesignBucklingGPU(recipe, N, opts, onProgress) {
   var orderM = { xx: 0, yy: 1, zz: 2 };
   perAxis.sort(function (p, q) { return (orderM[p.axis] || 0) - (orderM[q.axis] || 0); });
   var pcr = isFinite(lambdaCr) ? lambdaCr * Math.abs(critSbar) : Infinity;
-  var res = { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: fe.rho, perAxis: perAxis, modes: modes, skip_reason: null };
+  var res = { lambda_cr: lambdaCr, pcr: pcr, critAxis: critAxis, rho: fe.rho, loading: 'confined', perAxis: perAxis, modes: modes, skip_reason: null };
   if (!isFinite(lambdaCr)) res.skip_reason = 'no positive critical mode found';
   return res;
 }
@@ -2097,6 +2097,14 @@ async function solveDesignBucklingGPU(recipe, N, opts, onProgress) {
 async function computeBuckling(recipe, N, opts, onProgress) {
   opts = opts || {};
   var useGPU = (opts.gpu != null) ? opts.gpu : (typeof window !== 'undefined' && window.BUCKLE_GPU);
+  /* The GPU path only implements the legacy laterally-CONFINED prestress
+     (extractPrestressGPU, unit macro strain).  Uniaxial-stress loading (the
+     16c/16e default) is CPU-only for now — route there rather than return
+     numbers under a different load case. */
+  if (useGPU && opts.loading !== 'confined') {
+    if (typeof console !== 'undefined') console.warn('[buckling] GPU path supports loading:"confined" only; using CPU for uniaxial loading');
+    useGPU = false;
+  }
   if (useGPU) {
     var ok = false;
     try { if (typeof ensureDevice === 'function') await ensureDevice(); ok = !!(typeof WGPU !== 'undefined' && WGPU.device); } catch (e) { ok = false; }
