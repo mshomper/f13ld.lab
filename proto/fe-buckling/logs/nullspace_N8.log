@@ -1,0 +1,3 @@
+spectral16c  uniform solid N=8 (1536 dof): zero-energy modes = 510 (3 are rigid translations); smallest nonzero/largest = 1.56e-02
+H8R          uniform solid N=8 (1536 dof): zero-energy modes = 69 (3 are rigid translations); smallest nonzero/largest = 5.20e-03
+H8           uniform solid N=8 (1536 dof): zero-energy modes = 3 (3 are rigid translations); smallest nonzero/largest = 3.55e-02

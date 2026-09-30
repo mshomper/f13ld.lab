@@ -1,0 +1,2 @@
+{"design":"schwarzP","wt":null,"N":32,"type":"H8I","precond":"mg","rho":0.5,"ncomp":1,"nel":16384,"nA":18326,"nDof":54978,"Ceff_diag":[36411,36411,36411,0,0,0],"pcgIters":[16,16,16],"tPre":3.1,"tSetup":0.47,"axes":[{"axis":2,"Ea":33305,"lambda":0.178703,"pcr_MPa":5951.7,"lams":[0.1787,0.17871,0.17968,0.18044],"mWave":3.59,"eigIters":43,"conv":true,"res":0.000829,"nAB":180,"tEig":12.27}],"tTotal":15.91}
+[run_design.js] 15.95 s

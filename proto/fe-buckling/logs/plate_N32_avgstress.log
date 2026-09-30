@@ -1,0 +1,3 @@
+{"bench":"plate","N":32,"t":2,"type":"H8I","avgStress":true,"rho":0.0625,"Ea_over_rhoE":1,"sigma_cr_MPa":1530.65,"kirchhoff_MPa":1598.39,"exact3D_MPa":1513.09,"FE_over_kirchhoff":0.9576,"FE_over_exact3D":1.0116,"lams":[0.013915,0.013915,0.0495847,0.0498725],"mWave":2.89,"eigIters":17,"conv":true,"pcgIters":[1,1,1],"live":[1,2],"tPre":0.23,"tEig":1.34}
+{"bench":"plate","N":32,"t":4,"type":"H8I","avgStress":true,"rho":0.125,"Ea_over_rhoE":1,"sigma_cr_MPa":5297.82,"kirchhoff_MPa":6393.56,"exact3D_MPa":5240.8,"FE_over_kirchhoff":0.8286,"FE_over_exact3D":1.0109,"lams":[0.048162,0.048162,0.130972,0.130984],"mWave":2.2,"eigIters":12,"conv":true,"pcgIters":[2,2,2],"live":[1,2],"tPre":0.33,"tEig":1.74}
+[run_plate.js] 4.29 s

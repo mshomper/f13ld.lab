@@ -1,0 +1,7 @@
+{"test":"hourglass hypothesis","design":"schwarzP","N":16,"type":"H8R","voidRatio":0.0001,"Ea":32563,"lambda":0.13001,"pcr_MPa":4233.4,"solidEnergyFrac":0,"mWave":4,"eigIters":89,"conv":true,"pcg":[677,676,676],"t":8.4}
+{"test":"hourglass hypothesis","design":"schwarzP","N":16,"type":"H8R","voidRatio":0.001,"Ea":32713,"lambda":0.13058,"pcr_MPa":4271.8,"solidEnergyFrac":0.0001,"mWave":4,"eigIters":74,"conv":true,"pcg":[600,599,599],"t":7.3}
+{"test":"hourglass hypothesis","design":"schwarzP","N":16,"type":"H8R","voidRatio":0.01,"Ea":34161,"lambda":0.13601,"pcr_MPa":4646.3,"solidEnergyFrac":0.0008,"mWave":4,"eigIters":69,"conv":true,"pcg":[518,518,519],"t":6.2}
+{"test":"hourglass hypothesis","design":"schwarzP","N":16,"type":"H8","voidRatio":0.0001,"Ea":33658,"lambda":0.13515,"pcr_MPa":4549,"solidEnergyFrac":0,"mWave":4,"eigIters":65,"conv":true,"pcg":[60,60,60],"t":1.9}
+{"test":"hourglass hypothesis","design":"schwarzP","N":16,"type":"H8","voidRatio":0.001,"Ea":33805,"lambda":0.13571,"pcr_MPa":4587.6,"solidEnergyFrac":0.0001,"mWave":4,"eigIters":56,"conv":true,"pcg":[60,60,60],"t":1.7}
+{"test":"hourglass hypothesis","design":"schwarzP","N":16,"type":"H8","voidRatio":0.01,"Ea":35230,"lambda":0.14104,"pcr_MPa":4968.8,"solidEnergyFrac":0.0015,"mWave":4,"eigIters":54,"conv":true,"pcg":[59,59,59],"t":1.7}
+[hyp.js] 27.23 s

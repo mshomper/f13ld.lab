@@ -1,0 +1,3 @@
+{"test":"void removed","type":"H8R","N":16,"pcgIters":[291,291,290],"Ea":32546,"lams":[8.995e-15,1.429e-14,2.285e-14,3.742e-14],"pcr_MPa":0,"mWave":0.87,"eigIters":1500,"conv":false}
+{"test":"void removed","type":"H8","N":16,"pcgIters":[60,60,60],"Ea":33642,"lams":[0.2008,0.2009,0.2021,0.2107],"pcr_MPa":6756.9,"mWave":1.8,"eigIters":102,"conv":true}
+[hyp2.js] 17.58 s

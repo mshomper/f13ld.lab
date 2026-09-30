@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.7.1 · alpha · **Phase 6 complete** · buckling shipped on CPU (GPU port validated, shelved) · Buckle/Nonlin grids 16/32/64 · Nonlinear J2 + adaptive crush + σ–ε + α field + connectivity prune + plain-language readouts
+**Status:** v0.7.2 · alpha · **Sprint A complete** · axis-convention fix · AM material library · Voce hardening live · free-sided buckling · ⚠ buckling values are a known discretization artifact pending the voxel-FE solver (see *Known issue*)
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,25 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## Known issue — buckling (v0.7.2)
+
+The spectral buckling solver finds **spurious void-controlled modes**: the computed critical load scales with the void stiffness (Schwarz P, N=16: 4.4 / 43.7 / 422 / 3270 MPa for void ratios 1e-5 / 1e-4 / 1e-3 / 1e-2), with essentially all of the mode's strain energy in the void. The Willot spectral operator has hundreds of zero-energy patterns in the solid (510 in an 8³ all-solid cell, versus 3 legitimate rigid translations). Buckling Strength, Critical Strain and the Buckling-to-Yield Ratio therefore do **not** describe the structure; earlier "buckling-limited" readings (including hyperuniform's 11.7 MPa) were this artifact. A matrix-free voxel finite-element solver (incompatible-modes hex, void removed, multigrid) has been prototyped and validated against an analytic plate benchmark to within 1.2 % down to 1-voxel walls; it is the next sprint. See `docs/NEXT_STEPS.md`.
+
+## What's new in v0.7.2
+
+**Numbers you can trust (Sprint A).**
+- **Axis convention fixed.** The elastic solver relabeled X↔Z (`SWAP = [2,1,0,5,4,3]`) to hide a viewer transposition; on anisotropic designs Ex/Ez, Gyz/Gxy, the Poisson ratios, the stiffness surface and the "ZZ" crush axis were mislabeled, and stress / mode / α overlays sat on the wrong voxels. The solver frame is now the physical frame, the viewer transposes solver fields at upload, and `runAxisConventionGPUTest()` (z-laminate) guards it.
+- **Voce hardening now runs.** Recipe materials replaced the Ti-6Al-4V default instead of overriding it field by field, so every crush used 880 MPa + linear hardening. Yield on Schwarz P N=8: 201.8 → 233.2 MPa.
+- **Yield detection.** Implicit (0,0) origin for the 0.2 % offset, knee step refinement, honest step-budget truncation, lateral-stress miss recorded, CPU oracle now runs the GPU's macro loop.
+- **Buckling.** Free-sided (uniaxial-stress) prestress by superposition of the axis solves (6 when shear-coupled); eigen-solve cap 30 → 200 with a leading-mode residual guard and a "not converged" flag (the 30-iteration cap had been stopping 2–9× high). The λ tile is now **Critical Strain**. See *Known issue* above.
+- **Labels.** "J2 + geom" → "J2 plasticity (small strain)" — there is no geometric nonlinearity in the crush.
+
+**Materials.** A **Material** pill applies one of 45 AM materials (Ti-6Al-4V Grades 5/23 in as-built, stress-relieved, annealed, HIP and EBM conditions; CP-Ti; Ti-6Al-7Nb; β-Ti; 316L; 17-4PH; 15-5PH; maraging; IN718; IN625; Hastelloy X; Haynes 282; AlSi10Mg; Scalmalloy; A20X; 6061-RAM2; CoCrMo; Ta; Nb; GRCop-42; CuCrZr; PA12; PEEK; PEKK; NiTi) to every design, with fitted Voce hardening. Materials without a usable yield model (most polymers, NiTi) skip the crush with a reason. Values and sources: `docs/MATERIALS.md`.
+
+**Geometry.** Hyperuniform kernels are wrapped periodically, matching how F13LD.mesh exports them (the design cell's kernels copied into every cell). Face starvation and the island loss it caused are gone (ρ 0.172 → 0.190 on the demo). `field.hu_wrap = false` restores the old behavior.
+
+**Reliability.** Per-run tokens (Cancel → Run can no longer run two sweeps), worker-pool cancel, crash recovery, cache keys that include the recipe and material, GPU device-lost recovery, voxel density on the cards, no invented numbers before a run, unique import ids, `?r=` import on first visit, timing estimate that ignores cached designs.
 
 ## What's new in v0.7.1
 

@@ -1,3 +1,5 @@
+> **⚠ v0.7.2 — superseded method.** The spectral buckling formulation described below finds spurious void-controlled modes (critical load ∝ void stiffness; the Willot operator has hundreds of zero-energy patterns in the solid). Its outputs are not structural buckling loads. Replacement: matrix-free voxel FE (incompatible-modes hex, void removed, multigrid) — see `NEXT_STEPS.md`. This document is kept as the record of the spectral approach.
+
 # Linear Buckling in F13LD.lab
 
 **Module status:** live · CPU oracle + Web Worker pool · GPU solver deferred

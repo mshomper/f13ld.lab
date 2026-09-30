@@ -1,0 +1,2 @@
+{"design":"pshell","avgStress":true,"wt":null,"N":32,"type":"H8I","precond":"mg","rho":0.1392,"ncomp":1,"nel":4560,"nA":8348,"nDof":25044,"Ceff_diag":[5847,5847,5847,0,0,0],"pcgIters":[26,26,26],"tPre":1.65,"tSetup":0.35,"axes":[{"axis":2,"Ea":2447,"lambda":0.148382,"pcr_MPa":363.1,"lams":[0.14838,0.15907,0.16109,0.17389],"mWave":4.39,"eigIters":52,"conv":true,"res":0.00593,"nAB":216,"tEig":5.15}],"tTotal":7.2}
+[run_design.js] 7.23 s

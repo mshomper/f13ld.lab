@@ -1,0 +1,3 @@
+{"design":"schwarzP","avgStress":true,"wt":null,"N":64,"type":"H8I","precond":"mg","rho":0.5,"ncomp":1,"nel":131072,"nA":138774,"nDof":416322,"Ceff_diag":[36786,36786,36786,0,0,0],"pcgIters":[17,17,17],"tPre":25.6,"tSetup":4.35,"axes":[{"axis":2,"Ea":33615,"lambda":0.162546,"pcr_MPa":5464,"lams":[0.16255,0.16256,0.16265,0.16288],"mWave":12.64,"eigIters":50,"conv":true,"res":0.000925,"nAB":208,"tEig":114.92}],"tTotal":145.67}
+{"peakRSS_MB":531}
+[run_design.js] 145.89 s

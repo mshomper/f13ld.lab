@@ -1,0 +1,10 @@
+[../speed/designs.js] 0.00 s
+[../speed/fastlib.js] 0.00 s
+{"code":"spectral Willot (16c ops)","design":"plate4","N":32,"voidRatio":0.01,"rho":0.125,"Ea":14713,"lambda":0.062159,"pcr_MPa":914.5,"plateStress_MPa":7316.1,"solidEnergyFrac":0.7163,"mWave":1.29,"iters":46,"conv":true,"t_s":10.9}
+{"code":"spectral Willot (16c ops)","design":"plate4","N":32,"voidRatio":0.001,"rho":0.125,"Ea":13846,"lambda":0.047243,"pcr_MPa":654.1,"plateStress_MPa":5233.1,"solidEnergyFrac":0.9618,"mWave":1.29,"iters":54,"conv":true,"t_s":12.2}
+{"code":"spectral Willot (16c ops)","design":"plate4","N":32,"voidRatio":0.0001,"rho":0.125,"Ea":13760,"lambda":0.045713,"pcr_MPa":629,"plateStress_MPa":5031.9,"solidEnergyFrac":0.9961,"mWave":1.29,"iters":38,"conv":true,"t_s":9.2}
+{"code":"spectral Willot (16c ops)","design":"schwarzP","N":16,"voidRatio":0.01,"rho":0.5,"Ea":34378,"lambda":0.0951,"pcr_MPa":3269.4,"solidEnergyFrac":0.0253,"mWave":4,"iters":56,"conv":true,"t_s":1.8}
+{"code":"spectral Willot (16c ops)","design":"schwarzP","N":32,"voidRatio":0.01,"rho":0.5,"Ea":34369,"lambda":0.06831,"pcr_MPa":2347.7,"solidEnergyFrac":0.0224,"mWave":3.81,"iters":82,"conv":true,"t_s":21.1}
+{"code":"spectral Willot (16c ops)","design":"pshell","N":32,"voidRatio":0.01,"rho":0.1392,"Ea":3701,"lambda":0.067643,"pcr_MPa":250.4,"solidEnergyFrac":0.1221,"mWave":8,"iters":76,"conv":true,"t_s":21.1}
+{"code":"spectral Willot (16c ops)","design":"gyroidSheet","N":32,"voidRatio":0.01,"rho":0.1318,"Ea":4811,"lambda":0.071165,"pcr_MPa":342.4,"solidEnergyFrac":0.1652,"mWave":6.74,"iters":115,"conv":true,"t_s":28.6}
+[spec_xcheck.js] 105.19 s

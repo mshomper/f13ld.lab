@@ -1,0 +1,7 @@
+{"design":"schwarzP","N":32,"rho":0.5,"Ea":33305,"firstYield_p100_MPa":136.9,"firstYield_p99_MPa":165.8,"firstYield_p95_MPa":242}
+{"design":"schwarzP","N":64,"rho":0.5,"Ea":33615,"firstYield_p100_MPa":126.3,"firstYield_p99_MPa":172.1,"firstYield_p95_MPa":237.9}
+{"design":"pshell","N":32,"rho":0.1392,"Ea":2447,"firstYield_p100_MPa":25.5,"firstYield_p99_MPa":26.1,"firstYield_p95_MPa":29.1}
+{"design":"pshell","N":64,"rho":0.146,"Ea":2929,"firstYield_p100_MPa":31.9,"firstYield_p99_MPa":35.6,"firstYield_p95_MPa":37.9}
+{"design":"gyroidSheet","N":32,"rho":0.1318,"Ea":4505,"firstYield_p100_MPa":37.9,"firstYield_p99_MPa":38.1,"firstYield_p95_MPa":43}
+{"design":"gyroidSheet","N":64,"rho":0.1279,"Ea":4407,"firstYield_p100_MPa":33.6,"firstYield_p99_MPa":36.5,"firstYield_p95_MPa":42.5}
+[yieldcheck.js] 65.53 s
