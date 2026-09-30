@@ -586,9 +586,52 @@ var GrainKernel = {
     };
     if (ft === 'spinodoid')        params.waves   = this._buildSpinodoidWaves(params);
     else if (ft === 'gaussian')    params.waves   = this._buildGRFWaves(params);
-    else                           params.kernels = this._buildHUKernels(params);
+    else {
+      params.kernels = this._buildHUKernels(params);
+      /* Periodic wrap (v0.7.2, approved): F13LD.mesh exports hyperuniform by
+         copying the design cell's kernels into every cell of the part and
+         summing across cell faces (buildHUKernelsMM).  The solver treats the
+         cell as periodic, so it must see the same thing: add each kernel's
+         periodic images that can reach the cell.  Without this, kernels near
+         a face are cut off and the faces run starved (x-face solid 0.06 vs
+         0.17 interior), which pruning then deletes.  Opt out per recipe with
+         field.hu_wrap = false (reproduces pre-0.7.2 results). */
+      params.huWrap = (f.hu_wrap !== false);
+      if (params.huWrap) params.kernels = this._wrapHUKernels(params.kernels);
+    }
     if (!recipe.family) recipe.family = 'grain';
     return params;
+  },
+
+  /* Periodic images of HU kernels whose support can touch [-π, π]³.
+     Reach matches F13LD.mesh buildHUKernelsMM: beyond R = 12.25^(1/m) a
+     kernel contributes < 5e-6, far below any threshold in use. */
+  _wrapHUKernels: function (ks) {
+    if (!ks.length) return ks;
+    var TP = 2 * Math.PI, PI = Math.PI;
+    var p = ks.cross || 2, m = ks.sharp || 1;
+    var Rc = Math.pow(12.25, 1 / m);
+    var out = [];
+    for (var i = 0; i < ks.length; i++) {
+      var k = ks[i];
+      var reach = Math.max(k.a * Math.sqrt(Rc), k.b1 * Math.pow(Rc, 1 / p), k.b2 * Math.pow(Rc, 1 / p));
+      var pad = Math.max(1, Math.ceil(reach / TP));
+      for (var ox = -pad; ox <= pad; ox++)
+        for (var oy = -pad; oy <= pad; oy++)
+          for (var oz = -pad; oz <= pad; oz++) {
+            var cx = k.px + ox * TP, cy = k.py + oy * TP, cz = k.pz + oz * TP;
+            if (cx < -PI - reach || cx > PI + reach ||
+                cy < -PI - reach || cy > PI + reach ||
+                cz < -PI - reach || cz > PI + reach) continue;
+            var c = {};
+            for (var key in k) if (Object.prototype.hasOwnProperty.call(k, key)) c[key] = k[key];
+            c.px = cx; c.py = cy; c.pz = cz;
+            out.push(c);
+          }
+    }
+    out.cross = ks.cross; out.sharp = ks.sharp; out.blend = ks.blend;
+    out.nDesign = ks.length;
+    return out;
   },
 
   /* CPU field evaluation — RAW field value at solver-space (x,y,z) ∈ [-π, π]³.
