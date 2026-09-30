@@ -143,6 +143,10 @@
             <option value="yy">YY</option>
           </select>
         </div>
+        <div class="spec-pill" id="materialPill" title="Material for every design in this comparison (AM library, docs/MATERIALS.md). 'From design' keeps each design's own material.">
+          <span class="key">Material</span>
+          <select id="materialSel" onchange="onMaterialChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;max-width:260px;"></select>
+        </div>
         <div class="spec-pill" id="hardwarePill"><span class="key">Hardware</span> <span class="v" id="hardwarePillVal">detecting…</span></div>
         <div class="spec-pill"><span class="key">Designs</span> <span class="v" id="designCountVal">3</span></div>
         <div class="spec-pill"><span class="key">Est.</span> <span class="v" id="estTimeVal">~7.5 min</span></div>
@@ -174,6 +178,7 @@
 <script src="14a-connectivity.js"></script>
 <script src="15-demo-recipes.js"></script>
 <script src="15b-demo-recipes-new.js"></script>
+<script src="15c-materials.js"></script>
 <script src="16-elastic-solver.js"></script>
 <script src="16a-elastic-cpu-ref-full.js"></script>
 <script src="16b-elastic-solver-full.js"></script>

@@ -34,6 +34,13 @@ var BUCKLE_BY_DESIGN = {};
    Nonlin pill cycles 16 -> 32 -> 64 (radix-2 FFT); axis xx/yy/zz -> crush() physical 0/1/2. */
 var NONLIN_STATE = { N: 32, axis: 'zz', cap: 0.05 };
 
+/* v0.7.2 — Material pill.  One material applied to every design in the
+   comparison ('recipe' keeps each design's own).  The choice is a per-viewer
+   convenience (localStorage, try/catch); results are keyed by recipe
+   fingerprint, which includes the material, so a change re-solves. */
+var MATERIAL_STATE = { id: (typeof F13LD_MATERIAL_RECIPE_ID !== 'undefined') ? F13LD_MATERIAL_RECIPE_ID : 'recipe' };
+var MATERIAL_STORE_KEY = 'f13ld.lab.material.v1';
+
 /* Transient per-design nonlinear results (id -> { sigma_y_eff, E0, curve,
    axis, N, truncated } | { error }).  Feeds the sigma-epsilon curve tab, the
    sigma_y(z) metric, and the P_cr/P_y seam (replaces provisional SIGMA_Y_TI64_MPA). */
@@ -406,7 +413,7 @@ async function runRealSweep(N, runToken){
   /* Resolve recipes once; designs without a recipe can't run real physics. */
   var recipes = [];
   for (var ri = 0; ri < nDesigns; ri++){
-    recipes.push((typeof recipeForDesign === 'function') ? recipeForDesign(designs[ri]) : null);
+    recipes.push(applySelectedMaterial((typeof recipeForDesign === 'function') ? recipeForDesign(designs[ri]) : null));
   }
   /* Sprint A — content fingerprint (sorted-key JSON hash, includes material)
      folded into every cache signature, so an id collision or an edited recipe
@@ -517,6 +524,13 @@ async function runRealSweep(N, runToken){
       var nlExist = NONLIN_BY_DESIGN[dn.id];
       if (nlExist && !nlExist.error && nlExist._sig === nlSig && nlExist.alphaSteps){
         paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · cached');
+        doneUnits = baseUnits + 4; bumpProgress();
+        continue;
+      }
+      /* v0.7.2 — materials without yield data, or where J2 does not apply
+         (NiTi, most polymers), get an honest skip instead of the Ti fallback. */
+      if (rcpN.material && rcpN.material.crushSupported === false){
+        NONLIN_BY_DESIGN[dn.id] = { error: 'crush not available for ' + (rcpN.material.name || 'this material') + ' (no yield data or J2 plasticity does not apply)', skip: true, N: nlN, _sig: nlSig };
         doneUnits = baseUnits + 4; bumpProgress();
         continue;
       }
@@ -656,6 +670,46 @@ async function runRealSweep(N, runToken){
 }
 
 
+/* ============================================================
+   MATERIAL PILL (v0.7.2)
+   ============================================================ */
+function initMaterialPicker(){
+  var sel = document.getElementById('materialSel');
+  if (!sel || typeof F13LD_MATERIALS === 'undefined') return;
+  try { var saved = localStorage.getItem(MATERIAL_STORE_KEY); if (saved && (saved === F13LD_MATERIAL_RECIPE_ID || findMaterial(saved))) MATERIAL_STATE.id = saved; } catch (e) {}
+  var html = '<option value="' + F13LD_MATERIAL_RECIPE_ID + '">From design (default Ti-6Al-4V)</option>';
+  var fam = null;
+  for (var i = 0; i < F13LD_MATERIALS.length; i++){
+    var m = F13LD_MATERIALS[i];
+    if (m.family !== fam){ if (fam !== null) html += '</optgroup>'; fam = m.family; html += '<optgroup label="' + fam + '">'; }
+    html += '<option value="' + m.id + '">' + m.name + ' · ' + m.condition + (m.crushSupported ? '' : ' (no crush)') + '</option>';
+  }
+  if (fam !== null) html += '</optgroup>';
+  sel.innerHTML = html;
+  sel.value = MATERIAL_STATE.id;
+}
+
+function onMaterialChange(id){
+  if (id !== F13LD_MATERIAL_RECIPE_ID && !findMaterial(id)) return;
+  MATERIAL_STATE.id = id;
+  try { localStorage.setItem(MATERIAL_STORE_KEY, id); } catch (e) {}
+  var m = findMaterial(id);
+  if (typeof paintRunStatus === 'function')
+    paintRunStatus('<span class="v">Material</span> · ' + (m ? (m.name + ' · ' + m.condition) : 'from design') + ' · Run to update results');
+}
+
+/* Returns a shallow recipe copy carrying the selected material (never mutates
+   the design's own recipe, which the viewer and imports share). */
+function applySelectedMaterial(recipe){
+  if (!recipe) return recipe;
+  var mat = (typeof materialForSolver === 'function') ? materialForSolver(MATERIAL_STATE.id) : null;
+  if (!mat) return recipe;
+  var out = {};
+  for (var k in recipe) if (Object.prototype.hasOwnProperty.call(recipe, k)) out[k] = recipe[k];
+  out.material = mat;
+  return out;
+}
+
 /* Sprint A — derive P_cr/P_y + failure mode for a buckling result from the
    CURRENT nonlinear yield (fresh solves and cache hits alike, so a newer
    crush run is always reflected).  Logic unchanged from the inline version. */
@@ -663,7 +717,9 @@ function applyBuckleYield(res, designId){
   var nl = NONLIN_BY_DESIGN[designId];
   var haveY = !!(nl && nl.yielded && isFinite(nl.sigma_y_eff));
   var boundBasis = (nl && isFinite(nl.sigmaCap)) ? nl.sigmaCap : null;  /* cap stress = lower bound on true yield */
-  var sigY = haveY ? nl.sigma_y_eff : (boundBasis != null ? boundBasis : SIGMA_Y_TI64_MPA);
+  var matSel = (typeof materialForSolver === 'function') ? materialForSolver(MATERIAL_STATE.id) : null;
+  var sigY0Mat = (matSel && isFinite(matSel.sigY0_MPa)) ? matSel.sigY0_MPa : SIGMA_Y_TI64_MPA;
+  var sigY = haveY ? nl.sigma_y_eff : (boundBasis != null ? boundBasis : sigY0Mat);
   res.pcr_py = isFinite(res.pcr) ? res.pcr / sigY : Infinity;
   res.failure_mode = (res.pcr_py >= 1) ? 'Yield-limited' : 'Buckling-limited';
   res.sigma_y_ref = sigY;

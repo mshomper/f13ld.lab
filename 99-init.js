@@ -18,6 +18,7 @@
   // 2. Initial pill paint (placeholder until detection completes)
   paintGridPill();
   paintBucklePill();
+  if (typeof initMaterialPicker === 'function') initMaterialPicker();
   paintHardwarePill('detecting…', '');
   paintSolverPill('starting…', '');
   updateLoadedPill();
