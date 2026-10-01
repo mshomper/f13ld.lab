@@ -1,6 +1,13 @@
-# F13LD.lab — Parameter Sweep (v0.12.0)
+# F13LD.lab — Parameter Sweep (v0.12.1)
 
 **Open:** ⟳ Sweep in the header. The panel can be closed while a sweep runs; the header button shows progress (e.g. *Sweep 12/41*). Run All is blocked while a sweep is running, and a sweep won't start during a run.
+
+**Panel layout (v0.12.1).** Three sections, top to bottom:
+1. **Define runs** — two tabs, *Build from a design* (§1.2) and *Load a CSV run matrix* (§1.1). A loaded CSV shows as a chip with **✕ remove** and *Replace CSV…*. Only one run list is active; replacing one that has results asks first.
+2. **Run settings** — precision, void stiffness, second grid and order (§2), plus the islands setting from the run controls.
+3. **Runs** — the study title (CSV file name or "Design · Parameter 1 × Parameter 2", **✎ rename**; the exported CSV is named after it), counts, selection links, **◈ Atlas**, **Clear results of selected** (deletes results of the ticked runs so they run again; the runs stay), **Export CSV**, **▶ Run**, the table, and the folding *Notes and warnings*.
+
+**↺ New sweep** (panel header) returns everything to defaults: no runs, empty builder, Standard precision, void 1e-6, second grid off, order 2. It asks first. This machine's measured solve times are kept.
 
 **What each run does:** elastic homogenization only, on the GPU, one periodic unit cell, the full 6 × 6 stiffness from six load cases. Fields are not captured, so runs are faster than a normal Run All.
 
@@ -87,7 +94,7 @@ For parameters where solid is a threshold on a per-voxel quantity (TPMS level, s
 - **Islands:** follows the Connectivity selector in the run controls (default *all networks · islands removed*, Matt's choice for the paper: faithful to how the cells are built). Each run records the voxel solid fraction before and after the trim; any run where the trim removed solid gets a note. On the §5 matrix the trim removes nothing on any run, B10 included.
 - **Normalization:** solved with E_s = 110,000 MPa and divided out, so every stiffness is ÷ E_s.
 - **Void stiffness (v0.10.1):** 1e-4, 1e-6 or 1e-8 × E_s; **sweeps default to 1e-6** (Matt, 2026-10-01). Normal lab runs keep 1e-4. At 1e-4 the void adds roughly 1e-4 to every direction, which inflated A1–A3 and the unloaded axes of B7 (§6). Lowering it doesn't change the iteration count. Recorded per run (`void_ratio`).
-- **Second grid and extrapolation (v0.10.1):** *Second grid → one coarser / one finer* also solves each run one grid step away (within 32–128) and extrapolates element by element, C_ext = C_fine + (C_fine − C_coarse) / (2^p − 1), with engineering constants from C_ext. Order p is 1 or 2 (default 2: the F set measured ≈ 2 for PI-gyroid Ex and Ey, 1.4 for Ez, 1.2 for the sheet gyroid). The table shows extrapolated values (marked e; hover for both grids); the export keeps the run-grid values in the main columns and adds `grid2_*` and `ext_*` columns (21 C_ij, constants, ratios to the reference). *Off* (default) runs only the selected grid.
+- **Second grid and extrapolation (v0.10.1):** *Second grid → one coarser / one finer* also solves each run one grid step away (within 32–128) and extrapolates element by element, C_ext = C_fine + (C_fine − C_coarse) / (2^p − 1), with engineering constants from C_ext. Order p is 1 or 2 (default 2: the F set measured ≈ 2 for PI-gyroid Ex and Ey, 1.4 for Ez, 1.2 for the sheet gyroid). The table shows extrapolated values (marked e; hover for both grids); the export keeps the run-grid values in the main columns and adds `grid2_*` and `ext_*` columns (21 C_ij, constants, ratios to the reference). *Off* (default) runs only the selected grid. **64 ↔ 128 pair (v0.12.1)** pairs every run with the other of grids 64 and 128 (grid 32 pairs with 64), so a whole matrix listed at mixed grids is extrapolated from one basis in one pass (Matt, 2026-10-01; recommended for the §5 production pass).
 
 ## 3. Results
 
@@ -217,4 +224,8 @@ Decision: compare at the feature size the lab actually builds, not the prescribe
 - At a matched 0.126 T feature, A4m is 1.77× stiffer than D7 along x and y, 0.43× along z, and about equal on the directional mean (−5 %), with 1.7× the solid. C4 is ~40× stiffer at 3.6× the solid.
 - D7 is strongly cubic-anisotropic (E[111] = 2.4 × E axis), so axis-only comparisons understate it; report the directional mean or E max / E min alongside the axis values.
 - Grid: N = 128 is 2.5–3.2 % below the extrapolated value for PI and skeletal (0.6 % for the sheet); N = 64 is 11–14 % low. Use the extrapolated columns.
+
+**Matrix update (Matt, 2026-10-01):** A4m is now a permanent row of the §5 matrix (42 rows; A4 kept as the prescribed-width reference), and E1 — the ν = 0.34 Poisson check of the matched PI point — moved to A4m's wall ratio (0.1364, expected 11.63 % solid). The matrix CSV and its write-up live with Matt (not in this repo).
+
+**Production pass for the paper (next):** the 42-row matrix at High precision (1e-5), void 1e-6, second grid **64 ↔ 128 pair**, order 2 — about 15–20 min on Matt's GPU. It also reruns B5, B6, B7 and G3 at the tighter tolerance.
 

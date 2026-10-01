@@ -973,3 +973,28 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
 .at-s3 canvas { width:100%; height:100%; display:block; }
 #atS3Sub { margin-bottom:6px; }
 @media (max-width:820px) { .at-s3 { height:360px; } }
+/* v0.12.1 — sweep panel: define runs / run settings / runs */
+.sw-headbtns { display:flex; align-items:center; gap:10px; }
+.sw-sec { border:0.5px solid var(--line); border-radius:8px; padding:10px 12px; background:var(--panel-2); display:flex; flex-direction:column; gap:8px; }
+.sw-sec-t { display:flex; align-items:center; gap:10px; font-size:10.5px; text-transform:uppercase; letter-spacing:0.1em; color:var(--ink-head); flex-wrap:wrap; }
+.sw-num { width:18px; height:18px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; color:#06080f; background:var(--green); letter-spacing:0; }
+.sw-tabs { display:inline-flex; border:0.5px solid var(--line); border-radius:6px; overflow:hidden; margin-left:6px; text-transform:none; letter-spacing:0; }
+.sw-tabs button { background:transparent; color:var(--ink-mute); border:0; border-right:0.5px solid var(--line); padding:4px 12px; font:inherit; font-size:11px; cursor:pointer; }
+.sw-tabs button:last-child { border-right:0; }
+.sw-tabs button:hover { color:var(--ink); }
+.sw-tabs button[aria-pressed=true] { background:rgba(200,245,66,0.12); color:var(--neon); }
+.sw-file { display:inline-flex; align-items:center; gap:8px; border:0.5px solid var(--line); border-radius:20px; padding:4px 6px 4px 12px; font-family:'IBM Plex Mono','JetBrains Mono',monospace; font-size:11px; color:var(--ink); }
+.sw-x { background:transparent; border:0; color:var(--bad); font:inherit; font-size:11px; cursor:pointer; padding:2px 6px; border-radius:12px; }
+.sw-x:hover:not(:disabled) { background:rgba(251,113,133,0.12); }
+.sw-runs-head { align-items:flex-end; }
+.sw-title { display:flex; align-items:baseline; gap:8px; }
+.sw-title span { font-size:15px; font-weight:600; color:var(--ink); }
+.sw-rename { background:transparent; border:0; color:var(--ink-dim); font:inherit; font-size:11px; cursor:pointer; padding:0; }
+.sw-rename:hover:not(:disabled) { color:var(--lab); }
+.sw-empty { color:var(--ink-mute); font-size:12px; padding:6px 0; }
+.sw-sec .sw-build { display:flex; flex-direction:column; gap:8px; }
+.sw-sec .imp-settings { gap:10px; }
+.sw-sec .imp-settings input { width:84px; }
+.sw-sec [hidden], .sw-table-wrap[hidden] { display:none !important; }
+.sw-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.sw-checking { color:var(--lab); }

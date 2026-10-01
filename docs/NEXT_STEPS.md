@@ -1,7 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.10.1 · 2026-10-01 · parameter sweep merged (void option, two-grid extrapolation)
-**Full history of the last session:** [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md)
+**As of:** v0.12.1 · 2026-10-01 · STL import, parameter sweep, sweep builder, Sweep Atlas all on main
+**Full history of the last session:** [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md) (previous: [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
 ---
@@ -19,19 +19,39 @@
 | **v0.10.0 / v0.10.1** | Parameter sweep: run-matrix CSV or one-parameter sweep of a loaded design → elastic stiffness per run, CSV export. Solver records final residual and takes a per-call tolerance. See `SWEEP.md` |
 | **v0.11.0** | Sweep builder for every family, two parameters, review before creating (solves, time, solid-fraction map); Sweep Atlas (geometry, directional modulus, matrix, parameter map, charts, data check). See `SWEEP.md` §1.2, §3b |
 | **v0.12.0** | Atlas: CAD tumble + linked rotation, 3-D stiffness surface, smooth slider. Sweep keeps no-load-axis runs (B6) with a warning, flags negative shear, collapsible notes. Void 1e-6 rerun analysed (`SWEEP.md` §7) |
+| **v0.12.1** | Sweep panel in three sections (define runs: builder / CSV tabs · run settings · runs); ↺ New sweep; ✕ remove CSV; renamable study title; second grid **64 ↔ 128 pair**. Matched-feature A4m (`SWEEP.md` §8) |
 
 ---
 
-## 1. CURRENT FOCUS — PI-TPMS paper sweep (v0.10.0 → v0.11.0)
+## 1. CURRENT FOCUS — PI-TPMS paper, production pass (v0.12.1)
 
-Matt's PI-TPMS Paper 1, Section 5: a 41-run matrix (sets A–G: PI-gyroid scaling, junction type / anisotropy, sheet and skeletal gyroid baselines, Poisson check, grid convergence, Fischer–Koch resolution) run through the new Sweep panel. See [`SWEEP.md`](SWEEP.md).
+Matt's PI-TPMS Paper 1, Section 5: the run matrix is now **42 rows** (A4m added; E1 moved to A4m's wall ratio). Everything needed to produce the paper numbers is on main. See [`SWEEP.md`](SWEEP.md) §4–§8.
 
-- **Decisions (Matt, 2026-10-01):** keep the lab's island trim (faithful to how cells are built physically) and report trim differences as notes; precision is a toggle (1e-4 / 1e-5); check A6 at N = 128 before changing the solver.
-- **v0.11 (Matt, 2026-10-01):** the builder is the main way people will use the sweep, so it must work for every family and show total solves and cost before committing; no run cap beyond a hardware note; Atlas in-lab first (HTML export later — the lab is the one non-MIT tool), F13LD brand colors, no Vixiv reference values in the Atlas; charts written in the lab's own code with a Plotly-like look.
-- **Void 1e-6 rerun (`SWEEP.md` §7):** lab now reads ~10 % below Vixiv at the run grid and ~5 % below after extrapolation; the earlier near-perfect matches were the void stiffness. Matt is rerunning B6 and B7 at 1e-5 on his GPU (B7 has a small negative shear term).
-- **Noticed, not yet checked:** the axis triad on the main lab's geometry tiles is drawn from the rotation matrix's columns, while the ray-marcher shows the part with that matrix's transpose — the triad may not match the part's true orientation (the Atlas computes its own and is consistent).
-- **Open question for Matt:** re-base the matched-feature comparison on measured PI tube widths (`SWEEP.md` §5)?
-- **Accuracy vs Vixiv (A6):** N = 64 is 7–11 % low, N = 128 is 2–5 % low, first-order extrapolation lands within ~3 %. The gap is voxel resolution (stair-stepped tubes), not solver bias. Next decision for Matt: run the matrix at N = 128, extrapolate from N = 64 + 128 pairs, or add partial-volume voxels first (`SWEEP.md` §4).
+**Next action (Matt, on his GPU):** load the 42-row matrix → High (1e-5) · void 1e-6 · second grid **64 ↔ 128 pair** · order 2 → Run 42 (~15–20 min) → Export CSV. This replaces the planned B6 / B7 reruns and also redoes B5 and G3. Then analyse (Figure 6, verification table, Section 5 text).
+
+**Decisions on record (Matt, 2026-10-01):**
+- Keep the lab's island trim (faithful to how cells are built physically); report trim differences as notes.
+- Precision is a toggle (1e-4 / 1e-5); void stiffness 1e-6 for sweeps.
+- Extrapolation is an option; the user-selected grid is the default. For the paper, one 64 + 128 basis.
+- The builder is the main way people use the sweep: every family, two parameters, cost shown before committing; no run cap beyond a hardware note.
+- Atlas in-lab first (self-contained HTML export later — the lab is the one non-MIT tool); F13LD brand colors, dark theme; no Vixiv reference values in the Atlas; charts in the lab's own code with a Plotly-like look; geometry and stiffness views linked by default with a toggle; CAD tumble.
+- Matched-feature comparison uses the **measured** PI tube width (A4m, wall ratio 0.1364); sheet (C4) and skeletal (D7) stay as given; physical differences go in a comparison note.
+- Thinnest-feature export column and "step by feature size" in the builder: **later**.
+
+**Findings to carry into the paper text:**
+- At void 1e-6 the lab reads ~10 % below Vixiv at the run grid and ~5–7 % below after extrapolation (A5 three-grid: 0.95). The earlier near-perfect matches were the void stiffness. Plausible reason for the residual gap: voxel FFT converges from below, displacement FE from above — unconfirmed.
+- Matched feature (0.126 T): A4m is 1.77× D7 in-plane, 0.43× along z, ≈ equal on the directional mean, at 1.7× the solid; D7 is 2.4× stiffer along [111] than its axes — report directional mean or E max / E min, not axes only (`SWEEP.md` §8).
+- Fischer–Koch G set: Ez × 8.5 from wall ratio 0.17 → 0.19 (contacts forming; Euler characteristic 25 → 33 → 41 → 57 loops per cell). G1 sits at contact onset and is the most grid-sensitive run.
+
+## 1a. Next dev cycle — pick up (in suggested order)
+
+1. **Analyse the production pass** with Matt: Figure 6 data, verification table vs Vixiv, fitted density exponents, directional-mean columns. Check B7's shear and B6's no-load axes at 1e-5.
+2. **Thinnest feature, properly** (Matt: "later" — this is the next lab feature). (a) A `thinnest_feature_T` export column. (b) Fix the voxel estimator's low bias on flattened tubes (the medial ribbon's edge balls — ~3–4 % low on PI; see `SWEEP.md` §8), e.g. keep only ridge points whose ball is a local maximum along the ridge, or measure minor width by chords at ridge points. (c) Builder: *step by thinnest feature*, like step by solid fraction.
+3. **Partial-volume voxels** (laminate mixing, Kabel/Merkert/Schneider 2015) — the lab's N = 64 numbers are 11–14 % low on thin PI/skeletal walls; this would shrink the grid gap and the need for extrapolation.
+4. **Elastic solver speed (16b GPU-resident CG):** still 2 blocking `mapAsync` per CG iteration. Port the v0.8.1 nonlinear approach. Directly speeds up sweeps.
+5. **Main-lab axis triad check:** the geometry tiles' triad is drawn from the rotation matrix columns while the ray-marcher shows the transpose — verify, fix if wrong (the Atlas computes its own and is consistent).
+6. **Atlas, later:** self-contained HTML export (results + views only, licence-safe); per-axis tick formatting polish on the 3-D surface; optional Plotly-style hover crosshair on the line chart.
+7. **Sprint B2 — buckling speed** (still queued, §2).
 
 ## 1b. STL unit-cell import (done, v0.9.0–v0.9.1)
 
@@ -166,7 +186,7 @@ Also:
 ## 4. Conventions (do not violate)
 
 - **Line endings.**
-  - `index.html`, `50-controls.js`, `40-design-grid.js`, `21-raymarcher.js`, `16b-elastic-solver-full.js` and `README.md` are CRLF; `14a-connectivity.js` is mixed. Check each with `file`.
+  - `index.html`, `50-controls.js`, `40-design-grid.js`, `21-raymarcher.js`, `22-stiffness-viz.js` and `README.md` are CRLF; `14a-connectivity.js` and `16b-elastic-solver-full.js` are mixed (mostly CRLF, some LF blocks — match the lines around an edit). Check each with `file`.
   - Patch these with count-guarded Python (`newline=""`, assert the match count).
   - Never normalize endings.
 - **Solver frame = physical frame** since v0.7.2 (x is the slowest index in `buildVoxels`).

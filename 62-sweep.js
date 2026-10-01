@@ -31,7 +31,8 @@ var VOIGT = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
 
 var SWEEP_STATE = {
   open: false, running: false, stopRequested: false,
-  name: '', source: null,          /* 'csv' | 'builder' */
+  name: '', source: null,          /* name = CSV file name or builder save name; source 'csv' | 'builder' */
+  title: '',                       /* v0.12.1 — readable study title shown in the panel (renamable) */
   runs: [],                        /* run definitions (sweepRunFromCsvRow / sweepRunsFromCombos) */
   bases: {},                       /* builder sweeps: base recipe(s) the runs modify */
   axes: null,                      /* builder sweeps: [{key,label,unit,values,byVf}] for maps */
@@ -66,7 +67,7 @@ function sweepDb() {
   return _swDbP;
 }
 function sweepSnapshot() {
-  return { v: 2, name: SWEEP_STATE.name, source: SWEEP_STATE.source, runs: SWEEP_STATE.runs, bases: SWEEP_STATE.bases, axes: SWEEP_STATE.axes,
+  return { v: 2, name: SWEEP_STATE.name, title: SWEEP_STATE.title, source: SWEEP_STATE.source, runs: SWEEP_STATE.runs, bases: SWEEP_STATE.bases, axes: SWEEP_STATE.axes,
     results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
     preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder,
     voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order, timing: SWEEP_STATE.timing };
@@ -87,6 +88,7 @@ function sweepSave() {
 function sweepApplySaved(p) {
   if (!p || !Array.isArray(p.runs)) return false;
   SWEEP_STATE.name = p.name || ''; SWEEP_STATE.source = p.source || null;
+  SWEEP_STATE.title = p.title || sweepTitleFromName(SWEEP_STATE.name, SWEEP_STATE.source);
   SWEEP_STATE.runs = p.runs; SWEEP_STATE.results = p.results || {};
   SWEEP_STATE.bases = p.bases || {}; SWEEP_STATE.axes = p.axes || null;
   SWEEP_STATE.selected = p.selected || {}; SWEEP_STATE.precision = p.precision || 'standard';
@@ -623,7 +625,7 @@ function sweepExportCsv() {
   var blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (SWEEP_STATE.name || 'sweep').replace(/\.csv$/i, '').replace(/[^\w.-]+/g, '_') + '_results.csv';
+  a.download = (sweepTitle() || 'sweep').replace(/\.csv$/i, '').replace(/[^\w.-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') + '_results.csv';
   document.body.appendChild(a); a.click();
   setTimeout(function () { URL.revokeObjectURL(a.href); a.parentNode.removeChild(a); }, 1000);
 }
@@ -639,20 +641,24 @@ function openSweepPanel() {
   ov.id = 'swOverlay'; ov.className = 'imp-overlay';
   ov.innerHTML =
     '<div class="imp-dialog sw-dialog" role="dialog" aria-label="Parameter sweep">' +
-      '<div class="imp-head"><div class="imp-title">Parameter sweep</div>' +
-        '<button class="dc-icon-btn" title="Close (a running sweep keeps going)" onclick="closeSweepPanel()">×</button></div>' +
-      '<div class="sw-box sw-build"><div class="sw-box-t">Build a sweep</div><div id="swBuilder"></div></div>' +
-      '<div class="sw-csvrow imp-sub">Or run a list from a CSV run matrix (run_id, surface, mode, shift, wall_ratio, level_c, grid_N, nu_s, expected_vf_pct) ' +
-        '<button class="fh-action-btn ghost" onclick="sweepPickCsv()">Load CSV\u2026</button></div>' +
-      '<div class="sw-bar" id="swBar"></div>' +
-      '<div class="sw-table-wrap"><table class="sw-table" id="swTable"></table></div>' +
-      '<div class="sw-notes" id="swNotes"></div>' +
+      '<div class="imp-head"><div class="imp-title">Parameter sweep</div><div class="sw-headbtns">' +
+        '<button class="fh-action-btn ghost" onclick="sweepNew()" title="Start over: no runs, empty builder, default run settings">↺ New sweep</button>' +
+        '<button class="dc-icon-btn" title="Close (a running sweep keeps going)" onclick="closeSweepPanel()">×</button></div></div>' +
+      '<section class="sw-sec"><div class="sw-sec-t"><span class="sw-num">1</span>Define runs<div class="sw-tabs" id="swTabs"></div></div>' +
+        '<div class="sw-build" id="swPaneBuild"><div id="swBuilder"></div></div>' +
+        '<div id="swPaneCsv" hidden></div></section>' +
+      '<section class="sw-sec"><div class="sw-sec-t"><span class="sw-num">2</span>Run settings</div><div class="sw-bar-row" id="swSettings"></div></section>' +
+      '<section class="sw-sec"><div class="sw-sec-t"><span class="sw-num">3</span>Runs</div>' +
+        '<div class="sw-bar" id="swBar"></div>' +
+        '<div class="sw-table-wrap" id="swTableWrap"><table class="sw-table" id="swTable"></table></div>' +
+        '<div class="sw-notes" id="swNotes"></div></section>' +
     '</div>';
   document.body.appendChild(ov);
   SWEEP_STATE.open = true;
+  sweepRenderSources();
   sweepRenderBuilder();
   sweepRender();
-  (SWEEP_LOADED || Promise.resolve()).then(function () { if (SWEEP_STATE.open) { sweepRenderBuilder(); sweepRender(); sweepPreviewAll(); } });
+  (SWEEP_LOADED || Promise.resolve()).then(function () { if (SWEEP_STATE.open) { SWEEP_UI.tab = null; sweepRenderSources(); sweepRenderBuilder(); sweepRender(); sweepPreviewAll(); } });
 }
 function closeSweepPanel() {
   var ov = swEl('swOverlay');
@@ -685,6 +691,7 @@ function sweepReplaceRuns(runs, name, source, extra) {
   var hasResults = Object.keys(SWEEP_STATE.results).length > 0;
   if (hasResults && !confirm('Replace the current sweep? Its results will be cleared (export them first if you need them).')) return false;
   SWEEP_STATE.runs = runs; SWEEP_STATE.name = name; SWEEP_STATE.source = source;
+  SWEEP_STATE.title = (extra && extra.title) || sweepTitleFromName(name, source);
   SWEEP_STATE.bases = (extra && extra.bases) || {}; SWEEP_STATE.axes = (extra && extra.axes) || null;
   SWEEP_STATE.results = {}; SWEEP_STATE.selected = {}; SWEEP_STATE.preview = {};
   runs.forEach(function (r) { SWEEP_STATE.selected[r.id] = true; });
@@ -955,7 +962,8 @@ function sweepCommitReview() {
                 values: rv.plan.byVf ? rv.plan.targets.map(function (t) { return t * 100; }) : rv.plan.values1 }];
   if (rv.plan.spec2) axes.push({ key: rv.plan.spec2.key, label: rv.plan.spec2.label, unit: rv.plan.spec2.unit, values: rv.plan.values2 });
   var name = (rv.plan.title + '_' + rv.plan.spec1.label + (rv.plan.spec2 ? '_x_' + rv.plan.spec2.label : '')).replace(/[^\w.-]+/g, '_');
-  if (!sweepReplaceRuns(runs, name, 'builder', { bases: { b0: rv.plan.base }, axes: axes })) return;
+  var title = rv.plan.title + ' · ' + rv.plan.spec1.label + (rv.plan.spec2 ? ' × ' + rv.plan.spec2.label : '');
+  if (!sweepReplaceRuns(runs, name, 'builder', { bases: { b0: rv.plan.base }, axes: axes, title: title })) return;
   runs.forEach(function (r) { if (skipIds[r.id]) SWEEP_STATE.selected[r.id] = false; });
   SWEEP_STATE.review = null;
   sweepSave(); sweepRenderBuilder(); sweepRender();
@@ -1008,6 +1016,8 @@ function sweepEta(todoRuns) {
 function sweepFmtDur(s) { return s < 90 ? Math.round(s) + ' s' : (s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h'); }
 
 function sweepRenderBar() {
+  sweepRenderSettings();
+  sweepRenderSources();
   var el = swEl('swBar');
   if (!el) return;
   var runs = SWEEP_STATE.runs, nSel = 0, nDone = 0, nTodo = [], tiers = {};
@@ -1016,43 +1026,105 @@ function sweepRenderBar() {
     if (SWEEP_STATE.results[r.id]) nDone++;
     if (SWEEP_STATE.selected[r.id]) { nSel++; if (!SWEEP_STATE.results[r.id]) nTodo.push(r); }
   });
-  var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
-  var connTxt = { networks: 'all networks · islands removed', largest: 'largest network only', off: 'keep everything' }[conn] || conn;
-  if (!runs.length) { el.innerHTML = '<span class="imp-sub">No runs yet.</span>'; return; }
+  var wrap = swEl('swTableWrap'); if (wrap) wrap.hidden = !runs.length;
+  if (!runs.length) { el.innerHTML = '<div class="sw-empty">No runs yet. Build a sweep from a design or load a CSV run matrix above.</div>'; return; }
   var tierBtns = Object.keys(tiers).sort().map(function (t) { return '<a href="#" onclick="sweepSelect(\'' + t + '\');return false;">tier ' + t + '</a>'; }).join(' · ');
   el.innerHTML =
-    '<div class="sw-bar-row"><b>' + swEsc(SWEEP_STATE.name) + '</b> <span class="imp-sub">' + runs.length + ' runs · ' + nDone + ' done · ' + nSel + ' selected</span>' +
-      '<span class="sw-sel imp-sub">Select: <a href="#" onclick="sweepSelect(\'all\');return false;">all</a>' + (tierBtns ? ' · ' + tierBtns : '') +
-      ' · <a href="#" onclick="sweepSelect(\'pending\');return false;">not run</a> · <a href="#" onclick="sweepSelect(\'none\');return false;">none</a></span></div>' +
-    '<div class="sw-bar-row">' +
-      '<label class="imp-sub">Precision <select id="swPrec" onchange="sweepSetPrecision(this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
-        Object.keys(SWEEP_PRECISION).map(function (k) { return '<option value="' + k + '"' + (k === SWEEP_STATE.precision ? ' selected' : '') + '>' + SWEEP_PRECISION[k].label + '</option>'; }).join('') +
-      '</select></label>' +
-      '<label class="imp-sub" title="Stiffness given to empty space, as a fraction of the solid. 1e-4 is the lab default for normal runs; it inflates low-density lattices by about 1e-4 on every axis.">Void <select onchange="sweepSetOpt(\'voidRatio\', +this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
-        SWEEP_VOID_OPTIONS.map(function (v) { return '<option value="' + v + '"' + (v === SWEEP_STATE.voidRatio ? ' selected' : '') + '>' + v.toExponential(0) + '</option>'; }).join('') + '</select></label>' +
-      '<label class="imp-sub" title="Also solve each run on a second grid and extrapolate to an infinitely fine grid">Second grid <select onchange="sweepSetOpt(\'refine\', this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
-        [['off', 'off'], ['coarser', 'one coarser'], ['finer', 'one finer'], ['pair', '64 ↔ 128 pair']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SWEEP_STATE.refine ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
-      (SWEEP_STATE.refine !== 'off' ? '<label class="imp-sub" title="Assumed convergence order. The F set measured about 2 for PI-gyroid Ex and Ey, 1.4 for Ez and 1.2 for the sheet gyroid.">order <select onchange="sweepSetOpt(\'order\', +this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
-        [1, 2].map(function (o) { return '<option' + (o === SWEEP_STATE.order ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' : '') +
-      '<span class="imp-sub" title="Set by the Connectivity selector in the run controls">Islands: ' + connTxt + '</span>' +
-      '<span class="imp-sub">Stiffness ÷ solid modulus</span>' +
-      '<span class="sw-spacer"></span>' +
-      (SWEEP_STATE.previewing
-        ? '<span class="imp-sub">Checking geometry ' + SWEEP_STATE.previewDone + ' / ' + SWEEP_STATE.previewTotal + '…</span>'
-        : '') +
+    '<div class="sw-bar-row sw-runs-head"><div class="sw-title-blk"><div class="sw-title"><span>' + swEsc(sweepTitle()) + '</span>' +
+        '<button class="sw-rename" onclick="sweepRename()"' + (SWEEP_STATE.running ? ' disabled' : '') + ' title="Rename this study (also names the exported CSV)">✎ rename</button></div>' +
+      '<div class="imp-sub">' + runs.length + ' runs · ' + nDone + ' done · ' + nSel + ' selected' +
+      '<span class="sw-sel"> &nbsp;Select: <a href="#" onclick="sweepSelect(\'all\');return false;">all</a>' + (tierBtns ? ' · ' + tierBtns : '') +
+      ' · <a href="#" onclick="sweepSelect(\'pending\');return false;">not run</a> · <a href="#" onclick="sweepSelect(\'none\');return false;">none</a></span>' +
+      (SWEEP_STATE.previewing ? ' · <span class="sw-checking">checking geometry ' + SWEEP_STATE.previewDone + ' / ' + SWEEP_STATE.previewTotal + '…</span>' : '') + '</div></div>' +
+      '<span class="sw-spacer"></span><div class="sw-actions">' +
+      '<button class="fh-action-btn ghost" onclick="openSweepAtlas()"' + (nDone ? '' : ' disabled') + ' title="Explore the results: geometry, stiffness surface, parameter map and charts">◈ Atlas</button>' +
       (SWEEP_STATE.running
         ? '<span class="imp-sub">Running ' + swEsc(SWEEP_STATE.current || '') + ' · ~' + sweepFmtDur(sweepEta(nTodo)) + ' left</span>' +
-          '<button class="fh-action-btn ghost" onclick="openSweepAtlas()"' + (nDone ? '' : ' disabled') + '>◈ Atlas</button>' +
           '<button class="fh-action-btn ghost" onclick="SWEEP_STATE.stopRequested=true;this.disabled=true;this.textContent=\'Stopping after this run…\'">Stop</button>'
-        : (nTodo.length ? '<span class="imp-sub">' + nTodo.length + ' to run · ~' + sweepFmtDur(sweepEta(nTodo)) + '</span>' : '') +
-          '<button class="fh-action-btn ghost" onclick="sweepClearResults(true)">Clear selected</button>' +
+        : '<button class="fh-action-btn ghost" onclick="sweepClearResults(true)" title="Delete the results of the ticked runs so they run again; the runs stay in the list">Clear results of selected</button>' +
           '<button class="fh-action-btn ghost" onclick="sweepExportCsv()"' + (nDone ? '' : ' disabled') + '>Export CSV</button>' +
-          '<button class="fh-action-btn ghost" onclick="openSweepAtlas()"' + (nDone ? '' : ' disabled') + ' title="Explore the results: geometry, stiffness surface, parameter map and charts">◈ Atlas</button>' +
+          (nTodo.length ? '<span class="imp-sub">' + nTodo.length + ' to run · ~' + sweepFmtDur(sweepEta(nTodo)) + '</span>' : '') +
           '<button class="fh-action-btn" onclick="sweepStart()"' + (nTodo.length && !SWEEP_STATE.previewing ? '' : ' disabled') + '>▶ Run ' + nTodo.length + '</button>') +
-    '</div>';
+    '</div></div>';
 }
-
-var SWEEP_UI = { notesOpen: false };
+/* Run settings: precision, void, second grid (v0.12.1: its own section). */
+function sweepRenderSettings() {
+  var el = swEl('swSettings');
+  if (!el) return;
+  var dis = SWEEP_STATE.running ? ' disabled' : '';
+  var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
+  var connTxt = { networks: 'all networks · islands removed', largest: 'largest network only', off: 'keep everything' }[conn] || conn;
+  el.innerHTML =
+    '<label class="imp-sub">Precision <select id="swPrec" onchange="sweepSetPrecision(this.value)"' + dis + '>' +
+      Object.keys(SWEEP_PRECISION).map(function (k) { return '<option value="' + k + '"' + (k === SWEEP_STATE.precision ? ' selected' : '') + '>' + SWEEP_PRECISION[k].label + '</option>'; }).join('') +
+    '</select></label>' +
+    '<label class="imp-sub" title="Stiffness given to empty space, as a fraction of the solid. 1e-4 is the lab default for normal runs; it inflates low-density lattices.">Void <select onchange="sweepSetOpt(\'voidRatio\', +this.value)"' + dis + '>' +
+      SWEEP_VOID_OPTIONS.map(function (v) { return '<option value="' + v + '"' + (v === SWEEP_STATE.voidRatio ? ' selected' : '') + '>' + v.toExponential(0) + '</option>'; }).join('') + '</select></label>' +
+    '<label class="imp-sub" title="Also solve each run on a second grid and extrapolate to an infinitely fine grid. 64 ↔ 128 pair: every run uses grids 64 and 128 (32 pairs with 64), one basis for a whole matrix.">Second grid <select onchange="sweepSetOpt(\'refine\', this.value)"' + dis + '>' +
+      [['off', 'off'], ['coarser', 'one coarser'], ['finer', 'one finer'], ['pair', '64 ↔ 128 pair']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SWEEP_STATE.refine ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
+    (SWEEP_STATE.refine !== 'off' ? '<label class="imp-sub" title="Assumed convergence order. The F set measured about 2 for PI-gyroid Ex and Ey, 1.4 for Ez and 1.2 for the sheet gyroid.">order <select onchange="sweepSetOpt(\'order\', +this.value)"' + dis + '>' +
+      [1, 2].map(function (o) { return '<option' + (o === SWEEP_STATE.order ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' : '') +
+    '<span class="imp-sub" title="Set by the Connectivity selector in the run controls">Islands: ' + connTxt + '</span>' +
+    '<span class="imp-sub">Stiffness ÷ solid modulus</span>';
+}
+/* Define runs: builder or CSV, as two tabs (v0.12.1). */
+function sweepRenderSources() {
+  var tabs = swEl('swTabs'), pb = swEl('swPaneBuild'), pc = swEl('swPaneCsv');
+  if (!tabs || !pb || !pc) return;
+  if (!SWEEP_UI.tab) SWEEP_UI.tab = SWEEP_STATE.source === 'csv' ? 'csv' : 'build';
+  var t = SWEEP_UI.tab, dis = (SWEEP_STATE.running || SWEEP_STATE.previewing) ? ' disabled' : '';
+  tabs.innerHTML = '<button aria-pressed="' + (t === 'build') + '" onclick="sweepTab(\'build\')">Build from a design</button>' +
+                   '<button aria-pressed="' + (t === 'csv') + '" onclick="sweepTab(\'csv\')">Load a CSV run matrix</button>';
+  pb.hidden = t !== 'build'; pc.hidden = t !== 'csv';
+  if (t !== 'csv') return;
+  var isCsv = SWEEP_STATE.source === 'csv' && SWEEP_STATE.runs.length;
+  pc.innerHTML = '<div class="sw-csvrow">' +
+    (isCsv
+      ? '<span class="sw-file">' + swEsc(SWEEP_STATE.name) + ' · ' + SWEEP_STATE.runs.length + ' runs <button class="sw-x" onclick="sweepRemoveRuns()"' + dis + ' title="Remove this run list (asks first if there are results)">✕ remove</button></span>' +
+        '<button class="fh-action-btn ghost" onclick="sweepPickCsv()"' + dis + '>Replace CSV…</button>'
+      : '<button class="fh-action-btn" onclick="sweepPickCsv()"' + dis + '>Load CSV…</button>' +
+        (SWEEP_STATE.runs.length ? '<span class="imp-sub">Loading a CSV replaces the current builder runs.</span>' : '')) +
+    '<span class="imp-sub">Columns read: run_id, surface, mode, shift, wall_ratio, level_c, grid_N, nu_s, expected_vf_pct (optional reference stiffness, tier, set, purpose)</span></div>';
+}
+function sweepTab(t) { SWEEP_UI.tab = t; sweepRenderSources(); if (t === 'build') sweepRenderBuilder(); }
+function sweepTitleFromName(name, source) {
+  if (!name) return '';
+  if (source === 'csv') return name.replace(/\.csv$/i, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  return name.replace(/_x_/g, ' × ').replace(/_+/g, ' ').trim();
+}
+function sweepTitle() { return SWEEP_STATE.title || sweepTitleFromName(SWEEP_STATE.name, SWEEP_STATE.source) || 'Untitled sweep'; }
+function sweepRename() {
+  if (SWEEP_STATE.running) return;
+  var t = prompt('Name this study (also used for the exported CSV):', sweepTitle());
+  if (t == null) return;
+  t = t.trim(); if (!t) return;
+  SWEEP_STATE.title = t; sweepSave(); sweepRenderBar();
+}
+/* Remove the run list (and its results), keep the run settings. */
+function sweepRemoveRuns() {
+  if (SWEEP_STATE.running || SWEEP_STATE.previewing) return;
+  var hasRes = Object.keys(SWEEP_STATE.results).length > 0;
+  if (!confirm(hasRes ? 'Remove this run list and its results? Export them first if you need them.' : 'Remove this run list?')) return;
+  sweepResetRuns();
+  sweepSave(); sweepRender();
+}
+function sweepResetRuns() {
+  if (typeof closeSweepAtlas === 'function' && typeof ATLAS !== 'undefined' && ATLAS.open) closeSweepAtlas();
+  SWEEP_STATE.runs = []; SWEEP_STATE.results = {}; SWEEP_STATE.selected = {}; SWEEP_STATE.preview = {};
+  SWEEP_STATE.bases = {}; SWEEP_STATE.axes = null; SWEEP_STATE.review = null;
+  SWEEP_STATE.name = ''; SWEEP_STATE.title = ''; SWEEP_STATE.source = null;
+}
+/* ↺ New sweep: everything back to defaults (the machine's measured solve speeds are kept). */
+function sweepNew() {
+  if (SWEEP_STATE.running || SWEEP_STATE.previewing) { alert('Stop the sweep (or wait for the geometry check) first.'); return; }
+  var hasRes = Object.keys(SWEEP_STATE.results).length > 0;
+  if (!confirm('Start a new sweep? This clears the run list' + (hasRes ? ' and its results (export them first if you need them)' : '') + ', the builder and the run settings.')) return;
+  sweepResetRuns();
+  SWEEP_STATE.builder = {}; SWEEP_STATE.precision = 'standard'; SWEEP_STATE.voidRatio = 1e-6; SWEEP_STATE.refine = 'off'; SWEEP_STATE.order = 2;
+  SWEEP_UI.tab = 'build'; SWEEP_UI.notesOpen = false;
+  sweepSave(); sweepRenderSources(); sweepRenderBuilder(); sweepRender();
+}
+var SWEEP_UI = { notesOpen: false, tab: null };
 function sweepRender() {
   sweepRenderBar();
   var tb = swEl('swTable'), notes = swEl('swNotes');
