@@ -42,7 +42,7 @@ var SWEEP_STATE = {
   preview: {},                     /* run_id → geometry stats (14d-voxel-stats.js) */
   builder: {},                     /* last builder settings (kept across redraws and reloads) */
   voidRatio: 1e-6,                 /* void stiffness ÷ solid (Matt, 2026-10-01: 1e-6 for sweeps) */
-  refine: 'off',                   /* 'off' | 'coarser' | 'finer' — second grid for extrapolation */
+  refine: 'off',                   /* 'off' | 'coarser' | 'finer' | 'pair' (64 ↔ 128) — second grid for extrapolation */
   order: 2,                        /* assumed convergence order for the extrapolation */
   previewing: false, previewDone: 0, previewTotal: 0,
   current: null, startedAt: 0, log: []
@@ -311,6 +311,9 @@ function sweepCompanionN(N, mode) {
   var i = SWEEP_GRIDS.indexOf(N);
   if (mode === 'coarser') return i > 0 ? SWEEP_GRIDS[i - 1] : null;
   if (mode === 'finer') return (i >= 0 && i < SWEEP_GRIDS.length - 1) ? SWEEP_GRIDS[i + 1] : null;
+  /* v0.12.1 — one extrapolation basis for a whole matrix: every run is paired with the other of
+     64 and 128 (32 → 64), whatever grid it was listed at (Matt, 2026-10-01). */
+  if (mode === 'pair') return N === 128 ? 64 : (N === 64 ? 128 : (N === 32 ? 64 : null));
   return null;
 }
 
@@ -382,7 +385,7 @@ async function sweepRunOne(run) {
   /* Optional second grid + extrapolation: C_ext = C_fine + (C_fine − C_coarse) / (2^p − 1),
      element by element, then constants from C_ext. */
   var N2 = sweepCompanionN(run.N, SWEEP_STATE.refine);
-  if (SWEEP_STATE.refine !== 'off' && !N2) res.extNote = 'no ' + SWEEP_STATE.refine + ' grid than N = ' + run.N + '; not extrapolated';
+  if (SWEEP_STATE.refine !== 'off' && !N2) res.extNote = (SWEEP_STATE.refine === 'pair' ? 'no pairing grid for N = ' + run.N : 'no ' + SWEEP_STATE.refine + ' grid than N = ' + run.N) + '; not extrapolated';
   if (N2) {
     var B = await sweepSolveAt(recipe, N2, prec, conn);
     var c = sweepConstants(B.Cfull) || {};
@@ -1028,7 +1031,7 @@ function sweepRenderBar() {
       '<label class="imp-sub" title="Stiffness given to empty space, as a fraction of the solid. 1e-4 is the lab default for normal runs; it inflates low-density lattices by about 1e-4 on every axis.">Void <select onchange="sweepSetOpt(\'voidRatio\', +this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
         SWEEP_VOID_OPTIONS.map(function (v) { return '<option value="' + v + '"' + (v === SWEEP_STATE.voidRatio ? ' selected' : '') + '>' + v.toExponential(0) + '</option>'; }).join('') + '</select></label>' +
       '<label class="imp-sub" title="Also solve each run on a second grid and extrapolate to an infinitely fine grid">Second grid <select onchange="sweepSetOpt(\'refine\', this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
-        [['off', 'off'], ['coarser', 'one coarser'], ['finer', 'one finer']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SWEEP_STATE.refine ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
+        [['off', 'off'], ['coarser', 'one coarser'], ['finer', 'one finer'], ['pair', '64 ↔ 128 pair']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SWEEP_STATE.refine ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
       (SWEEP_STATE.refine !== 'off' ? '<label class="imp-sub" title="Assumed convergence order. The F set measured about 2 for PI-gyroid Ex and Ey, 1.4 for Ez and 1.2 for the sheet gyroid.">order <select onchange="sweepSetOpt(\'order\', +this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
         [1, 2].map(function (o) { return '<option' + (o === SWEEP_STATE.order ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' : '') +
       '<span class="imp-sub" title="Set by the Connectivity selector in the run controls">Islands: ' + connTxt + '</span>' +
