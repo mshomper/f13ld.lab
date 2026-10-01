@@ -191,5 +191,5 @@ Test STLs were meshed from native lab geometries (marching cubes, 160 nodes per 
 | One side 3 % long | refused with the sizes shown; *set* cell size then works (part centered) | Yes |
 | 1.1M triangles | 10.6 s in a worker (node timing; distance transform ≈ 6.8 s of it) | About at target |
 | Browser: import → preview → slider → add → reload → adjust → save JSON → reload JSON | all work; grid restored from IndexedDB after reload; saved JSON 107 kB | Yes |
-| GPU elastic run on an imported cell | not verifiable headless (SwiftShader doesn't finish any elastic run, native demos included); the GPU path builds voxels through the same `buildVoxels` | Click-test |
+| GPU elastic run on an imported cell | not verifiable headless (SwiftShader doesn't finish any elastic run, native demos included); Matt ran a full Run All on his machine | Yes (Matt, 2026-09-30) |
 
