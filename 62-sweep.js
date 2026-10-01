@@ -515,6 +515,7 @@ async function sweepStart() {
       console.error('[sweep] ' + run.id + ' failed:', err);
     }
     sweepSave();
+    if (typeof atlasOnResult === 'function') atlasOnResult();
   }
   SWEEP_STATE.running = false; SWEEP_STATE.current = null;
   sweepRender(); sweepPaintHeaderBtn();
@@ -1008,10 +1009,12 @@ function sweepRenderBar() {
         : '') +
       (SWEEP_STATE.running
         ? '<span class="imp-sub">Running ' + swEsc(SWEEP_STATE.current || '') + ' · ~' + sweepFmtDur(sweepEta(nTodo)) + ' left</span>' +
+          '<button class="fh-action-btn ghost" onclick="openSweepAtlas()"' + (nDone ? '' : ' disabled') + '>◈ Atlas</button>' +
           '<button class="fh-action-btn ghost" onclick="SWEEP_STATE.stopRequested=true;this.disabled=true;this.textContent=\'Stopping after this run…\'">Stop</button>'
         : (nTodo.length ? '<span class="imp-sub">' + nTodo.length + ' to run · ~' + sweepFmtDur(sweepEta(nTodo)) + '</span>' : '') +
           '<button class="fh-action-btn ghost" onclick="sweepClearResults(true)">Clear selected</button>' +
           '<button class="fh-action-btn ghost" onclick="sweepExportCsv()"' + (nDone ? '' : ' disabled') + '>Export CSV</button>' +
+          '<button class="fh-action-btn ghost" onclick="openSweepAtlas()"' + (nDone ? '' : ' disabled') + ' title="Explore the results: geometry, stiffness surface, parameter map and charts">◈ Atlas</button>' +
           '<button class="fh-action-btn" onclick="sweepStart()"' + (nTodo.length && !SWEEP_STATE.previewing ? '' : ' disabled') + '>▶ Run ' + nTodo.length + '</button>') +
     '</div>';
 }

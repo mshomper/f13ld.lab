@@ -1,4 +1,4 @@
-# F13LD.lab — Parameter Sweep (v0.10.0)
+# F13LD.lab — Parameter Sweep (v0.11.0)
 
 **Open:** ⟳ Sweep in the header. The panel can be closed while a sweep runs; the header button shows progress (e.g. *Sweep 12/41*). Run All is blocked while a sweep is running, and a sweep won't start during a run.
 
@@ -34,17 +34,31 @@ One row per run. Columns read (others are ignored, `purpose` / `note` / `set` / 
 | Sheet | `shell`, offset 0, wall thickness = c (no field rescaling; the lab uses the raw gyroid, range ±1.5) |
 | Skeletal | `solid` on −φ with offset −c |
 
-### 1.2 Build one from a loaded design
+### 1.2 Build one from a loaded design (the main way, v0.11)
 
-Pick a design, one parameter, a start, an end and a number of steps (linear, up to 200), a grid and a Poisson's ratio.
+The builder sits at the top of the Sweep panel; loading a CSV is the second row. Pick a design, **parameter 1**, optionally **parameter 2**, a grid and a Poisson's ratio. Each parameter takes either a start, an end and a number of steps, or a list of values (`0, 1/8, 1/4` — fractions allowed). Two parameters make the full grid (parameter 1 × parameter 2). Parameter 1 can be stepped by value or by solid fraction (§1.4) when it is a threshold-type parameter.
+
+Parameters come from the design's own recipe, so every family works (catalogue in `14d-voxel-stats.js`, `sweepParamCatalog`):
 
 | Design | Parameters |
 |---|---|
 | TPMS solid | Level |
-| TPMS sheet | Sheet half-thickness (c), level offset |
+| TPMS sheet | Sheet half-thickness, level offset |
 | PI-TPMS | Wall ratio (tube diameter ÷ cell), shift x / y / z (cycles) |
-| Grain, noise | Level, half-width |
+| Beam (new schema) | Radius scale, radius x / y / z, node ball radius, node smoothing; old schema: radius. No uniform offset — the capsule distance plateaus outside the strut halo, so an offset is not uniform |
+| Bundle | Each structure's own numeric fields, sheet width, offset |
+| Wave | Iso level, thickness, phase/time, offset |
+| Grain, noise | Level / center, half-width |
 | Imported STL cell | Wall offset (mm) — the same control as the import dialog's slider |
+| Any family | Any other numeric field of the recipe (listed under *Other*) |
+
+**Review before creating.** *Review* voxelizes every combination at N = 32 in a background worker (no solves) and shows, before anything is committed:
+
+- runs (n₁ × n₂), total solves (doubled when a second grid is on), estimated time and the solid-fraction range;
+- a parameter-1 × parameter-2 map of solid fraction, with skipped combinations hatched (empty, fully solid, no load path, or a solid-fraction target out of reach);
+- notes: how many runs carry load on only some axes, how many will have features under 6 voxels at the chosen grid (and what the sweep would cost at N = 128), a hardware note, and storage.
+
+Time estimates use this machine's measured seconds per solve at each grid (kept across sweeps); before the first run they fall back to rough guesses (2 / 3 / 20 s at N = 32 / 64 / 128). There is no run cap: the hardware note says when a grid is above what the GPU tier handles comfortably, and long sweeps are the user's call (Matt, 2026-10-01). *Create* writes the runs (ids `S{i}-{j}`) and unticks the skipped ones; the builder keeps its settings, including the grid.
 
 ### 1.3 Geometry check before solving
 
@@ -77,7 +91,7 @@ For parameters where solid is a threshold on a per-voxel quantity (TPMS level, s
 
 ## 3. Results
 
-Kept in the browser (localStorage `f13ld.lab.sweep.v1`), so a reload resumes; loading a new run list asks before clearing. *Clear selected* re-queues runs.
+Kept in the browser (IndexedDB `f13ld.lab.sweep`, migrated from the old localStorage key on first load), so a reload resumes; loading a new run list asks before clearing. *Clear selected* re-queues runs. Builder sweeps also export `param2_name param2_value`.
 
 **Export CSV** — one row per finished run:
 
@@ -90,6 +104,25 @@ Kept in the browser (localStorage `f13ld.lab.sweep.v1`), so a reload resumes; lo
 | Solver record | `iters_total iters_xx … iters_xy final_residual_max converged wall_time_s` |
 | Reference | `ref_Ex ref_Ey ref_Ez ratio_Ex ratio_Ey ratio_Ez` |
 | Other | `notes` (build check, trim, convergence, reference differences over 5 %), `error` |
+
+## 3b. Sweep Atlas (v0.11)
+
+**◈ Atlas** in the sweep bar opens an explorer over the current sweep's results (enabled once one run has finished; it also works mid-sweep and refreshes after each run). Everything is in-lab; F13LD brand colors on the dark theme. A self-contained HTML export is a later option — the lab is not MIT-licensed, so an export would carry results and views only.
+
+| View | What it shows |
+|---|---|
+| Controls | Series (parameter-2 value for builder sweeps, CSV set otherwise), a slider through the series, run-grid vs extrapolated values (when a second grid was run), stiffness ÷ E solid or in MPa (material picked in the run controls, else the design's own) |
+| Cell geometry | The lab's ray-marcher on the selected run's recipe, 1 cell or 2×2×2 |
+| Directional Young's modulus | The lab's stiffness surface, E(n) = 1 / (vᵀ S v); readout of E max and its direction (dense sphere probe), E min, max / min, and a *strand-like* note when stiffness sits only in a narrow cone |
+| Readout | Connectivity class, flags from the geometry check, solid %, Ex Ey Ez, Gyz Gxz Gxy, max / min E, and the 6 × 6 stiffness matrix as a heatmap (numerical zeros shown as 0) |
+| Parameter map | Builder sweeps: parameter 1 × parameter 2 colored by connectivity, solid fraction, stiffest or softest axis, or Ez; unsolved and skipped cells marked; click to select. CSV sweeps: a table of the series |
+| Stiffness vs solid fraction | Ex, Ey, Ez of the selected series on a log axis, with the Voigt bound; hollow points show the other grid when a second grid was run |
+| Design space | Every run; color = connectivity, shape = series; y = stiffest axis, softest axis, Ez or the mean |
+| Data check | Runs solved, convergence, positive semi-definite matrices, Voigt bound, stiffness rising with solid fraction within a series (drops over 3 % listed), connectivity counts, resolution and island-trim flags, any runs at void 1e-4 |
+
+**Connectivity class** = number of eigenvalues of C above 1 % of the largest: 6 → connected 3-D lattice, 1 → strands only, otherwise partially connected. Directional moduli use the compliance of C with 1e-6 × max(Cᵢᵢ) added on the diagonal, so disconnected directions read near zero instead of failing.
+
+---
 
 ## 4. Accuracy check against Vixiv (A6, before the sweep)
 
