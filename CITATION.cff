@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use F13LD.lab in your work, please cite it as below."
+title: "F13LD.lab: GPU homogenization and mechanics workbench for architected materials"
+authors:
+  - family-names: Shomper
+    given-names: Matt
+    orcid: "https://orcid.org/0009-0002-5312-2864"
+version: "0.13.0"
+date-released: "2026-10-01"
+license-url: "https://polyformproject.org/licenses/noncommercial/1.0.0"
+repository-code: "https://github.com/mshomper/f13ld.lab"
+url: "https://mshomper.github.io/f13ld.lab"
+keywords:
+  - homogenization
+  - FFT
+  - WebGPU
+  - architected materials
+  - TPMS
+  - metamaterials
