@@ -787,3 +787,7 @@ html, body {
 .sw-notes .imp-warn { max-height:16vh; overflow:auto; }
 .fh-action-btn.sw-running { color:var(--lab); border-color:var(--lab); }
 @media (max-width:760px){ .sw-source { grid-template-columns:1fr; } }
+.sw-table td.pre { color:var(--ink-mute); }
+.sw-table tr.done td.pre { color:var(--ink); }
+.sw-table th.fl, .sw-table td.fl { text-align:left; }
+.sw-table td.fl .imp-chip { margin-right:3px; }

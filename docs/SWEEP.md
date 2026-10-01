@@ -46,6 +46,27 @@ Pick a design, one parameter, a start, an end and a number of steps (linear, up 
 | Grain, noise | Level, half-width |
 | Imported STL cell | Wall offset (mm) — the same control as the import dialog's slider |
 
+### 1.3 Geometry check before solving
+
+Every run is voxelized at its own grid in a background worker as soon as the list is made (the §5 matrix: 41 runs in about 90 s). No solve. The table shows each run's solid % (after island trim) and a **Checks** column:
+
+| Check | Level | Meaning |
+|---|---|---|
+| empty · fully solid · no load path | **skip** (unticked automatically, reason shown) | Nothing to solve: no solid, a solid cube, or no piece runs across the cell on any axis |
+| spans x, z only | warn | Carries load on those axes only; the others will read near the void level (~1e-4). Layers and strands (B6, B7) are meant to — they stay ticked |
+| < 2 % solid · > 95 % solid | warn | Extreme solid fraction |
+| thin N vox | warn | Thinnest feature under **6 voxels** at this grid (Matt, 2026-10-01); stiffness will read low |
+| vf ±x % | warn | Voxel solid differs from `expected_vf_pct` by more than 1 % |
+| trim x % | info | Island trim removes solid |
+
+Spanning is a connectivity test, not a stiffness guarantee: a mechanism-like topology can span an axis and still be nearly zero-stiffness along it.
+
+**Thinnest feature** = 5th percentile of 2·d + 0.5 over the centers of maximal inscribed balls (voxels whose inside distance is at least that of all 26 neighbours), where d is the periodic Euclidean distance to the nearest void voxel. Checked on struts of known diameter (7.7, 15.4, 30.7 voxels → 7.7, 14.6, 30.0) and against the matrix's `voxels_across_feature` for sheet and skeletal runs (within about ±7 %).
+
+### 1.4 Step by solid fraction
+
+For parameters where solid is a threshold on a per-voxel quantity (TPMS level, sheet thickness, PI wall ratio, grain/noise level or half-width in the matching mode, imported-cell wall offset), *Step by → solid fraction* takes a range in % and finds the parameter value that gives each fraction **exactly at the chosen grid** (before island trim): the per-voxel quantity is computed once and each value is a quantile of it. Checked: A6 target 19.81 % → wall ratio 0.1897 (matrix 0.19), C3 32.5 % → c 0.5025 (0.5006), D4 20 % → c 0.918 (0.9138), each rebuilding to the target within 0.03 points.
+
 ## 2. Settings
 
 - **Precision:** *Standard* — CG tolerance 1e-4, up to 300 iterations per load case (same as a normal run). *High* — 1e-5, up to 1,000 iterations. A6 at N = 64 on the CPU reference took ~60 iterations per load case at 1e-5.
@@ -83,3 +104,17 @@ A6 — PI-gyroid (0, ⅛, ½), wall ratio 0.19, 19.83 % solid (no islands), ν =
 Doubling the grid roughly halves the gap, which is the first-order convergence expected from a stair-stepped voxel surface, and the extrapolated values land within ~3 % of Vixiv. So the gap is resolution, not a solver bias: lab stiffness approaches Vixiv's from below as the tube gets more voxels. The extrapolation assumes first-order convergence (two grids can't confirm the order). Solver record at N = 128: 329 CG iterations over six load cases (34–81 each), 2,539 s on the CPU reference; the GPU solve is much faster.
 
 Consequence for the §5 matrix: runs at N = 64 with 8–13 voxels across the thinnest feature will read roughly 5–12 % low, runs at N = 128 roughly 2–5 % low. Partial-volume voxels (queued) should cut this error at a given grid.
+
+## 5. PI tube width vs wall ratio
+
+Gradient-normalized PI-TPMS tubes are round when thin but narrower than the nominal wall ratio in their thinnest direction as they thicken. Measured on the continuous field (25 tube-axis points refined to the local minimum of the PI distance, narrowest of 500 random chords each, step 0.002 T), PI-gyroid (0, ⅛, ½):
+
+| Run | Wall ratio (nominal) | Narrowest width | Ratio |
+|---|---|---|---|
+| A1 | 0.05 | 0.050 T | 1.00 |
+| A4 | 0.126 | 0.118 T | 0.94 |
+| A6 | 0.19 | 0.166 T | 0.87 |
+| A8 | 0.35 | 0.254 T | 0.73 |
+
+The normalized distance is a first-order estimate (φ/|∇φ| and the angle between the surfaces at the point), so tubes flatten as the radius approaches the surfaces' curvature radius. F13LD.tpms uses the same formula, so this is the geometry both tools build — relevant wherever a paper quotes the thinnest feature of a PI structure from its wall ratio (e.g. the matched-feature comparison at 0.126 T: A4's narrowest width is 0.118 T).
+
