@@ -112,9 +112,37 @@ function meshHealth(tris, count, bounds) {
 }
 
 /* ── 3. Cell mapping ──────────────────────────────────────── */
+/* Where are the cell's faces?  A CAD cell trimmed to its box leaves many
+   vertices on each trim plane, but thickening after trimming (or untrimmed
+   end-caps) can push some geometry slightly past those planes, so the
+   bounding box overstates the cell.  Per axis, the face is the most crowded
+   coordinate among vertices within 3 % of each end of the box, when it is
+   crowded enough to be a plane; otherwise the box edge is used. */
+function stlCellPlanes(tris, bounds) {
+  var nV = tris.length / 3, need = Math.max(12, Math.round(nV * 0.001));
+  var lo = [], hi = [], found = [[false, false], [false, false], [false, false]];
+  for (var a = 0; a < 3; a++) {
+    var mn = bounds.min[a], sz = bounds.size[a], band = 0.03 * sz, q = sz > 0 ? 1e5 / sz : 0;
+    var cLo = new Map(), cHi = new Map();
+    for (var t = a; t < tris.length; t += 3) {
+      var v = tris[t];
+      if (v < mn + band) { var k = Math.round((v - mn) * q); cLo.set(k, (cLo.get(k) || 0) + 1); }
+      else if (v > mn + sz - band) { var k2 = Math.round((v - mn) * q); cHi.set(k2, (cHi.get(k2) || 0) + 1); }
+    }
+    function best(m) { var bk = null, bn = 0; m.forEach(function (n, k) { if (n > bn) { bn = n; bk = k; } }); return { k: bk, n: bn }; }
+    var bl = best(cLo), bh = best(cHi);
+    found[a][0] = bl.n >= need; found[a][1] = bh.n >= need;
+    lo.push(found[a][0] ? mn + bl.k / q : mn);
+    hi.push(found[a][1] ? mn + bh.k / q : bounds.max[a]);
+  }
+  var overhang = 0;
+  for (var a2 = 0; a2 < 3; a2++) overhang = Math.max(overhang, lo[a2] - bounds.min[a2], bounds.max[a2] - hi[a2]);
+  return { lo: lo, hi: hi, size: [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]], found: found, overhang: overhang };
+}
+
 /* Returns per-axis { off, size } in mm so u = (p − off) / size ∈ [0, 1]. */
-function stlCellMapping(bounds, s) {
-  var sz = bounds.size, mx = Math.max(sz[0], sz[1], sz[2]), mnS = Math.min(sz[0], sz[1], sz[2]);
+function stlCellMapping(cell, s) {
+  var sz = cell.size, mx = Math.max(sz[0], sz[1], sz[2]), mnS = Math.min(sz[0], sz[1], sz[2]);
   if (!(mx > 0)) throw new Error('STL has zero size');
   if (s.cellMode === 'set') {
     var L = +s.cellMm;
@@ -123,27 +151,28 @@ function stlCellMapping(bounds, s) {
       return { error: 'cellTooSmall', message: 'The part is ' + sz[a].toFixed(3) + ' mm along ' + 'xyz'[a] +
                ', larger than the ' + L.toFixed(3) + ' mm cell.' };
     }
-    var center = [0, 1, 2].map(function (a2) { return bounds.min[a2] + sz[a2] / 2; });
+    var center = [0, 1, 2].map(function (a2) { return cell.lo[a2] + sz[a2] / 2; });
     return { off: center.map(function (c) { return c - L / 2; }), size: [L, L, L], cellMm: L,
              mismatch: 0, stretched: false };
   }
   var mismatch = (mx - mnS) / mx;
   if (mismatch > s.cubicTol) {
     return { error: 'notCubic', mismatch: mismatch, sides: sz.slice(),
-             message: 'The bounding box is ' + sz.map(function (v) { return v.toFixed(3); }).join(' × ') +
+             message: 'The cell is ' + sz.map(function (v) { return v.toFixed(3); }).join(' × ') +
                       ' mm — sides differ by ' + (mismatch * 100).toFixed(1) + ' %, more than the ' +
                       (s.cubicTol * 100).toFixed(0) + ' % accepted as a cube. Cells with unequal sides are not ' +
                       'supported yet. If the part does not reach every face of its cell, enter the cell size instead.' };
   }
-  return { off: bounds.min.slice(), size: sz.slice(), cellMm: mx, mismatch: mismatch, stretched: mismatch > 0 };
+  return { off: cell.lo.slice(), size: sz.slice(), cellMm: mx, mismatch: mismatch, stretched: mismatch > 0 };
 }
 
 /* ── 4. Scanline voxelization with three-axis majority vote ─ */
 /* Fills votes[idx] += 1 for every voxel center the ray along axis `a` finds
    inside (non-zero winding, so either triangle orientation works and
    overlapping shells union).  U holds normalized coords (cell = [0,1]³). */
-function scanAxisVotes(U, nTri, M, a, votes) {
+function scanAxisVotes(U, nTri, M, a, votes, shift) {
   var b = (a + 1) % 3, c = (a + 2) % 3;
+  var sa0 = shift ? shift[a] : 0, sb0 = shift ? shift[b] : 0, sc0 = shift ? shift[c] : 0;
   /* tiny, axis-specific column offsets — keeps rays off shared edges and
      vertices of meshes generated on regular lattices */
   var jitB = [2.137e-6, 3.091e-6, 1.733e-6][a], jitC = [1.451e-6, 2.617e-6, 3.307e-6][a];
@@ -152,9 +181,9 @@ function scanAxisVotes(U, nTri, M, a, votes) {
   function forEachHit(cb) {
     for (var t = 0; t < nTri; t++) {
       var o = t * 9;
-      var a0 = U[o + a], b0 = U[o + b], c0 = U[o + c];
-      var a1 = U[o + 3 + a], b1 = U[o + 3 + b], c1 = U[o + 3 + c];
-      var a2 = U[o + 6 + a], b2 = U[o + 6 + b], c2 = U[o + 6 + c];
+      var a0 = U[o + a] + sa0, b0 = U[o + b] + sb0, c0 = U[o + c] + sc0;
+      var a1 = U[o + 3 + a] + sa0, b1 = U[o + 3 + b] + sb0, c1 = U[o + 3 + c] + sc0;
+      var a2 = U[o + 6 + a] + sa0, b2 = U[o + 6 + b] + sb0, c2 = U[o + 6 + c] + sc0;
       var area = (b1 - b0) * (c2 - c0) - (c1 - c0) * (b2 - b0);   /* = n_a (cyclic a,b,c) */
       if (area === 0) continue;
       var bmin = Math.min(b0, b1, b2), bmax = Math.max(b0, b1, b2);
@@ -196,7 +225,9 @@ function scanAxisVotes(U, nTri, M, a, votes) {
         pos[y + 1] = pv; sg[y + 1] = sv;
       }
       var base = jb2 * sb + jc2 * sc, wind = 0, h = h0;
-      for (var ia = 0; ia < M; ia++) {
+      /* outside before the first hit and after the last: sweep only between */
+      var ia0 = Math.max(0, Math.ceil(pos[h0] * M - 0.5)), ia1 = Math.min(M - 1, Math.floor(pos[h1 - 1] * M - 0.5));
+      for (var ia = ia0; ia <= ia1; ia++) {
         var tc = (ia + 0.5) / M;
         while (h < h1 && pos[h] < tc) { wind += sg[h]; h++; }
         if (wind !== 0) votes[base + ia * sa]++;
@@ -255,32 +286,52 @@ function periodicEdt3d(A, M) {
 }
 
 /* ── 5. Face match ────────────────────────────────────────── */
-/* Overlap (IoU) of the solid across each pair of opposite faces, relative to
-   the overlap at the same spacing just inside the cell — so a perfectly
-   periodic cell scores ~100 % whatever its wall slope.  Slices are taken
-   two voxels in from each face (spacing 3 across the face), so trimming
-   artifacts thinner than a fine voxel (~20 µm on a 5 mm cell) don't count;
-   an off-period cell mismatches at every depth. */
+/* Do opposite faces line up?  Across the periodic seam the boundary slices
+   M − 1 and 0 are neighbours.  Where the solid differs between them, that is
+   expected if the walls at the same spot also move between neighbouring
+   slices just inside the cell (a wall meeting the face at a shallow angle
+   moves a lot from slice to slice) — and suspicious where they don't.
+     seamDiff   = voxels that differ between slices M − 1 and 0
+     insideMove = voxels that differ in any of (0,1), (1,2), (M−3,M−2),
+                  (M−2,M−1), grown by FACE_TOL voxels
+     score      = 1 − |seamDiff outside insideMove| / solid area at the faces
+   An off-period cell breaks where the inside is steady, so it scores low.
+   (Two earlier versions flagged good CAD sheet cells: a 1-voxel overlap test
+   and a whole-face change count; a distance-field version can't see breaks
+   because the periodic distance transform smooths across the seam.)
+   Also returns the two boundary slices per axis for the report's face view:
+   maps[a·M² + p·M + q] bit 0 = solid at face −, bit 1 = solid at face +. */
+var FACE_TOL = 3;   /* voxels at 256³ ≈ 0.06 mm on a 5 mm cell — see STL_IMPORT_SCOPE §7 */
 function faceMatch(occ, M) {
-  var MM = M * M, out = [];
-  function sliceIoU(a, s0, s1) {
-    var inter = 0, uni = 0;
-    for (var p = 0; p < M; p++) for (var q = 0; q < M; q++) {
-      var i0, i1;
-      if (a === 0) { i0 = s0 * MM + p * M + q; i1 = s1 * MM + p * M + q; }
-      else if (a === 1) { i0 = p * MM + s0 * M + q; i1 = p * MM + s1 * M + q; }
-      else { i0 = p * MM + q * M + s0; i1 = p * MM + q * M + s1; }
-      var x = occ[i0], y = occ[i1];
-      if (x || y) { uni++; if (x && y) inter++; }
-    }
-    return uni ? inter / uni : 1;
-  }
+  var MM = M * M, scores = [], maps = new Uint8Array(3 * MM);
+  var r = FACE_TOL, offs = [];
+  for (var dp = -r; dp <= r; dp++) for (var dq = -r; dq <= r; dq++) if (dp * dp + dq * dq <= r * r) offs.push(dp, dq);
+  function idx(a, s0, p, q) { return a === 0 ? s0 * MM + p * M + q : (a === 1 ? p * MM + s0 * M + q : p * MM + q * M + s0); }
+  var pairs = [[0, 1], [1, 2], [M - 3, M - 2], [M - 2, M - 1]];
   for (var a = 0; a < 3; a++) {
-    var across = sliceIoU(a, M - 2, 1);
-    var inside = 0.5 * (sliceIoU(a, 1, 4) + sliceIoU(a, M - 5, M - 2));
-    out.push(Math.max(0, Math.min(1, inside > 0 ? across / inside : (across > 0 ? 1 : 0))));
+    var moved = new Uint8Array(MM), area = 0, base = a * MM;
+    for (var p = 0; p < M; p++) for (var q = 0; q < M; q++) {
+      var k = p * M + q, x = occ[idx(a, 0, p, q)], y = occ[idx(a, M - 1, p, q)];
+      maps[base + k] = (x ? 1 : 0) | (y ? 2 : 0);
+      area += x + y;
+      for (var pi = 0; pi < pairs.length; pi++) {
+        if (occ[idx(a, pairs[pi][0], p, q)] !== occ[idx(a, pairs[pi][1], p, q)]) { moved[k] = 1; break; }
+      }
+    }
+    area /= 2;
+    var bad = 0;
+    for (var p2 = 0; p2 < M; p2++) for (var q2 = 0; q2 < M; q2++) {
+      var m = maps[base + p2 * M + q2];
+      if (m !== 1 && m !== 2) continue;            /* same on both faces */
+      var ok = false;
+      for (var o = 0; o < offs.length && !ok; o += 2) {
+        if (moved[((p2 + offs[o] + M) % M) * M + ((q2 + offs[o + 1] + M) % M)]) ok = true;
+      }
+      if (!ok) bad++;
+    }
+    scores.push(area > 0 ? Math.max(0, 1 - bad / area) : 1);
   }
-  return out;
+  return { scores: scores, maps: maps };
 }
 
 /* ── Main entry ───────────────────────────────────────────── */
@@ -310,7 +361,8 @@ function buildImportGridFromStl(buffer, settings, onProgress) {
   prog('Checking mesh', 0.06);
   var health = meshHealth(tris, stl.count, bounds);
 
-  var map = stlCellMapping(bounds, s);
+  var planes = stlCellPlanes(tris, bounds);
+  var map = stlCellMapping(planes, s);
   if (map.error) return { ok: false, error: map.error, message: map.message, sides: bounds.size.slice(), mismatch: map.mismatch, bounds: bounds, health: health };
 
   var nTri = stl.count, U = new Float64Array(nTri * 9);
@@ -319,26 +371,44 @@ function buildImportGridFromStl(buffer, settings, onProgress) {
   }
 
   var M = s.M, MM = M * M, M3 = MM * M;
-  var votes = new Uint8Array(M3);
-  for (var ax = 0; ax < 3; ax++) {
-    prog('Filling solid (' + 'xyz'[ax] + ')', 0.1 + 0.1 * ax);
-    scanAxisVotes(U, nTri, M, ax, votes);
+  /* Geometry past a face belongs to the neighbouring cell's side of the seam:
+     wrap it periodically by also filling copies shifted ±1 cell along every
+     axis where the part pokes out, and keep the union. */
+  var umin = [Infinity, Infinity, Infinity], umax = [-Infinity, -Infinity, -Infinity];
+  for (var t2 = 0; t2 < nTri * 9; t2 += 3) for (var a3 = 0; a3 < 3; a3++) {
+    var uv = U[t2 + a3]; if (uv < umin[a3]) umin[a3] = uv; if (uv > umax[a3]) umax[a3] = uv;
   }
-  U = null;
+  var EPS = 0.5 / M / 8, shiftsPerAxis = [];
+  for (var a4 = 0; a4 < 3; a4++) {
+    var sh = [0];
+    if (umin[a4] < -EPS) sh.push(1);
+    if (umax[a4] > 1 + EPS) sh.push(-1);
+    shiftsPerAxis.push(sh);
+  }
+  var shifts = [];
+  shiftsPerAxis[0].forEach(function (x) { shiftsPerAxis[1].forEach(function (y) { shiftsPerAxis[2].forEach(function (z) { shifts.push([x, y, z]); }); }); });
+  var occ = new Uint8Array(M3), votes = new Uint8Array(M3);
   var solidCount = 0, touched = 0, split = 0;
-  for (var v = 0; v < M3; v++) {
-    var c = votes[v];
-    if (c) { touched++; if (c < 3) split++; }
-    votes[v] = c >= 2 ? 1 : 0;
-    solidCount += votes[v];
+  for (var si = 0; si < shifts.length; si++) {
+    if (si) votes.fill(0);
+    for (var ax = 0; ax < 3; ax++) {
+      prog('Filling solid' + (shifts.length > 1 ? ' (' + (si + 1) + '/' + shifts.length + ')' : ' (' + 'xyz'[ax] + ')'),
+           0.1 + 0.3 * (si * 3 + ax) / (shifts.length * 3));
+      scanAxisVotes(U, nTri, M, ax, votes, shifts[si]);
+    }
+    for (var v = 0; v < M3; v++) {
+      var c = votes[v];
+      if (!c) continue;
+      touched++; if (c < 3) split++;
+      if (c >= 2) occ[v] = 1;
+    }
   }
-  var occ = votes;
+  votes = null; U = null;
+  for (var v2 = 0; v2 < M3; v2++) solidCount += occ[v2];
   var density = solidCount / M3;
   if (solidCount === 0) return { ok: false, error: 'empty', message: 'No solid found inside the cell — check the units and that the mesh is closed.', health: health };
   if (solidCount === M3) return { ok: false, error: 'full', message: 'The whole cell came out solid — the mesh may be inverted or open.', health: health };
 
-  prog('Matching faces', 0.42);
-  var fm = faceMatch(occ, M);
 
   /* distance outside (to nearest solid voxel center) */
   prog('Distance field (outside)', 0.48);
@@ -353,6 +423,9 @@ function buildImportGridFromStl(buffer, settings, onProgress) {
   for (var p3 = 0; p3 < M3; p3++) A[p3] = occ[p3] ? EDT_INF : 0;
   periodicEdt3d(A, M);
   for (var p4 = 0; p4 < M3; p4++) if (occ[p4]) sd[p4] = -(Math.sqrt(A[p4]) - 0.5);
+
+  prog('Matching faces', 0.8);
+  var fmr = faceMatch(occ, M), fm = fmr.scores;
 
   /* thinnest wall: centres of maximal inscribed balls — voxels whose d_in is
      at least that of all 26 neighbours (so convex surfaces, voxel staircase
@@ -401,12 +474,13 @@ function buildImportGridFromStl(buffer, settings, onProgress) {
 
   prog('Done', 1);
   return {
-    ok: true, bytes: bytes, n: n, R: R, cellMm: map.cellMm,
+    ok: true, bytes: bytes, n: n, R: R, cellMm: map.cellMm, faceMaps: fmr.maps, fineM: M,
     mapping: { off: map.off, size: map.size, mode: s.cellMode },
     report: {
       format: stl.format, units: s.units,
       bounds: { min: bounds.min, max: bounds.max, size: bounds.size },
       cellMm: map.cellMm, cellMode: s.cellMode,
+      facesFromPlanes: planes.found.every(function (f) { return f[0] && f[1]; }), overhangMm: planes.overhang,
       mismatch: map.mismatch, stretched: map.stretched,
       density: density,
       faceMatch: fm,
@@ -425,7 +499,7 @@ var STL_IMPORT_WORKER_ONMESSAGE =
   '  var job = e.data;\n' +
   '  try {\n' +
   '    var r = buildImportGridFromStl(job.buffer, job.settings, function(stage, frac){ postMessage({ type:"progress", stage:stage, frac:frac }); });\n' +
-  '    if (r.ok) postMessage({ type:"done", result:r }, [r.bytes.buffer]);\n' +
+  '    if (r.ok) postMessage({ type:"done", result:r }, [r.bytes.buffer, r.faceMaps.buffer]);\n' +
   '    else postMessage({ type:"done", result:r });\n' +
   '  } catch (err){ postMessage({ type:"error", message:(err && err.message) || String(err) }); }\n' +
   '};\n';
@@ -434,7 +508,7 @@ var STL_IMPORT_WORKER_ONMESSAGE =
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     STL_IMPORT_DEFAULTS: STL_IMPORT_DEFAULTS, parseStl: parseStl, stlBounds: stlBounds,
-    meshHealth: meshHealth, stlCellMapping: stlCellMapping, scanAxisVotes: scanAxisVotes,
+    meshHealth: meshHealth, stlCellPlanes: stlCellPlanes, stlCellMapping: stlCellMapping, scanAxisVotes: scanAxisVotes,
     periodicEdt3d: periodicEdt3d, faceMatch: faceMatch, buildImportGridFromStl: buildImportGridFromStl
   };
 }

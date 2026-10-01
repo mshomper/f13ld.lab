@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.8.2 · 2026-09-30 (main = `df2fdb2` code; docs updated after) · STL import in progress on `stl-import`
+**As of:** v0.9.1 · 2026-09-30 · STL unit-cell import merged
 **Full history of the last session:** [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md)
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -15,7 +15,7 @@
 | (follow-ups) | Demo C → hyperuniform trabecular; buckling/yield ratio uses the crush axis; stress–strain plot redesign (collision-aware labels, off-scale buckling strip, MPa / normalized toggle) |
 | **v0.8.1** | Nonlinear crush: mean-strain reset (root cause), inexact Newton, early stop, predictor, GPU-resident CG, batched real-pair FFT, cached bind groups |
 | **v0.8.2** | PI / shell normalization kept on import (older recipes default OFF); normalized PI and shell rendering in the viewer; connectivity selector (all networks / largest / keep everything); per-network FE buckling |
-| **v0.9.0** (branch `stl-import`) | STL unit-cell import: periodic signed-distance grid, `import` kernel, report card, wall offset, IndexedDB store, export with embedded grid. See `STL_IMPORT_SCOPE.md` §7–8 |
+| **v0.9.0 / v0.9.1** | STL unit-cell import: periodic signed-distance grid, `import` kernel, report card, wall offset, IndexedDB store, export with embedded grid. See `STL_IMPORT_SCOPE.md` §7–8 |
 
 ---
 
@@ -23,7 +23,7 @@
 
 Matt redirected the 2026-09-30 evening session from buckling speed to STL import. Full scope, data path and test plan: [`STL_IMPORT_SCOPE.md`](STL_IMPORT_SCOPE.md). Work is on branch `stl-import`.
 
-**Status (2026-09-30):** all three phases built and validated on `stl-import` (results in the scope doc §8). Waiting on Matt's click-test on the branch preview, including a GPU elastic run on an imported cell and a few of his own CAD STLs, before merging to main.
+**Status (2026-09-30):** merged to main as v0.9.0 + v0.9.1. Matt click-tested the preview; his CAD sheet cell was falsely flagged "not periodic", fixed in v0.9.1 (trim-plane cell faces, wrapped overhang, local seam test — scope doc §7–8). Still worth confirming on real hardware: a GPU elastic run on an imported cell (headless SwiftShader can't finish any elastic run).
 
 ### 1.1 Decisions (Matt, 2026-09-30)
 

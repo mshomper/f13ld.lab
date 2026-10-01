@@ -18,8 +18,8 @@
      localStorage keeps only the small design record (00-mock-data.js).
    ============================================================ */
 
-var IMPORT_UI_VERSION = 'imp-1';          /* cache-bust for the import worker */
-var IMPORT_FACE_GREEN = 0.98, IMPORT_FACE_AMBER = 0.90;
+var IMPORT_UI_VERSION = 'imp-2';          /* cache-bust for the import worker */
+var IMPORT_FACE_GREEN = 0.95, IMPORT_FACE_AMBER = 0.80;   /* the card's "not periodic" tag is red only (< amber) */
 var IMPORT_OFFSET_FRAC = 0.5;             /* slider range ±0.5 field units (of the 0.8 stored) */
 
 /* ── Grid store (IndexedDB) ───────────────────────────────── */
@@ -203,7 +203,7 @@ function openImportDialog(file) {
   IMPORT_STATE.fileName = null; IMPORT_STATE.buffer = null;
   IMPORT_STATE.settings = { units: 'mm', cellMode: 'fit', cellMm: null };
   IMPORT_STATE.result = null; IMPORT_STATE.hash = null; IMPORT_STATE.grid = null;
-  IMPORT_STATE.offsetMm = 0; IMPORT_STATE.spans = null; IMPORT_STATE.error = null;
+  IMPORT_STATE.offsetMm = 0; IMPORT_STATE.spans = null; IMPORT_STATE.error = null; IMPORT_STATE.faceView = null;
   impMountDialog();
   if (file) impLoadFile(file);
 }
@@ -381,7 +381,7 @@ function impBuild() {
       IMPORT_STATE.result = r; IMPORT_STATE.hash = hash; IMPORT_STATE.grid = IMPORT_GRIDS[hash];
       if (IMPORT_STATE.settings.cellMode === 'fit') IMPORT_STATE.settings.cellMm = +r.cellMm.toFixed(3);
       IMPORT_STATE.builtSettings = JSON.parse(JSON.stringify(IMPORT_STATE.settings));
-      IMPORT_STATE.offsetMm = 0;
+      IMPORT_STATE.offsetMm = 0; IMPORT_STATE.faceView = null;
       impSyncSettingsUI();
       impShowResult();
     });
@@ -452,13 +452,25 @@ function impRenderReport() {
   var html = '';
   html += row('File', impEsc(IMPORT_STATE.fileName || ''));
   html += row('Cell', cell.toFixed(3) + ' mm' + (rep.units === 'in' ? ' (from inches)' : '') +
+              (rep.cellMode !== 'set' && rep.facesFromPlanes ? ' · faces found from the trim planes' : '') +
+              (rep.overhangMm > 0.0005 ? ' · geometry up to ' + rep.overhangMm.toFixed(3) + ' mm past the faces, wrapped to the opposite side' : '') +
               (rep.stretched && rep.mismatch > 0.0005 ? ' · sides stretched up to ' + (rep.mismatch * 100).toFixed(1) + ' % to fill' : '') +
               (rep.cellMode === 'set' ? ' · set by you, part centered' : ''));
   html += row('Density', (IMPORT_STATE.density * 100).toFixed(1) + ' %');
   if (rep.faceMatch) {
+    var canView = !!r.faceMaps;
     html += row('Face match', rep.faceMatch.map(function (f, i) {
-      return '<span class="imp-chip ' + impFaceClass(f) + '">' + 'xyz'[i] + ' ' + (f * 100).toFixed(1) + '%</span>';
-    }).join(' '));
+      return '<span class="imp-chip ' + impFaceClass(f) + (canView ? ' click' + (IMPORT_STATE.faceView === i ? ' on' : '') : '') + '"' +
+             (canView ? ' title="Show the two opposite faces overlaid" onclick="impToggleFaceView(' + i + ')"' : '') + '>' +
+             'xyz'[i] + ' ' + (f * 100).toFixed(1) + '%</span>';
+    }).join(' ') + (canView ? ' <span class="imp-sub">click to see the faces</span>' : ''));
+    if (canView && IMPORT_STATE.faceView != null) {
+      var fa = IMPORT_STATE.faceView, ax = 'xyz'[fa], rowsAx = fa === 0 ? 'y' : 'x', colsAx = fa === 2 ? 'y' : 'z';
+      html += '<div class="imp-faceview"><canvas id="impFaceCanvas" width="' + r.fineM + '" height="' + r.fineM + '"></canvas>' +
+        '<div class="imp-sub"><span class="imp-key a"></span>solid only at the ' + ax + '− face<br><span class="imp-key b"></span>solid only at the ' + ax + '+ face<br>' +
+        '<span class="imp-key ab"></span>solid at both<br><br>Up: ' + rowsAx + ' · right: ' + colsAx + '. Thin colored edges are walls meeting the face at an angle; ' +
+        'a periodic cell shows no large one-color patches.</div></div>';
+    }
   }
   if (sp) {
     html += row('Spans the cell', ['x', 'y', 'z'].map(function (a) {
@@ -477,13 +489,34 @@ function impRenderReport() {
     (h.watertight ? 'watertight' : (h.openEdges + ' open edges' + (h.nonManifoldEdges ? ', ' + h.nonManifoldEdges + ' non-manifold' : ''))) +
     (rep.fillAgreement != null && rep.fillAgreement < 0.999 ? ' · fill agreement ' + (rep.fillAgreement * 100).toFixed(1) + ' %' : ''), meshCls);
   var warns = [];
-  if (rep.faceMatch && rep.faceMatch.some(function (f) { return f < IMPORT_FACE_GREEN; }))
+  if (rep.faceMatch && rep.faceMatch.some(function (f) { return f < IMPORT_FACE_AMBER; }))
     warns.push('Opposite faces don’t line up on every axis — this may not be one full repeating period. The design will be tagged “not periodic.”');
+  else if (rep.faceMatch && rep.faceMatch.some(function (f) { return f < IMPORT_FACE_GREEN; }))
+    warns.push('Opposite faces mostly line up, with some differences at the seam. Click a face-match chip to see where.');
   if (sp && !(sp.x && sp.y && sp.z)) warns.push('The solid doesn’t connect across the cell on every axis, so the lattice carries no load along ' +
     ['x', 'y', 'z'].filter(function (a) { return !sp[a]; }).join(', ') + '.');
   if (!h.watertight) warns.push('The mesh has gaps; the three-direction fill vote repaired what it could. Check the preview.');
   if (warns.length) html += '<div class="imp-warn">' + warns.map(impEsc).join('<br>') + '</div>';
   el.innerHTML = html;
+  if (r.faceMaps && IMPORT_STATE.faceView != null) impDrawFaceView(IMPORT_STATE.faceView);
+}
+
+/* Face view: the boundary slices of one axis overlaid (teal = only face −,
+   violet = only face +, light = both).  Row axis drawn upward. */
+function impToggleFaceView(a) {
+  IMPORT_STATE.faceView = IMPORT_STATE.faceView === a ? null : a;
+  impRenderReport();
+}
+function impDrawFaceView(a) {
+  var cv = impEl('impFaceCanvas'), r = IMPORT_STATE.result;
+  if (!cv || !r.faceMaps) return;
+  var M = r.fineM, MM = M * M, ctx = cv.getContext('2d'), img = ctx.createImageData(M, M), px = img.data;
+  var COL = [[12, 12, 18], [29, 158, 117], [127, 119, 221], [225, 225, 235]];
+  for (var p = 0; p < M; p++) for (var q = 0; q < M; q++) {
+    var c = COL[r.faceMaps[a * MM + p * M + q]], o = ((M - 1 - p) * M + q) * 4;
+    px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 /* ── Commit ───────────────────────────────────────────────── */
@@ -491,6 +524,7 @@ function impReportSummary() {
   var rep = IMPORT_STATE.result.report || {}, h = rep.health || {};
   return {
     units: rep.units, cellMode: rep.cellMode, mismatch: rep.mismatch,
+    facesFromPlanes: rep.facesFromPlanes, overhangMm: rep.overhangMm,
     faceMatch: rep.faceMatch, thinnestWallMm: rep.thinnestWallMm, medianWallMm: rep.medianWallMm,
     density0: rep.density, fillAgreement: rep.fillAgreement,
     health: { triangles: h.triangles, openEdges: h.openEdges, nonManifoldEdges: h.nonManifoldEdges, watertight: h.watertight }
@@ -573,7 +607,7 @@ function importCardPills(d) {
            (d._importMissing ? 'geometry missing' : 'loading geometry') + '</span>';
   }
   var fm = d.import_report && d.import_report.faceMatch;
-  if (fm && fm.some(function (f) { return f < IMPORT_FACE_GREEN; })) {
+  if (fm && fm.some(function (f) { return f < IMPORT_FACE_AMBER; })) {
     out += ' <span class="dc-predict-pill prone" title="Face match ' + fm.map(function (f, i) { return 'xyz'[i] + ' ' + (f * 100).toFixed(1) + '%'; }).join(', ') +
            ' — opposite faces don’t line up, so this may not be one full repeating period.">not periodic</span>';
   }

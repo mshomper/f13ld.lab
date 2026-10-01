@@ -753,3 +753,10 @@ html, body {
   .imp-body { grid-template-columns:1fr; }
   .imp-row .k { flex-basis:96px; }
 }
+.imp-chip.click { cursor:pointer; }
+.imp-chip.click:hover, .imp-chip.on { background:rgba(255,255,255,0.10); }
+.imp-faceview { display:flex; gap:12px; align-items:flex-start; margin:2px 0 4px 128px; }
+.imp-faceview canvas { width:160px; height:160px; image-rendering:pixelated; border:0.5px solid var(--line); border-radius:4px; flex-shrink:0; }
+.imp-key { display:inline-block; width:9px; height:9px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+.imp-key.a { background:#1D9E75; } .imp-key.b { background:#7F77DD; } .imp-key.ab { background:#e1e1eb; }
+@media (max-width:640px){ .imp-faceview { margin-left:0; flex-direction:column; } }
