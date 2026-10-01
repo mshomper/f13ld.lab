@@ -1,5 +1,5 @@
 /* ============================================================
-   F13LD.lab · 63-sweep-atlas.js  (v0.11.0)
+   F13LD.lab · 63-sweep-atlas.js  (v0.12.0)
    Sweep Atlas — an in-lab explorer for parameter-sweep results.
 
    Opens from the Sweep panel over the current sweep and refreshes as
@@ -10,7 +10,9 @@
      · parameter map (builder sweeps) / run list (CSV sweeps)
      · stiffness vs solid fraction for the selected series
      · design space — every run; click to select
+     · 3-D stiffness surface over two swept parameters (v0.12)
      · data check generated from the runs
+   v0.12: CAD tumble on every 3-D view (linkable geometry ↔ stiffness), smooth run slider.
    Charts are lab-native SVG (hover readouts, log axes, click to select).
    F13LD brand colors on the lab's dark theme.
    ============================================================ */
@@ -29,7 +31,8 @@ var ATLAS_CLASS_TIP = [
   'Connected in 3-D: every stretch and shear mode carries load.'];
 var ATLAS_SHAPES = ['circle', 'diamond', 'square', 'triangle', 'cross'];
 
-var ATLAS = { open: false, sel: null, series: null, metric: 'max', mapMetric: 'class', mode: 'grid', units: 'norm', tiles: 1, rm: null, sv: null };
+var ATLAS = { open: false, sel: null, series: null, metric: 'max', mapMetric: 'class', mode: 'grid', units: 'norm', tiles: 1, rm: null, sv: null,
+              link: true, camGeo: null, camSurf: null, s3: { metric: 'max', log: true, color: 'value', cam: null } };
 
 /* ── Data ─────────────────────────────────────────────────── */
 function atlasJacobiEig(A) {
@@ -115,6 +118,98 @@ function atlasSeries(rows) {
   return { map: m, order: order };
 }
 
+/* ── CAD tumble (v0.12) ──────────────────────────────────────
+   One controller per Atlas view.  Orientation Q (row-major 3×3) maps model → view
+   (x right, y up, z toward the viewer).  Left-drag tumbles about the screen axes, so
+   the part follows the cursor and can roll over the top; right-, middle- or
+   shift-drag pans; the wheel zooms toward the cursor; double-click goes home.
+   Pan is in screen units (short side of the view = 1), zoom is a factor (1 = home). */
+function atlasM3mul(A, B) {
+  var C = new Array(9);
+  for (var r = 0; r < 3; r++) for (var c = 0; c < 3; c++) C[r * 3 + c] = A[r * 3] * B[c] + A[r * 3 + 1] * B[3 + c] + A[r * 3 + 2] * B[6 + c];
+  return C;
+}
+function atlasRotX(a) { var c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, c, -s, 0, s, c]; }
+function atlasRotY(a) { var c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }
+function atlasOrtho(Q) {   /* re-orthonormalize (Gram–Schmidt on rows) so repeated drags don't drift */
+  var r0 = Q.slice(0, 3), r1 = Q.slice(3, 6), n = Math.hypot(r0[0], r0[1], r0[2]);
+  r0 = r0.map(function (v) { return v / n; });
+  var d = r0[0] * r1[0] + r0[1] * r1[1] + r0[2] * r1[2];
+  r1 = r1.map(function (v, i) { return v - d * r0[i]; }); n = Math.hypot(r1[0], r1[1], r1[2]); r1 = r1.map(function (v) { return v / n; });
+  var r2 = [r0[1] * r1[2] - r0[2] * r1[1], r0[2] * r1[0] - r0[0] * r1[2], r0[0] * r1[1] - r0[1] * r1[0]];
+  return r0.concat(r1, r2);
+}
+/* Isometric home: the (+x, +y, +z) corner faces the viewer, +y up. */
+var ATLAS_HOME_ISO = atlasM3mul(atlasRotX(Math.atan(1 / Math.SQRT2)), atlasRotY(-Math.PI / 4));
+
+function AtlasCam(el, home, onChange) {
+  this.el = el; this.home = home.slice(); this.onChange = onChange;
+  this.Q = home.slice(); this.zoom = 1; this.panX = 0; this.panY = 0;
+  this.peer = null;
+  var self = this, drag = null;
+  el.style.touchAction = 'none';
+  el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  el.addEventListener('pointerdown', function (e) {
+    if (e.target.closest && e.target.closest('button,select,input')) return;
+    var pan = e.button === 1 || e.button === 2 || e.shiftKey;
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, pan: pan, moved: false };
+    try { el.setPointerCapture(e.pointerId); } catch (_) {}
+    el.classList.add(pan ? 'at-panning' : 'at-tumbling');
+    e.preventDefault();
+  });
+  el.addEventListener('pointermove', function (e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    var dx = e.clientX - drag.x, dy = e.clientY - drag.y, m = Math.max(1, Math.min(el.clientWidth, el.clientHeight));
+    if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (drag.pan) { self.panX += dx / m; self.panY -= dy / m; self.changed(false); }
+    else {
+      var k = Math.PI / m;   /* half a turn across the short side of the view */
+      self.Q = atlasOrtho(atlasM3mul(atlasM3mul(atlasRotY(dx * k), atlasRotX(dy * k)), self.Q));
+      self.changed(true);
+    }
+  });
+  var up = function (e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+    el.classList.remove('at-panning', 'at-tumbling');
+    self.lastDragMoved = drag.moved; drag = null;
+  };
+  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  el.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var r = el.getBoundingClientRect(), m = Math.max(1, Math.min(r.width, r.height));
+    var cx = (e.clientX - r.left - r.width / 2) / m, cy = -(e.clientY - r.top - r.height / 2) / m;
+    var z2 = Math.min(40, Math.max(0.1, self.zoom * Math.exp(-e.deltaY * 0.0015))), f = z2 / self.zoom;
+    self.panX = cx - (cx - self.panX) * f; self.panY = cy - (cy - self.panY) * f; self.zoom = z2;
+    self.changed(false);
+  }, { passive: false });
+  el.addEventListener('dblclick', function (e) {
+    if (e.target.closest && e.target.closest('button,select,input')) return;
+    self.reset();
+  });
+}
+AtlasCam.prototype.changed = function (rotated) {
+  if (rotated && this.peer && ATLAS.link) { this.peer.Q = this.Q.slice(); this.peer.onChange(); }
+  this.onChange();
+};
+AtlasCam.prototype.reset = function () {
+  this.Q = this.home.slice(); this.zoom = 1; this.panX = 0; this.panY = 0;
+  this.changed(true);
+};
+/* Small x/y/z triad in the corner of a view, drawn from Q. */
+function atlasTriad(svg, Q) {
+  if (!svg) return;
+  var L = 17, c = 24, h = '';
+  var ax = [0, 1, 2].map(function (i) { return { i: i, x: Q[i], y: Q[3 + i], z: Q[6 + i] }; }).sort(function (a, b) { return a.z - b.z; });
+  ax.forEach(function (a) {
+    var x2 = c + a.x * L, y2 = c - a.y * L, col = ATLAS_COL.ax[a.i], op = a.z < -0.2 ? 0.45 : 1;
+    h += '<line x1="' + c + '" y1="' + c + '" x2="' + x2.toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="' + col + '" stroke-width="2" stroke-linecap="round" opacity="' + op + '"/>' +
+         '<text x="' + (c + a.x * (L + 7)).toFixed(1) + '" y="' + (c - a.y * (L + 7) + 3.5).toFixed(1) + '" fill="' + col + '" opacity="' + op + '" text-anchor="middle">' + 'xyz'[a.i] + '</text>';
+  });
+  svg.innerHTML = h;
+}
+
 /* ── Units ────────────────────────────────────────────────── */
 /* Material for "show in MPa": the one picked in the run controls, or else the
    swept design's own recipe material. */
@@ -153,15 +248,20 @@ function openSweepAtlas() {
         '<button class="dc-icon-btn" title="Close" onclick="closeSweepAtlas()">×</button></header>' +
       '<div class="at-controls" id="atControls"></div>' +
       '<div class="at-grid2">' +
-        '<section class="at-panel"><div class="at-phead"><h3>Cell geometry</h3><div class="at-seg" id="atTiles"></div></div><div class="at-view" id="atGeo"></div><div class="at-sub" id="atGeoInfo"></div></section>' +
-        '<section class="at-panel"><div class="at-phead"><h3>Directional Young’s modulus</h3></div><div class="at-view" id="atSurf"></div><div class="at-sub" id="atSurfInfo"></div></section>' +
+        '<section class="at-panel"><div class="at-phead"><h3>Cell geometry</h3><div class="at-hbtns"><div class="at-seg" id="atTiles"></div>' + atlasViewBtns('Geo') + '</div></div>' +
+          '<div class="at-view" id="atGeo"><svg class="at-triad" id="atTriadGeo" width="48" height="48"></svg></div><div class="at-sub" id="atGeoInfo"></div></section>' +
+        '<section class="at-panel"><div class="at-phead"><h3>Directional Young’s modulus</h3><div class="at-hbtns">' + atlasViewBtns('Surf') + '</div></div>' +
+          '<div class="at-view" id="atSurf"><svg class="at-triad" id="atTriadSurf" width="48" height="48"></svg></div><div class="at-sub" id="atSurfInfo"></div></section>' +
       '</div>' +
+      '<div class="at-hint">Drag to tumble · right-drag or shift-drag to pan · scroll to zoom · double-click for the home view</div>' +
       '<div class="at-grid2">' +
         '<section class="at-panel"><div id="atStatus" class="at-status"></div><div id="atReadout" class="at-readout"></div>' +
           '<div class="at-phead"><h3>Stiffness matrix</h3><span class="at-sub"><span class="at-divramp"></span> − · 0 · +</span></div>' +
           '<div class="at-mwrap"><table class="at-mat" id="atMat"></table></div><div class="at-sub" id="atSolve"></div></section>' +
         '<section class="at-panel"><div class="at-phead"><h3 id="atMapTitle">Parameter map</h3><div id="atMapCtl"></div></div><div id="atMap"></div><div class="at-legend" id="atMapLegend"></div></section>' +
       '</div>' +
+      '<section class="at-panel" id="atS3Panel" hidden><div class="at-phead"><h3>Stiffness surface</h3><div class="at-hbtns" id="atS3Ctl"></div></div>' +
+        '<div class="at-sub" id="atS3Sub"></div><div class="at-s3" id="atS3"><canvas id="atS3c"></canvas></div></section>' +
       '<section class="at-panel"><div class="at-phead"><h3>Stiffness vs solid fraction</h3><span class="at-sub" id="atLineSub"></span></div><div id="atLine" class="at-chart"></div></section>' +
       '<section class="at-panel"><div class="at-phead"><h3>Design space</h3><div id="atScatterCtl"></div></div>' +
         '<div class="at-sub">Every finished run. Color is connectivity, shape is series. The dashed line is the Voigt bound (E ≤ solid fraction × E solid). Click a point to select it.</div>' +
@@ -179,29 +279,77 @@ function closeSweepAtlas() {
   ATLAS.open = false;
   if (ATLAS.rm) { try { ATLAS.rm.destroy(); } catch (e) {} ATLAS.rm = null; }
   if (ATLAS.sv) { try { ATLAS.sv.destroy(); } catch (e) {} ATLAS.sv = null; }
+  ATLAS.camGeo = ATLAS.camSurf = ATLAS.s3.cam = null; ATLAS._ctlSig = null; ATLAS._lastGeo = null; ATLAS._s3Sig = null; ATLAS._s3 = null; ATLAS._s3Hot = null;
+  clearTimeout(ATLAS._geoT); ATLAS._geoT = null;
   var ov = swEl('atOverlay'); if (ov) ov.parentNode.removeChild(ov);
   window.removeEventListener('resize', atlasOnResize);
 }
 var _atRs = 0;
-function atlasOnResize() { clearTimeout(_atRs); _atRs = setTimeout(function () { if (ATLAS.open) atlasUpdate(); }, 150); }
+function atlasOnResize() { clearTimeout(_atRs); _atRs = setTimeout(function () { if (ATLAS.open) { ATLAS._ctlSig = null; atlasUpdate(); atlasApplySurfCam(); } }, 150); }
 
 function atlasMountViews() {
   if (typeof LabRaymarcher === 'function') {
     var rm = new LabRaymarcher();
-    if (!rm.failed) { ATLAS.rm = rm; swEl('atGeo').appendChild(rm.canvas); rm.setActive(true); }
+    if (!rm.failed) { ATLAS.rm = rm; rm._extControl = true; swEl('atGeo').appendChild(rm.canvas); rm.setActive(true); ATLAS.rmBaseZoom = rm._u.zoom; }
   }
-  if (!ATLAS.rm) swEl('atGeo').innerHTML = '<div class="at-msg">The geometry viewer needs WebGL2.</div>';
+  if (!ATLAS.rm) swEl('atGeo').insertAdjacentHTML('beforeend', '<div class="at-msg">The geometry viewer needs WebGL2.</div>');
   if (typeof StiffnessViz === 'function') {
     var sv = new StiffnessViz();
-    if (!sv.failed) { ATLAS.sv = sv; sv.canvas.style.background = 'transparent'; swEl('atSurf').appendChild(sv.canvas); sv.setActive(true); }
+    if (!sv.failed) { ATLAS.sv = sv; sv._extControl = true; sv._userInteracted = true; sv.canvas.style.background = 'transparent'; swEl('atSurf').appendChild(sv.canvas); sv.setActive(true); ATLAS.svBaseZoom = sv._u.zoom; }
   }
-  if (!ATLAS.sv) swEl('atSurf').innerHTML = '<div class="at-msg">The stiffness surface needs WebGL2.</div>';
+  if (!ATLAS.sv) swEl('atSurf').insertAdjacentHTML('beforeend', '<div class="at-msg">The stiffness surface needs WebGL2.</div>');
+  ATLAS.camGeo = new AtlasCam(swEl('atGeo'), ATLAS_HOME_ISO, atlasApplyGeoCam);
+  ATLAS.camSurf = new AtlasCam(swEl('atSurf'), ATLAS_HOME_ISO, atlasApplySurfCam);
+  ATLAS.camGeo.peer = ATLAS.camSurf; ATLAS.camSurf.peer = ATLAS.camGeo;
+  atlasApplyGeoCam(); atlasApplySurfCam(); atlasPaintLink();
+}
+/* Geometry: the ray-marcher takes a camera-to-model matrix (Qᵀ), column-major = Q row-major. */
+function atlasApplyGeoCam() {
+  var c = ATLAS.camGeo; if (!c) return;
+  atlasTriad(swEl('atTriadGeo'), c.Q);
+  var rm = ATLAS.rm; if (!rm) return;
+  var dist = (ATLAS.rmBaseZoom || 20) / c.zoom;
+  rm._rotM = new Float32Array(c.Q);
+  rm._u.zoom = dist; rm._u.panX = -c.panX * dist / 1.6; rm._u.panY = -c.panY * dist / 1.6;
+  rm._dirty = true;
+}
+/* Stiffness surface: model → view, with z mirrored to suit its depth convention (nearer = smaller z). */
+function atlasApplySurfCam() {
+  var c = ATLAS.camSurf; if (!c) return;
+  atlasTriad(swEl('atTriadSurf'), c.Q);
+  var sv = ATLAS.sv; if (!sv) return;
+  var Q = c.Q, M = [Q[0], Q[1], Q[2], Q[3], Q[4], Q[5], -Q[6], -Q[7], -Q[8]], cm = new Float32Array(9);
+  for (var r = 0; r < 3; r++) for (var k = 0; k < 3; k++) cm[k * 3 + r] = M[r * 3 + k];
+  sv._rotM = cm;
+  sv._u.zoom = (ATLAS.svBaseZoom || 0.8) * c.zoom;
+  var w = sv.canvas.clientWidth || 1, h = sv.canvas.clientHeight || 1, m = Math.min(w, h);
+  sv._u.panX = 2 * c.panX * m / w; sv._u.panY = 2 * c.panY * m / h;
+  sv._dirty = true;
+}
+function atlasViewBtns(which) {
+  return '<div class="at-seg"><button class="at-link" aria-pressed="true" onclick="atlasToggleLink()" title="Turn the geometry and the stiffness surface together">⛓ linked</button>' +
+    '<button onclick="ATLAS.cam' + which + ' && ATLAS.cam' + which + '.reset()" title="Home view (double-click the view)">⌂</button></div>';
+}
+function atlasToggleLink() {
+  ATLAS.link = !ATLAS.link;
+  if (ATLAS.link && ATLAS.camGeo && ATLAS.camSurf) { ATLAS.camSurf.Q = ATLAS.camGeo.Q.slice(); atlasApplySurfCam(); }
+  atlasPaintLink();
+}
+function atlasPaintLink() {
+  document.querySelectorAll('#atOverlay .at-link').forEach(function (b) {
+    b.setAttribute('aria-pressed', String(ATLAS.link)); b.textContent = ATLAS.link ? '⛓ linked' : '⛓ unlinked';
+  });
 }
 
 /* Called by the sweep loop after each run. */
 function atlasOnResult() { if (ATLAS.open) atlasUpdate(true); }
 
-function atlasSelect(id) { ATLAS.sel = id; atlasUpdate(); }
+/* Selection changes are coalesced to one update per frame, so dragging the run slider stays smooth. */
+function atlasSelect(id) {
+  ATLAS.sel = id;
+  if (ATLAS._raf) return;
+  ATLAS._raf = requestAnimationFrame(function () { ATLAS._raf = 0; atlasUpdate(); });
+}
 function atlasSet(k, v) { ATLAS[k] = v; atlasUpdate(); }
 
 /* ── Update everything ───────────────────────────────────── */
@@ -216,13 +364,23 @@ function atlasUpdate(fromRun) {
   var series = S.map[ATLAS.series] || [];
   atlasMeta(rows);
   atlasControls(rows, S, series, cur);
-  if (!fromRun || ATLAS._lastGeo !== cur.run.id) atlasGeometry(cur);
+  if (ATLAS._lastGeo !== cur.run.id) atlasGeometrySoon(cur);
   atlasSurface(cur);
   atlasReadout(cur);
   atlasMap(rows, cur);
   atlasLine(series, cur);
   atlasScatter(rows, S, cur);
+  atlasS3(rows, cur);
   atlasChecks(rows, S);
+}
+/* Rebuilding the voxel field for the ray-marcher is the slow part of a selection change:
+   do it once the selection has settled (slider released or paused). */
+function atlasGeometrySoon(cur) {
+  var first = ATLAS._lastGeo == null;
+  ATLAS._lastGeo = cur.run.id;
+  clearTimeout(ATLAS._geoT);
+  if (swEl('atGeoInfo')) swEl('atGeoInfo').textContent = (cur.vf * 100).toFixed(1) + ' % solid' + (first ? '' : ' · updating…');
+  ATLAS._geoT = setTimeout(function () { ATLAS._geoT = null; if (ATLAS.open) atlasGeometry(cur); }, first ? 0 : 220);
 }
 
 function atlasMeta(rows) {
@@ -247,10 +405,21 @@ function atlasControls(rows, S, series, cur) {
     if (r.run.params) return r.run.params.map(function (p) { return p.name + ' ' + sweepFmtVal(p.value); }).join(' · ');
     return r.run.id + (r.run.param ? ' · ' + r.run.param.name + ' ' + sweepFmtVal(r.run.param.value) : '');
   };
+  ATLAS._series = S; ATLAS._rows = rows;
+  var sig = [S.order.join('|'), ATLAS.series, series.length, hasExt, ATLAS.mode, ATLAS.units, m ? m.name : ''].join('#');
+  var outTxt = cur.run.id + ' · ' + label(cur);
+  if (sig === ATLAS._ctlSig) {
+    /* same layout: move the slider and its label in place (rebuilding would end a drag in progress) */
+    var sl = el.querySelector('input[type=range]'), out = el.querySelector('.at-slider output');
+    if (sl && +sl.value !== Math.max(0, pos)) sl.value = Math.max(0, pos);
+    if (out) out.textContent = outTxt;
+    return;
+  }
+  ATLAS._ctlSig = sig;
   var h = '<div class="at-ctl"><span class="at-lab">Series</span><select onchange="atlasPickSeries(this.value)">' +
     S.order.map(function (k) { return '<option value="' + swEsc(k) + '"' + (k === ATLAS.series ? ' selected' : '') + '>' + swEsc(atlasSeriesLabel(k)) + ' (' + S.map[k].length + ')</option>'; }).join('') + '</select></div>';
   h += '<div class="at-ctl at-grow"><span class="at-lab">Run in series</span><div class="at-slider"><input type="range" min="0" max="' + Math.max(0, series.length - 1) + '" value="' + Math.max(0, pos) +
-    '" oninput="atlasPickIndex(+this.value)"><output>' + swEsc(cur.run.id) + ' · ' + swEsc(label(cur)) + '</output></div></div>';
+    '" oninput="atlasPickIndex(+this.value)"><output>' + swEsc(outTxt) + '</output></div></div>';
   if (hasExt) h += '<div class="at-ctl"><span class="at-lab">Values</span><div class="at-seg">' +
     '<button aria-pressed="' + (ATLAS.mode === 'grid') + '" onclick="atlasSet(\'mode\',\'grid\')">run grid</button>' +
     '<button aria-pressed="' + (ATLAS.mode === 'ext') + '" onclick="atlasSet(\'mode\',\'ext\')">extrapolated</button></div></div>';
@@ -258,7 +427,6 @@ function atlasControls(rows, S, series, cur) {
     '<button aria-pressed="' + (ATLAS.units === 'norm') + '" onclick="atlasSet(\'units\',\'norm\')">÷ E solid</button>' +
     (m ? '<button aria-pressed="' + (ATLAS.units === 'mat') + '" onclick="atlasSet(\'units\',\'mat\')" title="The material picked in the run controls, or the design’s own material">' + swEsc(m.name) + '</button>' : '') + '</div></div>';
   el.innerHTML = h;
-  ATLAS._series = S; ATLAS._rows = rows;
 }
 function atlasPickSeries(key) {
   var S = ATLAS._series, cur = (ATLAS._rows || []).filter(function (r) { return r.run.id === ATLAS.sel; })[0];
@@ -276,14 +444,13 @@ function atlasPickIndex(i) {
 
 /* ── Geometry + surface ──────────────────────────────────── */
 function atlasGeometry(cur) {
-  ATLAS._lastGeo = cur.run.id;
   var tiles = swEl('atTiles');
   tiles.innerHTML = '<button aria-pressed="' + (ATLAS.tiles === 1) + '" onclick="atlasTiles(1)">1 cell</button><button aria-pressed="' + (ATLAS.tiles === 2) + '" onclick="atlasTiles(2)">2×2×2</button>';
   if (!ATLAS.rm) return;
   try {
     ATLAS.rm.setRecipe(sweepRecipeForRun(cur.run));
-    ATLAS.rm._u.tile = ATLAS.tiles; ATLAS.rm._dirty = true;
-    swEl('atGeoInfo').textContent = (cur.vf * 100).toFixed(1) + ' % solid · drag to rotate';
+    ATLAS.rm._u.tile = ATLAS.tiles; atlasApplyGeoCam();
+    swEl('atGeoInfo').textContent = (cur.vf * 100).toFixed(1) + ' % solid · ' + cur.run.id;
   } catch (e) { swEl('atGeoInfo').textContent = 'Geometry unavailable: ' + e.message; }
 }
 function atlasTiles(n) {
@@ -318,6 +485,9 @@ function atlasReadout(cur) {
   flags.forEach(function (f) { if (f.level !== 'info') h += '<span class="at-pill warn" title="' + swEsc(f.text) + '">! ' + swEsc(f.short) + '</span>'; });
   if (cur.ext) h += '<span class="at-pill" title="Extrapolated from N = ' + r.ext.coarseN + ' and ' + r.ext.fineN + ' (order ' + r.ext.order + ')">extrapolated</span>';
   if (!r.converged) h += '<span class="at-pill warn">! not converged</span>';
+  if (r.noLoad) h += '<span class="at-pill warn" title="These axes read zero within solver noise (' + swEsc(r.noLoad.map(function (b) { return 'E' + b.axis + ' = ' + b.E.toExponential(1); }).join(', ')) + ' ÷ E solid). The solver alone would have rejected the run.">! no load on ' + r.noLoad.map(function (b) { return b.axis; }).join(', ') + '</span>';
+  var negG = ['44', '55', '66'].filter(function (k) { return r.C && r.C['C' + k] < 0; });
+  if (negG.length) h += '<span class="at-pill warn" title="Negative shear stiffness is not physical; rerun at high precision to see whether it is the solver tolerance.">! negative ' + negG.map(function (k) { return 'C' + k; }).join(', ') + '</span>';
   swEl('atStatus').innerHTML = h;
   var cell = function (k, v, col) { return '<div class="at-ro"><span class="k">' + (col ? '<span class="at-sw" style="background:' + col + '"></span>' : '') + k + '</span><span class="v">' + v + '</span></div>'; };
   swEl('atReadout').innerHTML = cell('Solid', (cur.vf * 100).toFixed(1) + ' %') +
@@ -551,6 +721,250 @@ function atlasScatter(rows, S, cur) {
     marks: marks, onClick: atlasSelect });
 }
 
+/* ── 3-D stiffness surface (v0.12) ───────────────────────────
+   Two-parameter builder sweeps only: parameter 1 across, parameter 2 in depth,
+   stiffness up (log by default).  Lab-native canvas 2-D (painter's algorithm), so it
+   needs no extra WebGL context.  Same CAD tumble as the other views. */
+var ATLAS_S3_METRICS = [['max', 'Stiffest axis'], ['min', 'Softest axis'], ['Ex', 'Ex'], ['Ey', 'Ey'], ['Ez', 'Ez'], ['xyz', 'Ex, Ey, Ez together'],
+  ['mean', 'Mean of Ex, Ey, Ez'], ['Gyz', 'Gyz'], ['Gxz', 'Gxz'], ['Gxy', 'Gxy'], ['vf', 'Solid fraction']];
+var ATLAS_S3_HOME = atlasM3mul(atlasRotX(0.42), atlasRotY(-0.62));
+var ATLAS_S3_EXT = [1, 0.7, 1];   /* half-extents of the plot box: parameter 1, value, parameter 2 */
+
+function atlasS3Val(r, k) {
+  var e = [r.Ex, r.Ey, r.Ez];
+  switch (k) {
+    case 'max': return Math.max.apply(null, e);
+    case 'min': return Math.min.apply(null, e);
+    case 'mean': return (e[0] + e[1] + e[2]) / 3;
+    case 'vf': return r.vf;
+    default: return r[k];
+  }
+}
+function atlasRamp(t) {
+  var st = [[0, [32, 56, 86]], [0.35, [29, 158, 117]], [0.72, [140, 214, 84]], [1, [200, 245, 66]]];
+  t = Math.max(0, Math.min(1, t));
+  for (var i = 1; i < st.length; i++) if (t <= st[i][0]) {
+    var a = st[i - 1], b = st[i], f = (t - a[0]) / (b[0] - a[0]);
+    return a[1].map(function (x, k) { return x + (b[1][k] - x) * f; });
+  }
+  return st[st.length - 1][1];
+}
+function atlasHexRgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+function atlasNiceTicks(lo, hi, n) {
+  var span = hi - lo; if (!(span > 0)) return [lo];
+  var st = Math.pow(10, Math.floor(Math.log10(span / (n || 5))));
+  [1, 2, 2.5, 5, 10].some(function (m) { if (span / (st * m) <= (n || 5)) { st *= m; return true; } return false; });
+  var out = []; for (var t = Math.ceil(lo / st - 1e-9) * st; t <= hi + st * 1e-9; t += st) out.push(+t.toPrecision(12));
+  return out;
+}
+
+function atlasS3(rows, cur) {
+  var panel = swEl('atS3Panel'), axes = SWEEP_STATE.axes;
+  var ok = !!(axes && axes.length > 1 && axes[0].values.length > 1 && axes[1].values.length > 1);
+  if (!panel) return;
+  panel.hidden = !ok;
+  if (!ok) return;
+  var S3 = ATLAS.s3, isVf = S3.metric === 'vf';
+  var sig = [S3.metric, S3.log, S3.color, ATLAS.units].join('#');
+  if (ATLAS._s3Sig !== sig) {
+    ATLAS._s3Sig = sig;
+    swEl('atS3Ctl').innerHTML = '<select onchange="atlasS3Set(\'metric\', this.value)">' + ATLAS_S3_METRICS.map(function (o) {
+        return '<option value="' + o[0] + '"' + (S3.metric === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+      (isVf ? '' : '<div class="at-seg"><button aria-pressed="' + S3.log + '" onclick="atlasS3Set(\'log\', true)">log</button><button aria-pressed="' + !S3.log + '" onclick="atlasS3Set(\'log\', false)">linear</button></div>') +
+      (S3.metric === 'xyz' ? '' : '<div class="at-seg"><button aria-pressed="' + (S3.color === 'value') + '" onclick="atlasS3Set(\'color\', \'value\')">color by value</button><button aria-pressed="' + (S3.color === 'class') + '" onclick="atlasS3Set(\'color\', \'class\')">by connectivity</button></div>') +
+      '<div class="at-seg"><button onclick="ATLAS.s3.cam && ATLAS.s3.cam.reset()" title="Home view (double-click the plot)">⌂</button></div>';
+  }
+  if (!S3.cam) {
+    var box = swEl('atS3');
+    S3.cam = new AtlasCam(box, ATLAS_S3_HOME, atlasS3Queue);
+    box.addEventListener('pointermove', atlasS3Hover);
+    box.addEventListener('pointerleave', function () { var t = swEl('atTip'); if (t) t.hidden = true; ATLAS._s3Hot = null; atlasS3Queue(); });
+    box.addEventListener('click', function () { if (!S3.cam.lastDragMoved && ATLAS._s3Hot) atlasSelect(ATLAS._s3Hot.id); });
+  }
+  /* data on the regular parameter grid */
+  var a1 = axes[0], a2 = axes[1], n1 = a1.values.length, n2 = a2.values.length;
+  function norm(vals) {
+    var v = vals.map(Number), lo = Math.min.apply(null, v), hi = Math.max.apply(null, v);
+    var okv = v.every(isFinite) && hi > lo;
+    return v.map(function (x, i) { return okv ? -1 + 2 * (x - lo) / (hi - lo) : -1 + 2 * i / (v.length - 1); });
+  }
+  var xs = norm(a1.values), zs = norm(a2.values), cell = [];
+  for (var i = 0; i < n1; i++) { cell.push([]); for (var j = 0; j < n2; j++) cell[i].push(null); }
+  rows.forEach(function (r) { if (r.run.grid && r.run.grid[0] < n1 && r.run.grid[1] < n2) cell[r.run.grid[0]][r.run.grid[1]] = r; });
+  var keys = S3.metric === 'xyz' ? ['Ex', 'Ey', 'Ez'] : [S3.metric], useLog = S3.log && !isVf;
+  var lo = Infinity, hi = -Infinity, raw = [];
+  keys.forEach(function (k) { rows.forEach(function (r) { if (!r.run.grid) return; var v = atlasS3Val(r, k); if (useLog ? v > 0 : isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }); });
+  if (!isFinite(lo)) { lo = useLog ? 1e-6 : 0; hi = useLog ? 1 : 1; }
+  var tlo, thi, ticks;
+  if (useLog) {
+    tlo = Math.floor(Math.log10(lo)); thi = Math.ceil(Math.log10(hi)); if (thi === tlo) thi++;
+    var stp = thi - tlo > 6 ? 2 : 1; ticks = []; for (var e = tlo; e <= thi; e += stp) ticks.push(e);
+  } else {
+    var l0 = Math.min(0, lo); ticks = atlasNiceTicks(l0, hi, 5); tlo = l0; thi = Math.max(hi, ticks[ticks.length - 1]);
+  }
+  function tf(v) { if (useLog) return v > 0 ? Math.log10(v) : tlo; return isFinite(v) ? v : null; }
+  function Y(t) { return -ATLAS_S3_EXT[1] + 2 * ATLAS_S3_EXT[1] * (t - tlo) / ((thi - tlo) || 1); }
+  var surfaces = keys.map(function (k, si) {
+    var g = [];
+    for (var i = 0; i < n1; i++) { g.push([]); for (var j = 0; j < n2; j++) { var r = cell[i][j], t = r ? tf(atlasS3Val(r, k)) : null; g[i].push(t == null ? null : Y(Math.max(tlo, Math.min(thi, t)))); } }
+    return { key: k, y: g, color: keys.length > 1 ? atlasHexRgb(ATLAS_COL.ax[si]) : null };
+  });
+  ATLAS._s3 = { n1: n1, n2: n2, xs: xs, zs: zs, cell: cell, surfaces: surfaces, ticks: ticks, useLog: useLog, isVf: isVf, Y: Y, tlo: tlo, thi: thi,
+                a1: a1, a2: a2, cur: cur, metricLabel: (ATLAS_S3_METRICS.filter(function (o) { return o[0] === S3.metric; })[0] || ['', ''])[1] };
+  var missing = 0; cell.forEach(function (c) { c.forEach(function (r) { if (!r) missing++; }); });
+  swEl('atS3Sub').textContent = n1 + ' × ' + n2 + ' runs · ' + ATLAS._s3.metricLabel + (useLog ? ' (log)' : '') +
+    (missing ? ' · ' + missing + ' not solved or skipped (holes)' : '') + ' · hover for values, click to select';
+  atlasS3Draw();
+}
+function atlasS3Set(k, v) { ATLAS.s3[k] = v; atlasUpdate(); }
+function atlasS3Queue() { if (ATLAS._s3raf) return; ATLAS._s3raf = requestAnimationFrame(function () { ATLAS._s3raf = 0; atlasS3Draw(); }); }
+
+function atlasS3Draw() {
+  var D = ATLAS._s3, cv = swEl('atS3c'), cam = ATLAS.s3.cam;
+  if (!D || !cv || !cam) return;
+  var W = cv.clientWidth || 600, H = cv.clientHeight || 460, dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  var g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  var Q = cam.Q, m = Math.min(W, H), R = 0.29 * m * cam.zoom, EX = ATLAS_S3_EXT;
+  function P(x, y, z) {
+    var vx = Q[0] * x + Q[1] * y + Q[2] * z, vy = Q[3] * x + Q[4] * y + Q[5] * z, vz = Q[6] * x + Q[7] * y + Q[8] * z, f = 4.5 / (4.5 - vz);
+    return [W / 2 + vx * f * R + cam.panX * m, H / 2 - vy * f * R - cam.panY * m, vz];
+  }
+  function poly(pts, fill, stroke, lw) {
+    g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); for (var k = 1; k < pts.length; k++) g.lineTo(pts[k][0], pts[k][1]); g.closePath();
+    if (fill) { g.fillStyle = fill; g.fill(); } if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw || 1; g.stroke(); }
+  }
+  function line(a, b, col, lw, dash) { g.beginPath(); g.setLineDash(dash || []); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.strokeStyle = col; g.lineWidth = lw || 1; g.stroke(); g.setLineDash([]); }
+  /* tick positions in box coordinates */
+  function axTicks(ax, xsN) {
+    var vals = ax.values.map(Number), n = vals.length;
+    if (n <= 9) return vals.map(function (v, i) { return { p: xsN[i], t: sweepFmtVal(ax.values[i]) + (ax.byVf ? '%' : '') }; });
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    return atlasNiceTicks(lo, hi, 6).map(function (v) { return { p: -1 + 2 * (v - lo) / (hi - lo), t: sweepFmtVal(v) + (ax.byVf ? '%' : '') }; });
+  }
+  var tx = axTicks(D.a1, D.xs), tz = axTicks(D.a2, D.zs);
+  var ty = D.ticks.map(function (t) { return { p: D.Y(t), t: D.useLog ? atlasExpFmt(Math.pow(10, t)) : (D.isVf ? atlasPct(t) : (atlasEs() ? atlasFmtE(t) : String(+t.toPrecision(3)))) }; });
+  /* back walls with grid lines */
+  var gridCol = 'rgba(124,138,170,0.16)', wallCol = 'rgba(17,17,24,0.55)', edgeCol = 'rgba(124,138,170,0.35)';
+  var floorIsBack = false;
+  [0, 1, 2].forEach(function (a) {
+    var sgn = Q[6 + a] > 0 ? -1 : 1;   /* the side whose outward normal points away from the viewer */
+    if (a === 1 && sgn === -1) floorIsBack = true;
+    var b = (a + 1) % 3, c = (a + 2) % 3;
+    function pt(u, v) { var q = [0, 0, 0]; q[a] = sgn * EX[a]; q[b] = u; q[c] = v; return P(q[0], q[1], q[2]); }
+    poly([pt(-EX[b], -EX[c]), pt(EX[b], -EX[c]), pt(EX[b], EX[c]), pt(-EX[b], EX[c])], wallCol, edgeCol, 1);
+    var tb = b === 0 ? tx : b === 1 ? ty : tz, tc = c === 0 ? tx : c === 1 ? ty : tz;
+    tb.forEach(function (t) { line(pt(t.p, -EX[c]), pt(t.p, EX[c]), gridCol, 1); });
+    tc.forEach(function (t) { line(pt(-EX[b], t.p), pt(EX[b], t.p), gridCol, 1); });
+  });
+  /* contour lines on the floor (single surface) */
+  var S0 = D.surfaces[0];
+  if (floorIsBack && D.surfaces.length === 1) {
+    var levels = D.useLog ? D.ticks.concat(D.ticks.map(function (t) { return t + Math.log10(3); })) : D.ticks;
+    levels.forEach(function (lv) {
+      var yl = D.Y(lv); if (!(yl > -EX[1] + 1e-6 && yl < EX[1] - 1e-6)) return;
+      var col = 'rgba(' + atlasRamp((yl + EX[1]) / (2 * EX[1])).map(Math.round).join(',') + ',0.6)';
+      for (var i = 0; i < D.n1 - 1; i++) for (var j = 0; j < D.n2 - 1; j++) {
+        var c4 = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]], v4 = c4.map(function (c) { return S0.y[c[0]][c[1]]; });
+        if (v4.some(function (v) { return v == null; })) continue;
+        var cr = [];
+        for (var k = 0; k < 4; k++) {
+          var a = v4[k], b = v4[(k + 1) % 4];
+          if ((a - yl) * (b - yl) < 0) { var f = (yl - a) / (b - a), p0 = c4[k], p1 = c4[(k + 1) % 4];
+            cr.push(P(D.xs[p0[0]] + (D.xs[p1[0]] - D.xs[p0[0]]) * f, -EX[1], D.zs[p0[1]] + (D.zs[p1[1]] - D.zs[p0[1]]) * f)); }
+        }
+        if (cr.length >= 2) line(cr[0], cr[1], col, 1.2);
+        if (cr.length === 4) line(cr[2], cr[3], col, 1.2);
+      }
+    });
+  }
+  /* surface quads, far to near */
+  var quads = [], L = [-0.35, 0.62, 0.7], Ln = Math.hypot(L[0], L[1], L[2]); L = L.map(function (v) { return v / Ln; });
+  var byClass = ATLAS.s3.color === 'class' && D.surfaces.length === 1;
+  D.surfaces.forEach(function (S) {
+    for (var i = 0; i < D.n1 - 1; i++) for (var j = 0; j < D.n2 - 1; j++) {
+      var c4 = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]];
+      if (c4.some(function (c) { return S.y[c[0]][c[1]] == null; })) continue;
+      var M = c4.map(function (c) { return [D.xs[c[0]], S.y[c[0]][c[1]], D.zs[c[1]]]; });
+      var pts = M.map(function (q) { return P(q[0], q[1], q[2]); });
+      var u = [M[2][0] - M[0][0], M[2][1] - M[0][1], M[2][2] - M[0][2]], w = [M[3][0] - M[1][0], M[3][1] - M[1][1], M[3][2] - M[1][2]];
+      var nm = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+      var nv = [Q[0] * nm[0] + Q[1] * nm[1] + Q[2] * nm[2], Q[3] * nm[0] + Q[4] * nm[1] + Q[5] * nm[2], Q[6] * nm[0] + Q[7] * nm[1] + Q[8] * nm[2]];
+      var nl = Math.hypot(nv[0], nv[1], nv[2]) || 1, lam = Math.abs((nv[0] * L[0] + nv[1] * L[1] + nv[2] * L[2]) / nl);
+      var base;
+      if (S.color) base = S.color;
+      else if (byClass) {
+        var cnt = [0, 0, 0]; c4.forEach(function (c) { var r = D.cell[c[0]][c[1]]; if (r) cnt[r.cls]++; });
+        base = atlasHexRgb(ATLAS_COL.cls[cnt.indexOf(Math.max.apply(null, cnt))]);
+      } else base = atlasRamp(((M[0][1] + M[1][1] + M[2][1] + M[3][1]) / 4 + EX[1]) / (2 * EX[1]));
+      var k = 0.5 + 0.55 * lam, rgb = base.map(function (v) { return Math.min(255, Math.round(v * k)); });
+      quads.push({ z: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4, pts: pts, fill: 'rgba(' + rgb.join(',') + ',' + (S.color ? 0.66 : 0.97) + ')' });
+    }
+  });
+  quads.sort(function (a, b) { return a.z - b.z; });
+  quads.forEach(function (q) { poly(q.pts, q.fill, 'rgba(6,8,15,0.32)', 0.6); });
+  /* selected run and hover */
+  var hot = [], cur = D.cur, ci = cur && cur.run.grid;
+  D.surfaces.forEach(function (S) {
+    for (var i = 0; i < D.n1; i++) for (var j = 0; j < D.n2; j++) if (S.y[i][j] != null) {
+      var p = P(D.xs[i], S.y[i][j], D.zs[j]); hot.push({ x: p[0], y: p[1], i: i, j: j, k: S.key, id: D.cell[i][j].run.id });
+    }
+  });
+  ATLAS._s3HotList = hot;
+  if (ci) D.surfaces.forEach(function (S) {
+    var yv = S.y[ci[0]] && S.y[ci[0]][ci[1]]; if (yv == null) return;
+    var top = P(D.xs[ci[0]], yv, D.zs[ci[1]]), bot = P(D.xs[ci[0]], -EX[1], D.zs[ci[1]]);
+    line(bot, top, 'rgba(224,224,255,0.7)', 1.2, [4, 3]);
+    g.beginPath(); g.arc(top[0], top[1], 5.5, 0, 6.2832); g.fillStyle = S.color ? 'rgb(' + S.color.join(',') + ')' : '#e0e0ff'; g.fill(); g.lineWidth = 2; g.strokeStyle = '#06080f'; g.stroke();
+  });
+  if (ATLAS._s3Hot) { var h = ATLAS._s3Hot; g.beginPath(); g.arc(h.x, h.y, 6, 0, 6.2832); g.lineWidth = 2; g.strokeStyle = '#e0e0ff'; g.stroke(); }
+  /* axes: labels on the floor edges nearest the viewer, value axis on the leftmost vertical edge */
+  g.font = '10px "JetBrains Mono", monospace'; g.fillStyle = '#888';
+  var ctr = P(0, 0, 0);
+  function edgeLabels(fixedAxis, run, ticks, title) {
+    var best = null;
+    [-1, 1].forEach(function (sv) {
+      var q0 = [0, -EX[1], 0], q1 = [0, -EX[1], 0]; q0[fixedAxis] = q1[fixedAxis] = sv * EX[fixedAxis]; q0[run] = -EX[run]; q1[run] = EX[run];
+      var a = P(q0[0], q0[1], q0[2]), b = P(q1[0], q1[1], q1[2]), my = (a[1] + b[1]) / 2;
+      if (!best || my > best.my) best = { sv: sv, my: my };
+    });
+    var mid = [0, -EX[1], 0]; mid[fixedAxis] = best.sv * EX[fixedAxis];
+    var pm = P(mid[0], mid[1], mid[2]), dx = pm[0] - ctr[0], dy = pm[1] - ctr[1], dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
+    g.textAlign = dx > 0.3 ? 'left' : dx < -0.3 ? 'right' : 'center'; g.fillStyle = '#888';
+    ticks.forEach(function (t) { var q = mid.slice(); q[run] = t.p; var p = P(q[0], q[1], q[2]); g.fillText(t.t, p[0] + dx * 12, p[1] + dy * 12 + 3); });
+    g.fillStyle = '#7c8aaa'; g.font = '11px "JetBrains Mono", monospace';
+    var tm = mid.slice(); tm[run] = 0; var pt = P(tm[0], tm[1], tm[2]); g.fillText(title, pt[0] + dx * 34, pt[1] + dy * 34 + 4);
+    g.font = '10px "JetBrains Mono", monospace';
+  }
+  edgeLabels(2, 0, tx, D.a1.label + (D.a1.byVf ? ' (target solid %)' : ''));
+  edgeLabels(0, 2, tz, D.a2.label);
+  var bestV = null;
+  [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(function (c) { var p = P(c[0] * EX[0], 0, c[1] * EX[2]); if (!bestV || p[0] < bestV.x) bestV = { x: p[0], c: c }; });
+  g.textAlign = 'right'; g.fillStyle = '#888';
+  ty.forEach(function (t) { var p = P(bestV.c[0] * EX[0], t.p, bestV.c[1] * EX[2]); g.fillText(t.t, p[0] - 8, p[1] + 3); });
+  var ptop = P(bestV.c[0] * EX[0], EX[1], bestV.c[1] * EX[2]);
+  g.fillStyle = '#7c8aaa'; g.font = '11px "JetBrains Mono", monospace'; g.textAlign = 'center';
+  g.fillText((D.isVf ? 'Solid fraction' : (atlasEs() ? 'E' : 'E / E solid')) + (D.useLog ? ' (log)' : ''), ptop[0], ptop[1] - 12);
+}
+function atlasS3Hover(e) {
+  var list = ATLAS._s3HotList, cv = swEl('atS3c'), tip = swEl('atTip');
+  if (!list || !cv || e.buttons) return;
+  var r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, best = null, bd = 14 * 14;
+  list.forEach(function (h) { var d = (h.x - x) * (h.x - x) + (h.y - y) * (h.y - y); if (d < bd) { bd = d; best = h; } });
+  var prev = ATLAS._s3Hot; ATLAS._s3Hot = best;
+  if (!best) { tip.hidden = true; if (prev) atlasS3Queue(); return; }
+  var D = ATLAS._s3, row = D.cell[best.i][best.j];
+  var v = atlasS3Val(row, best.k);
+  tip.innerHTML = '<b>' + swEsc(row.run.id) + '</b> · ' + ATLAS_CLASS[row.cls] + '<br>' + swEsc(D.a1.label) + ' = ' + swEsc(sweepFmtVal(D.a1.values[best.i])) + (D.a1.byVf ? ' %' : '') +
+    '<br>' + swEsc(D.a2.label) + ' = ' + swEsc(sweepFmtVal(D.a2.values[best.j])) + '<br>' + (best.k === 'vf' ? 'Solid ' + (v * 100).toFixed(1) + ' %' :
+    (D.surfaces.length > 1 ? best.k : ATLAS._s3.metricLabel) + ' = ' + atlasFmtE(v) + ' · ' + (row.vf * 100).toFixed(1) + ' % solid');
+  tip.hidden = false;
+  var pr = tip.parentNode.getBoundingClientRect(), tw = tip.offsetWidth || 200, lx = e.clientX - pr.left + 14;
+  if (lx + tw > pr.width - 8) lx = e.clientX - pr.left - tw - 14;
+  tip.style.left = lx + 'px'; tip.style.top = (e.clientY - pr.top + 14) + 'px';
+  if (!prev || prev.id !== best.id || prev.k !== best.k) atlasS3Queue();
+}
+
 /* ── Data check ──────────────────────────────────────────── */
 function atlasChecks(rows, S) {
   var el = swEl('atChecks'), wasOpen = el.open, items = [];
@@ -563,6 +977,13 @@ function atlasChecks(rows, S) {
   var npd = rows.filter(function (r) { return r.eig[5] < -1e-6 * r.eig[0]; });
   add(npd.length ? 'flag' : 'pass', 'Physically admissible', npd.length ? npd.length + ' matrices have a negative eigenvalue beyond noise (' + npd.slice(0, 5).map(function (r) { return r.run.id; }).join(', ') + ').' :
     'Every stiffness matrix is positive semi-definite (worst eigenvalue ' + Math.min.apply(null, rows.map(function (r) { return r.eig[5] / r.eig[0]; })).toExponential(1) + ' of its largest).');
+  var negS = rows.filter(function (r) { return r.C[21] < 0 || r.C[28] < 0 || r.C[35] < 0; });
+  add(negS.length ? 'flag' : 'pass', 'Shear stiffness', negS.length ? negS.length + ' run' + (negS.length > 1 ? 's have' : ' has') + ' a negative shear term (' + negS.slice(0, 6).map(function (r) {
+      return r.run.id + ' ' + ['C44', 'C55', 'C66'].filter(function (k, i) { return r.C[21 + 7 * i] < 0; }).join('/'); }).join(', ') + '). Not physical; rerun at high precision to see whether it is the solver tolerance.' :
+    'C44, C55 and C66 are positive on every run.');
+  var nl = rows.filter(function (r) { return r.res.noLoad; });
+  if (nl.length) add('note', 'Axes with no load', nl.length + ' run' + (nl.length > 1 ? 's' : '') + ' (' + nl.slice(0, 6).map(function (r) { return r.run.id + ' ' + r.res.noLoad.map(function (b) { return b.axis; }).join(''); }).join(', ') +
+    ') read zero on some axes within solver noise, sometimes a hair below zero. Kept with a warning; the solver alone rejects them.');
   var over = rows.filter(function (r) { return Math.max(r.Ex, r.Ey, r.Ez) > r.vf * 1.01; });
   add(over.length ? 'flag' : 'pass', 'Voigt bound', over.length ? over.length + ' runs exceed E ≤ solid fraction × E solid (' + over.slice(0, 5).map(function (r) { return r.run.id; }).join(', ') + ').' : 'No run exceeds E ≤ solid fraction × E solid.');
   var dips = [];

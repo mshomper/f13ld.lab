@@ -330,15 +330,33 @@ async function sweepSolveAt(recipe, N, prec, conn) {
     captureFieldsLCs: [], cgTol: prec.tol, cgMaxiter: prec.maxiter, voidRatio: SWEEP_STATE.voidRatio
   });
   var wall = (performance.now() - t0) / 1000;
-  if (!R.valid) throw new Error('solve invalid at N = ' + N + ': ' + (R.reject_reason || 'unknown'));
+  var noLoad = null;
+  if (!R.valid) {
+    /* v0.12 — the solver rejects any axis whose modulus reads ≤ 0 or above the solid.  Layers and
+       strands (B6) have unloaded axes that read ~0, sometimes a hair negative, after a converged
+       solve: keep those with a warning instead of discarding the run. */
+    var bad = (R.badAxes || []).map(function (a) { var k = { xx: 'Ex', yy: 'Ey', zz: 'Ez' }[a]; return { axis: a.charAt(0), E: R[k + '_MPa'] / SWEEP_ES }; });
+    var lim = sweepNoLoadLimit();
+    var keep = R.reject_reason === 'nonconvergent' && R.C_eff && R.converged && bad.length &&
+               bad.every(function (b) { return isFinite(b.E) && Math.abs(b.E) <= lim; });
+    if (!keep) {
+      var why = bad.length ? bad.map(function (b) { return 'E' + b.axis + ' = ' + (isFinite(b.E) ? b.E.toExponential(2) : String(b.E)); }).join(', ') : '';
+      throw new Error('solve rejected at N = ' + N + ': ' + (R.reject_reason === 'nonconvergent'
+        ? (R.converged ? 'modulus outside 0 … E solid (' + why + ' ÷ E solid)' : 'did not converge' + (why ? ' (' + why + ' ÷ E solid)' : ''))
+        : (R.reject_reason || 'unknown')));
+    }
+    noLoad = bad;
+  }
   var per = R.perLC || [], itersBy = {}, resMax = 0, itTot = 0;
   per.forEach(function (p, k) {
     itersBy['iters_' + VOIGT[k]] = p.iters; itTot += p.iters;
     if (p.finalResidual != null && p.finalResidual > resMax) resMax = p.finalResidual;
   });
   var Cfull = R.C_eff.map(function (v) { return v / SWEEP_ES; });
-  return { N: N, R: R, Cfull: Cfull, wall: wall, iters: itTot, itersBy: itersBy, residual: resMax, converged: !!R.converged };
+  return { N: N, R: R, Cfull: Cfull, wall: wall, iters: itTot, itersBy: itersBy, residual: resMax, converged: !!R.converged, noLoad: noLoad };
 }
+/* An axis reading within this of zero (÷ E solid) carries no load: 20 × the void stiffness, at least 1e-5. */
+function sweepNoLoadLimit() { return Math.max(20 * (SWEEP_STATE.voidRatio || 1e-4), 1e-5); }
 
 async function sweepRunOne(run) {
   var prec = SWEEP_PRECISION[SWEEP_STATE.precision] || SWEEP_PRECISION.standard;
@@ -360,6 +378,7 @@ async function sweepRunOne(run) {
     nu_xy: R.nu_xy, nu_xz: R.nu_xz, nu_yz: R.nu_yz,
     iters: A.iters, itersBy: A.itersBy, residual: A.residual, converged: A.converged, wall_s: A.wall
   };
+  if (A.noLoad) res.noLoad = A.noLoad;
   /* Optional second grid + extrapolation: C_ext = C_fine + (C_fine − C_coarse) / (2^p − 1),
      element by element, then constants from C_ext. */
   var N2 = sweepCompanionN(run.N, SWEEP_STATE.refine);
@@ -391,6 +410,17 @@ function sweepNotesFor(run, r) {
     n.push('island trim removed ' + r.trim_removed_pct.toFixed(2) + ' % of the solid (' + r.vf_voxel.toFixed(2) + ' → ' + r.vf_solved.toFixed(2) + ' % of the cell)');
   if (!r.converged) n.push('did not converge to ' + r.tol + ' in ' + r.maxiter + ' iterations per load case');
   if (r.extNote) n.push(r.extNote);
+  if (r.noLoad) n.push('no load on ' + r.noLoad.map(function (b) { return b.axis; }).join(', ') + ': ' +
+    r.noLoad.map(function (b) { return 'E' + b.axis + ' reads ' + b.E.toExponential(1); }).join(', ') +
+    ' ÷ E solid, i.e. zero within solver noise — kept (the solver alone would reject it)');
+  if (r.C) {
+    var negG = ['44', '55', '66'].filter(function (k) { return r.C['C' + k] < 0; });
+    if (negG.length) {
+      var dmax = Math.max(r.C.C11, r.C.C22, r.C.C33);
+      n.push('negative shear stiffness ' + negG.map(function (k) { return 'C' + k + ' = ' + r.C['C' + k].toExponential(1); }).join(', ') +
+        ' (' + (Math.abs(Math.min.apply(null, negG.map(function (k) { return r.C['C' + k]; }))) / dmax * 100).toFixed(2) + ' % of the largest normal term) — not physical; rerun at high precision to see whether it is tolerance');
+    }
+  }
   if (run.ref && run.ref.Ex != null) {
     var fl = [], src = r.ext && r.ext.Ex != null ? r.ext : r;
     ['Ex', 'Ey', 'Ez'].forEach(function (k) {
@@ -474,7 +504,7 @@ function sweepFlags(run, st) {
   if (!st.spans.x && !st.spans.y && !st.spans.z) { f.push({ level: 'skip', short: 'no load path', text: 'the solid spans the cell on no axis' }); return f; }
   if (!(st.spans.x && st.spans.y && st.spans.z)) {
     var ax = ['x', 'y', 'z'].filter(function (a) { return st.spans[a]; }).join(', ');
-    f.push({ level: 'warn', short: 'spans ' + ax + ' only', text: 'carries load along ' + ax + ' only; stiffness on the other axes will sit near the void level (about 1e-4)' });
+    f.push({ level: 'warn', short: 'spans ' + ax + ' only', text: 'carries load along ' + ax + ' only; stiffness on the other axes will sit near the void level (about ' + (SWEEP_STATE.voidRatio || 1e-4).toExponential(0) + ' of the solid)' });
   }
   if (st.vf_trim < 0.02) f.push({ level: 'warn', short: '< 2 % solid', text: 'very low solid fraction (' + pct(st.vf_trim) + ')' });
   if (st.vf_trim > 0.95) f.push({ level: 'warn', short: '> 95 % solid', text: 'very high solid fraction (' + pct(st.vf_trim) + ')' });
@@ -1019,6 +1049,7 @@ function sweepRenderBar() {
     '</div>';
 }
 
+var SWEEP_UI = { notesOpen: false };
 function sweepRender() {
   sweepRenderBar();
   var tb = swEl('swTable'), notes = swEl('swNotes');
@@ -1029,7 +1060,7 @@ function sweepRender() {
     (showExp ? '<th>Expected %</th>' : '') + '<th>Solid %</th><th>Ex</th><th>Ey</th><th>Ez</th><th>Gyz</th><th>Gxz</th><th>Gxy</th>' +
     (showRef ? '<th title="Ex, Ey, Ez ÷ reference">÷ ref</th>' : '') +
     '<th>Iter.</th><th>Resid.</th><th>Time</th><th class="fl">Checks</th></tr></thead><tbody>';
-  var allNotes = [];
+  var allNotes = [], noteRuns = {};
   SWEEP_STATE.runs.forEach(function (run) {
     var r = SWEEP_STATE.results[run.id], cur = SWEEP_STATE.current === run.id;
     var cls = cur ? 'cur' : (r && r.error ? 'err' : (r ? 'done' : ''));
@@ -1063,13 +1094,21 @@ function sweepRender() {
       h += '<td' + vfCls + '>' + r.vf_solved.toFixed(2) + (r.trim_removed_pct > 0.005 ? '<sup title="before island trim ' + r.vf_voxel.toFixed(2) + ' %">*</sup>' : '') + '</td>' +
         ec('Ex') + ec('Ey') + ec('Ez') + ec('Gyz') + ec('Gxz') + ec('Gxy') + ratios +
         '<td' + (r.converged ? '' : ' class="warn"') + '>' + r.iters + '</td><td>' + r.residual.toExponential(1) + '</td><td>' + sweepFmtDur(r.wall_s) + '</td>';
-      (r.notes || []).forEach(function (n) { allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(n)); });
+      (r.notes || []).forEach(function (n) { noteRuns[run.id] = 1; allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(n)); });
     } else h += preVf + '<td colspan="' + (7 + (showRef ? 1 : 0)) + '"></td><td></td><td></td>';
     h += flagHtml + '</tr>';
-    if (st && !r) flags.forEach(function (f) { if (f.level !== 'info') allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(f.text)); });
+    if (st && !r) flags.forEach(function (f) { if (f.level !== 'info') { noteRuns[run.id] = 1; allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(f.text)); } });
   });
   tb.innerHTML = h + '</tbody>';
-  if (notes) notes.innerHTML = allNotes.length ? '<div class="imp-warn">' + allNotes.join('<br>') + '</div>' : '';
+  var nNoteRuns = Object.keys(noteRuns).length;
+  if (notes) {
+    var prevOpen = notes.querySelector('details');
+    if (prevOpen) SWEEP_UI.notesOpen = prevOpen.open;
+    notes.innerHTML = allNotes.length
+      ? '<details class="sw-ndet"' + (SWEEP_UI.notesOpen ? ' open' : '') + ' ontoggle="SWEEP_UI.notesOpen=this.open"><summary>Notes and warnings (' + allNotes.length + ')' +
+        '<span class="imp-sub">on ' + nNoteRuns + ' run' + (nNoteRuns === 1 ? '' : 's') + '</span></summary><div class="imp-warn">' + allNotes.join('<br>') + '</div></details>'
+      : '';
+  }
 }
 
 function sweepPaintHeaderBtn(i, n) {
