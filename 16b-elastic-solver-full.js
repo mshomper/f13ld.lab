@@ -1605,8 +1605,12 @@ async function solveDesignElasticFull(recipe, N, opts) {
 
   var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
   var Es = mat.Es_MPa, nu = mat.nu;
+  /* v0.10.1 sweep — void stiffness as a fraction of the solid (default 1e-4,
+     unchanged for normal runs).  The sweep defaults to 1e-6: at 1e-4 the void
+     adds ~1e-4·E_s to every direction, which inflates low-density lattices. */
+  var voidRatio = (opts.voidRatio > 0) ? opts.voidRatio : 1e-4;
   var C_s = isoC(Es, nu);
-  var C_v = isoC(Es * 1e-4, nu);
+  var C_v = isoC(Es * voidRatio, nu);
   var C_0 = isoC(Es, nu);
 
   var t1 = performance.now();
@@ -1735,6 +1739,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
     nu_xy:    nu_xy, nu_xz: nu_xz, nu_yz: nu_yz,
     rho_raw:  insideRaw / solid.length,   /* before island trim */
     cgTol:    opts.cgTol || CG_TOL_FULL,
+    voidRatio: voidRatio,
     C_eff:    Array.from(C_phys),
     S:        Array.from(S_phys),
     zenerA:   zenerA,

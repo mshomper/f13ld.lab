@@ -791,3 +791,5 @@ html, body {
 .sw-table tr.done td.pre { color:var(--ink); }
 .sw-table th.fl, .sw-table td.fl { text-align:left; }
 .sw-table td.fl .imp-chip { margin-right:3px; }
+.sw-table td.ext { color:var(--ink); }
+.sw-table td.ext sup { color:var(--sec-cyan); margin-left:1px; }

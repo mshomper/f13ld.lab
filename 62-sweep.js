@@ -38,6 +38,9 @@ var SWEEP_STATE = {
   precision: 'standard',
   preview: {},                     /* run_id → geometry stats (14d-voxel-stats.js) */
   builder: {},                     /* last builder settings (kept across redraws and reloads) */
+  voidRatio: 1e-6,                 /* void stiffness ÷ solid (Matt, 2026-10-01: 1e-6 for sweeps) */
+  refine: 'off',                   /* 'off' | 'coarser' | 'finer' — second grid for extrapolation */
+  order: 2,                        /* assumed convergence order for the extrapolation */
   previewing: false, previewDone: 0, previewTotal: 0,
   current: null, startedAt: 0, log: []
 };
@@ -48,7 +51,8 @@ function sweepSave() {
     localStorage.setItem(SWEEP_STORE_KEY, JSON.stringify({
       v: 1, name: SWEEP_STATE.name, source: SWEEP_STATE.source, runs: SWEEP_STATE.runs,
       results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
-      preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder
+      preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder,
+      voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order
     }));
   } catch (e) { console.warn('[sweep] not saved (storage full or blocked):', e); }
 }
@@ -63,6 +67,8 @@ function sweepLoad() {
     SWEEP_STATE.selected = p.selected || {}; SWEEP_STATE.precision = p.precision || 'standard';
     SWEEP_STATE.preview = p.preview || {};
     SWEEP_STATE.builder = p.builder || {};
+    if (p.voidRatio > 0) SWEEP_STATE.voidRatio = p.voidRatio;
+    SWEEP_STATE.refine = p.refine || 'off'; SWEEP_STATE.order = p.order || 2;
   } catch (e) {}
 }
 
@@ -260,6 +266,44 @@ function sweepVoigtUpper(C) {
   return out;
 }
 
+var SWEEP_VOID_OPTIONS = [1e-4, 1e-6, 1e-8];
+var SWEEP_GRIDS = [32, 64, 128];
+
+/* Second grid for extrapolation: one step coarser or finer than the run's
+   grid, within 32–128; null when there is no such grid. */
+function sweepCompanionN(N, mode) {
+  var i = SWEEP_GRIDS.indexOf(N);
+  if (mode === 'coarser') return i > 0 ? SWEEP_GRIDS[i - 1] : null;
+  if (mode === 'finer') return (i >= 0 && i < SWEEP_GRIDS.length - 1) ? SWEEP_GRIDS[i + 1] : null;
+  return null;
+}
+
+/* Engineering constants from a flat 6×6 stiffness (already ÷ E_s). */
+function sweepConstants(C) {
+  var S = invert6x6(C);
+  if (!S) return null;
+  return { Ex: 1 / S[0], Ey: 1 / S[7], Ez: 1 / S[14], Gyz: 1 / S[21], Gxz: 1 / S[28], Gxy: 1 / S[35],
+           nu_xy: -S[1] / S[0], nu_xz: -S[2] / S[0], nu_yz: -S[8] / S[7] };
+}
+
+/* One elastic solve at grid N → normalized record. */
+async function sweepSolveAt(recipe, N, prec, conn) {
+  var t0 = performance.now();
+  var R = await solveDesignElasticFull(recipe, N, {
+    connectivity: conn, pruneLargest: conn !== 'off',
+    captureFieldsLCs: [], cgTol: prec.tol, cgMaxiter: prec.maxiter, voidRatio: SWEEP_STATE.voidRatio
+  });
+  var wall = (performance.now() - t0) / 1000;
+  if (!R.valid) throw new Error('solve invalid at N = ' + N + ': ' + (R.reject_reason || 'unknown'));
+  var per = R.perLC || [], itersBy = {}, resMax = 0, itTot = 0;
+  per.forEach(function (p, k) {
+    itersBy['iters_' + VOIGT[k]] = p.iters; itTot += p.iters;
+    if (p.finalResidual != null && p.finalResidual > resMax) resMax = p.finalResidual;
+  });
+  var Cfull = R.C_eff.map(function (v) { return v / SWEEP_ES; });
+  return { N: N, R: R, Cfull: Cfull, wall: wall, iters: itTot, itersBy: itersBy, residual: resMax, converged: !!R.converged };
+}
+
 async function sweepRunOne(run) {
   var prec = SWEEP_PRECISION[SWEEP_STATE.precision] || SWEEP_PRECISION.standard;
   var recipe = sweepClone(run.recipe);
@@ -267,30 +311,38 @@ async function sweepRunOne(run) {
   if (recipe.family === 'import' && !(typeof importGridReady === 'function' && importGridReady(recipe)))
     throw new Error('imported geometry is not loaded');
   var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
-  var t0 = performance.now();
-  var R = await solveDesignElasticFull(recipe, run.N, {
-    connectivity: conn, pruneLargest: conn !== 'off',
-    captureFieldsLCs: [], cgTol: prec.tol, cgMaxiter: prec.maxiter
-  });
-  var wall = (performance.now() - t0) / 1000;
-  if (!R.valid) throw new Error('solve invalid: ' + (R.reject_reason || 'unknown'));
-  var per = R.perLC || [], itersBy = {}, resMax = 0, itTot = 0;
-  per.forEach(function (p, k) {
-    itersBy['iters_' + VOIGT[k]] = p.iters; itTot += p.iters;
-    if (p.finalResidual != null && p.finalResidual > resMax) resMax = p.finalResidual;
-  });
+  var A = await sweepSolveAt(recipe, run.N, prec, conn), R = A.R;
   var vfRaw = R.rho_raw != null ? R.rho_raw * 100 : R.rho * 100, vf = R.rho * 100;
   var res = {
     id: run.id, when: new Date().toISOString(), N: run.N, nu: run.nu,
-    tol: prec.tol, maxiter: prec.maxiter, connectivity: conn,
+    tol: prec.tol, maxiter: prec.maxiter, connectivity: conn, voidRatio: SWEEP_STATE.voidRatio,
     vf_voxel: vfRaw, vf_solved: vf, trim_removed_pct: vfRaw > 0 ? (vfRaw - vf) / vfRaw * 100 : 0,
     vf_check: run.expectedVf ? (vfRaw - run.expectedVf) / run.expectedVf : null,
     C: sweepVoigtUpper(R.C_eff),
     Ex: R.Ex_MPa / SWEEP_ES, Ey: R.Ey_MPa / SWEEP_ES, Ez: R.Ez_MPa / SWEEP_ES,
     Gyz: R.Gyz_MPa / SWEEP_ES, Gxz: R.Gxz_MPa / SWEEP_ES, Gxy: R.Gxy_MPa / SWEEP_ES,
     nu_xy: R.nu_xy, nu_xz: R.nu_xz, nu_yz: R.nu_yz,
-    iters: itTot, itersBy: itersBy, residual: resMax, converged: !!R.converged, wall_s: wall
+    iters: A.iters, itersBy: A.itersBy, residual: A.residual, converged: A.converged, wall_s: A.wall
   };
+  /* Optional second grid + extrapolation: C_ext = C_fine + (C_fine − C_coarse) / (2^p − 1),
+     element by element, then constants from C_ext. */
+  var N2 = sweepCompanionN(run.N, SWEEP_STATE.refine);
+  if (SWEEP_STATE.refine !== 'off' && !N2) res.extNote = 'no ' + SWEEP_STATE.refine + ' grid than N = ' + run.N + '; not extrapolated';
+  if (N2) {
+    var B = await sweepSolveAt(recipe, N2, prec, conn);
+    var c = sweepConstants(B.Cfull) || {};
+    res.companion = { N: N2, C: sweepVoigtUpper(B.R.C_eff), Ex: c.Ex, Ey: c.Ey, Ez: c.Ez, Gyz: c.Gyz, Gxz: c.Gxz, Gxy: c.Gxy,
+                      vf_solved: B.R.rho * 100, iters: B.iters, residual: B.residual, converged: B.converged, wall_s: B.wall };
+    res.wall_s += B.wall;
+    if (!B.converged) res.converged = false;
+    var fine = N2 > run.N ? B : A, coarse = N2 > run.N ? A : B, k = 1 / (Math.pow(2, SWEEP_STATE.order) - 1);
+    var Cx = fine.Cfull.map(function (v, i) { return v + (v - coarse.Cfull[i]) * k; });
+    var ce = sweepConstants(Cx);
+    var Cu = {};
+    for (var i = 0; i < 6; i++) for (var j = i; j < 6; j++) Cu['C' + (i + 1) + (j + 1)] = Cx[i * 6 + j];
+    res.ext = { order: SWEEP_STATE.order, fineN: fine.N, coarseN: coarse.N, C: Cu };
+    if (ce) for (var q in ce) res.ext[q] = ce[q];
+  }
   res.notes = sweepNotesFor(run, res);
   return res;
 }
@@ -302,13 +354,14 @@ function sweepNotesFor(run, r) {
   if (r.trim_removed_pct > 0.005)
     n.push('island trim removed ' + r.trim_removed_pct.toFixed(2) + ' % of the solid (' + r.vf_voxel.toFixed(2) + ' → ' + r.vf_solved.toFixed(2) + ' % of the cell)');
   if (!r.converged) n.push('did not converge to ' + r.tol + ' in ' + r.maxiter + ' iterations per load case');
+  if (r.extNote) n.push(r.extNote);
   if (run.ref && run.ref.Ex != null) {
-    var fl = [];
+    var fl = [], src = r.ext && r.ext.Ex != null ? r.ext : r;
     ['Ex', 'Ey', 'Ez'].forEach(function (k) {
       var ref = run.ref[k];
-      if (Math.abs(ref) > 1e-5) { var d = (r[k] - ref) / ref; if (Math.abs(d) > 0.05) fl.push(k + ' ' + (d * 100 > 0 ? '+' : '') + (d * 100).toFixed(0) + ' %'); }
+      if (Math.abs(ref) > 1e-5) { var d = (src[k] - ref) / ref; if (Math.abs(d) > 0.05) fl.push(k + ' ' + (d * 100 > 0 ? '+' : '') + (d * 100).toFixed(0) + ' %'); }
     });
-    if (fl.length) n.push('vs ' + run.ref.name + ': ' + fl.join(', '));
+    if (fl.length) n.push('vs ' + run.ref.name + (src === r ? '' : ' (extrapolated)') + ': ' + fl.join(', '));
   }
   return n;
 }
@@ -438,11 +491,17 @@ function sweepCsvCell(v) {
 function sweepExportCsv() {
   var cols = ['run_id', 'tier', 'set', 'purpose', 'grid_N', 'nu_s', 'cg_tol', 'connectivity', 'param_name', 'param_value',
               'expected_vf_pct', 'vf_voxel_pct', 'vf_measured_pct', 'vf_check_rel_pct', 'trim_removed_pct'];
+  cols.push('void_ratio');
   for (var i = 1; i <= 6; i++) for (var j = i; j <= 6; j++) cols.push('C' + i + j);
   cols = cols.concat(['Ex', 'Ey', 'Ez', 'Gyz', 'Gxz', 'Gxy', 'nu_xy', 'nu_xz', 'nu_yz',
     'iters_total', 'iters_xx', 'iters_yy', 'iters_zz', 'iters_yz', 'iters_xz', 'iters_xy', 'final_residual_max', 'converged', 'wall_time_s',
     'ref_Ex', 'ref_Ey', 'ref_Ez', 'ratio_Ex', 'ratio_Ey', 'ratio_Ez',
-    'thinnest_feature_vox', 'median_feature_vox', 'spans', 'checks', 'notes', 'error']);
+    'thinnest_feature_vox', 'median_feature_vox', 'spans', 'checks',
+    'grid2_N', 'grid2_Ex', 'grid2_Ey', 'grid2_Ez', 'grid2_Gyz', 'grid2_Gxz', 'grid2_Gxy', 'grid2_iters', 'grid2_residual', 'grid2_wall_time_s',
+    'ext_order', 'ext_from_grids']);
+  for (var ie = 1; ie <= 6; ie++) for (var je = ie; je <= 6; je++) cols.push('ext_C' + ie + je);
+  cols = cols.concat(['ext_Ex', 'ext_Ey', 'ext_Ez', 'ext_Gyz', 'ext_Gxz', 'ext_Gxy', 'ext_nu_xy', 'ext_nu_xz', 'ext_nu_yz',
+    'ext_ratio_Ex', 'ext_ratio_Ey', 'ext_ratio_Ez', 'notes', 'error']);
   var lines = [cols.join(',')];
   SWEEP_STATE.runs.forEach(function (run) {
     var r = SWEEP_STATE.results[run.id];
@@ -454,7 +513,18 @@ function sweepExportCsv() {
       expected_vf_pct: run.expectedVf, error: r.error || ''
     };
     if (!r.error) {
-      row.cg_tol = r.tol; row.connectivity = r.connectivity;
+      row.cg_tol = r.tol; row.connectivity = r.connectivity; row.void_ratio = r.voidRatio != null ? r.voidRatio : 1e-4;
+      if (r.companion) {
+        var cp = r.companion;
+        row.grid2_N = cp.N; row.grid2_iters = cp.iters; row.grid2_residual = cp.residual; row.grid2_wall_time_s = cp.wall_s;
+        ['Ex', 'Ey', 'Ez', 'Gyz', 'Gxz', 'Gxy'].forEach(function (q) { row['grid2_' + q] = cp[q]; });
+      }
+      if (r.ext) {
+        row.ext_order = r.ext.order; row.ext_from_grids = r.ext.coarseN + '+' + r.ext.fineN;
+        for (var ck in r.ext.C) row['ext_' + ck] = r.ext.C[ck];
+        ['Ex', 'Ey', 'Ez', 'Gyz', 'Gxz', 'Gxy', 'nu_xy', 'nu_xz', 'nu_yz'].forEach(function (q) { row['ext_' + q] = r.ext[q]; });
+        ['Ex', 'Ey', 'Ez'].forEach(function (q) { row['ext_ratio_' + q] = (ref[q] != null && Math.abs(ref[q]) > 1e-5) ? r.ext[q] / ref[q] : null; });
+      }
       row.vf_voxel_pct = r.vf_voxel; row.vf_measured_pct = r.vf_solved;
       row.vf_check_rel_pct = r.vf_check != null ? r.vf_check * 100 : null; row.trim_removed_pct = r.trim_removed_pct;
       for (var k in r.C) row[k] = r.C[k];
@@ -673,6 +743,7 @@ function sweepClearResults(onlySelected) {
   SWEEP_STATE.runs.forEach(function (r) { if (!onlySelected || SWEEP_STATE.selected[r.id]) delete SWEEP_STATE.results[r.id]; });
   sweepSave(); sweepRender();
 }
+function sweepSetOpt(k, v) { if (!SWEEP_STATE.running) { SWEEP_STATE[k] = v; sweepSave(); sweepRenderBar(); sweepRender(); } }
 function sweepSetPrecision(v) { if (!SWEEP_STATE.running) { SWEEP_STATE.precision = v; sweepSave(); sweepRenderBar(); } }
 
 function sweepEta(todoRuns) {
@@ -680,12 +751,16 @@ function sweepEta(todoRuns) {
   var byN = {}, guess = { 32: 3, 64: 15, 128: 120 };
   for (var id in SWEEP_STATE.results) {
     var r = SWEEP_STATE.results[id];
-    if (r && r.wall_s) { (byN[r.N] = byN[r.N] || []).push(r.wall_s); }
+    if (r && r.wall_s) {
+      (byN[r.N] = byN[r.N] || []).push(r.wall_s - (r.companion ? r.companion.wall_s : 0));
+      if (r.companion) (byN[r.companion.N] = byN[r.companion.N] || []).push(r.companion.wall_s);
+    }
   }
   var hi = SWEEP_STATE.precision === 'high' ? 1.6 : 1;
+  function one(N) { var a = byN[N]; return a ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : guess[N] * hi; }
   return todoRuns.reduce(function (s, run) {
-    var a = byN[run.N];
-    return s + (a ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : guess[run.N] * hi);
+    var N2 = sweepCompanionN(run.N, SWEEP_STATE.refine);
+    return s + one(run.N) + (N2 ? one(N2) : 0);
   }, 0);
 }
 function sweepFmtDur(s) { return s < 90 ? Math.round(s) + ' s' : (s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h'); }
@@ -711,6 +786,12 @@ function sweepRenderBar() {
       '<label class="imp-sub">Precision <select id="swPrec" onchange="sweepSetPrecision(this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
         Object.keys(SWEEP_PRECISION).map(function (k) { return '<option value="' + k + '"' + (k === SWEEP_STATE.precision ? ' selected' : '') + '>' + SWEEP_PRECISION[k].label + '</option>'; }).join('') +
       '</select></label>' +
+      '<label class="imp-sub" title="Stiffness given to empty space, as a fraction of the solid. 1e-4 is the lab default for normal runs; it inflates low-density lattices by about 1e-4 on every axis.">Void <select onchange="sweepSetOpt(\'voidRatio\', +this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
+        SWEEP_VOID_OPTIONS.map(function (v) { return '<option value="' + v + '"' + (v === SWEEP_STATE.voidRatio ? ' selected' : '') + '>' + v.toExponential(0) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="imp-sub" title="Also solve each run on a second grid and extrapolate to an infinitely fine grid">Second grid <select onchange="sweepSetOpt(\'refine\', this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
+        [['off', 'off'], ['coarser', 'one coarser'], ['finer', 'one finer']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SWEEP_STATE.refine ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
+      (SWEEP_STATE.refine !== 'off' ? '<label class="imp-sub" title="Assumed convergence order. The F set measured about 2 for PI-gyroid Ex and Ey, 1.4 for Ez and 1.2 for the sheet gyroid.">order <select onchange="sweepSetOpt(\'order\', +this.value)"' + (SWEEP_STATE.running ? ' disabled' : '') + '>' +
+        [1, 2].map(function (o) { return '<option' + (o === SWEEP_STATE.order ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' : '') +
       '<span class="imp-sub" title="Set by the Connectivity selector in the run controls">Islands: ' + connTxt + '</span>' +
       '<span class="imp-sub">Stiffness ÷ solid modulus</span>' +
       '<span class="sw-spacer"></span>' +
@@ -758,12 +839,17 @@ function sweepRender() {
     else if (r && r.error) h += preVf + '<td colspan="' + (7 + (showRef ? 1 : 0)) + '" class="sw-err">' + swEsc(r.error) + '</td><td></td><td></td>';
     else if (r) {
       var vfCls = r.vf_check != null && Math.abs(r.vf_check) > SWEEP_VF_TOL ? ' class="warn"' : '';
+      var src = r.ext && r.ext.Ex != null ? r.ext : r;
       var ratios = '';
       if (showRef) ratios = '<td>' + (run.ref && run.ref.Ex != null ? ['Ex', 'Ey', 'Ez'].map(function (k) {
-        var ref = run.ref[k]; return Math.abs(ref) > 1e-5 ? (r[k] / ref).toFixed(2) : '—'; }).join(' / ') : '') + '</td>';
+        var ref = run.ref[k]; return Math.abs(ref) > 1e-5 ? (src[k] / ref).toFixed(2) : '—'; }).join(' / ') : '') + '</td>';
+      function ec(k) {
+        if (src === r) return '<td>' + swFmt(r[k]) + '</td>';
+        return '<td class="ext" title="extrapolated from N = ' + r.ext.coarseN + ' and ' + r.ext.fineN + ' (order ' + r.ext.order + '); N = ' + r.N + ': ' +
+          swFmt(r[k]) + ', N = ' + r.companion.N + ': ' + swFmt(r.companion[k]) + '">' + swFmt(r.ext[k]) + '<sup>e</sup></td>';
+      }
       h += '<td' + vfCls + '>' + r.vf_solved.toFixed(2) + (r.trim_removed_pct > 0.005 ? '<sup title="before island trim ' + r.vf_voxel.toFixed(2) + ' %">*</sup>' : '') + '</td>' +
-        '<td>' + swFmt(r.Ex) + '</td><td>' + swFmt(r.Ey) + '</td><td>' + swFmt(r.Ez) + '</td>' +
-        '<td>' + swFmt(r.Gyz) + '</td><td>' + swFmt(r.Gxz) + '</td><td>' + swFmt(r.Gxy) + '</td>' + ratios +
+        ec('Ex') + ec('Ey') + ec('Ez') + ec('Gyz') + ec('Gxz') + ec('Gxy') + ratios +
         '<td' + (r.converged ? '' : ' class="warn"') + '>' + r.iters + '</td><td>' + r.residual.toExponential(1) + '</td><td>' + sweepFmtDur(r.wall_s) + '</td>';
       (r.notes || []).forEach(function (n) { allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(n)); });
     } else h += preVf + '<td colspan="' + (7 + (showRef ? 1 : 0)) + '"></td><td></td><td></td>';

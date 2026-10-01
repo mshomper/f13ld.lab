@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.10.0 · 2026-10-01 · parameter sweep on branch `sweep` (STL import merged)
+**As of:** v0.10.1 · 2026-10-01 · parameter sweep merged (void option, two-grid extrapolation)
 **Full history of the last session:** [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md)
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -16,7 +16,7 @@
 | **v0.8.1** | Nonlinear crush: mean-strain reset (root cause), inexact Newton, early stop, predictor, GPU-resident CG, batched real-pair FFT, cached bind groups |
 | **v0.8.2** | PI / shell normalization kept on import (older recipes default OFF); normalized PI and shell rendering in the viewer; connectivity selector (all networks / largest / keep everything); per-network FE buckling |
 | **v0.9.0 / v0.9.1** | STL unit-cell import: periodic signed-distance grid, `import` kernel, report card, wall offset, IndexedDB store, export with embedded grid. See `STL_IMPORT_SCOPE.md` §7–8 |
-| **v0.10.0** (branch `sweep`) | Parameter sweep: run-matrix CSV or one-parameter sweep of a loaded design → elastic stiffness per run, CSV export. Solver records final residual and takes a per-call tolerance. See `SWEEP.md` |
+| **v0.10.0 / v0.10.1** | Parameter sweep: run-matrix CSV or one-parameter sweep of a loaded design → elastic stiffness per run, CSV export. Solver records final residual and takes a per-call tolerance. See `SWEEP.md` |
 
 ---
 
