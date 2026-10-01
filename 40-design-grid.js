@@ -536,6 +536,8 @@ function renderDesignGrid(){
                      : ' \u2014 stocky, resolves at the coarse grid');
       sourceText += ' <span class="dc-predict-pill ' + _bpCls + '" title="' + _bpTip + '">' + _bpTxt + '</span>';
     }
+    /* STL import — geometry state, not-periodic tag, wall offset */
+    if (d.family === 'import' && typeof importCardPills === 'function') sourceText += importCardPills(d);
     /* v0.8.0 — governing failure mode, on every tab: yield vs buckling. */
     var limitPill = governingLimitPill(d);
 
@@ -550,6 +552,7 @@ function renderDesignGrid(){
         '<div class="dc-controls">' +
           '<span class="dc-status-dot '+statusClass+'" title="'+statusClass+'"></span>' +
           '<button class="dc-icon-btn'+(d.id===LAB_STATE.baselineId?' is-baseline':'')+'" title="'+(d.id===LAB_STATE.baselineId?'Baseline (comparison reference)':'Set as baseline')+'" onclick="setBaseline(\''+d.id+'\')">★</button>' +
+          ((d.family === 'import' && typeof importCardButtons === 'function') ? importCardButtons(d) : '') +
           '<button class="dc-icon-btn" title="Remove" onclick="removeDesign(\''+d.id+'\')">×</button>' +
         '</div>' +
       '</div>' +

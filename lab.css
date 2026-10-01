@@ -684,3 +684,72 @@ html, body {
 .mp-legend-warn { color:#e0b020; font-family:'JetBrains Mono', monospace; font-size:10.5px; flex-basis:100% }
 .mp-legend-hint { color:var(--ink-dim); font-family:'JetBrains Mono', monospace; font-size:10.5px; flex-basis:100% }
 .mp-legend-hint .mp-scale-btn { margin:0 4px; padding:1px 7px }
+
+/* ============ STL UNIT-CELL IMPORT (61-import-stl.js) ============ */
+.imp-overlay {
+  position:fixed; inset:0; z-index:1000; background:rgba(3,4,8,0.72);
+  display:flex; align-items:center; justify-content:center; padding:16px;
+  backdrop-filter:blur(3px);
+}
+.imp-dialog {
+  width:min(860px, 100%); max-height:calc(100vh - 32px); overflow:auto;
+  background:var(--panel); border:0.5px solid var(--line); border-radius:12px;
+  padding:16px 18px; display:flex; flex-direction:column; gap:12px;
+  box-shadow:0 20px 60px rgba(0,0,0,0.6);
+}
+.imp-head { display:flex; align-items:center; justify-content:space-between; }
+.imp-title { font-size:15px; font-weight:600; color:var(--lab); letter-spacing:0.02em; }
+.imp-note { font-size:12px; color:var(--ink-mute); }
+.imp-drop {
+  border:1px dashed var(--line); border-radius:8px; padding:14px; text-align:center;
+  font-size:12px; color:var(--ink-2); transition:border-color 0.15s, background 0.15s;
+}
+.imp-drop.over { border-color:var(--lab); background:var(--lab-soft); }
+.imp-drop a, .imp-note a { color:var(--lab); }
+.imp-settings { display:flex; flex-wrap:wrap; align-items:center; gap:14px; font-size:12px; color:var(--ink-2); }
+.imp-settings label { display:flex; align-items:center; gap:6px; }
+.imp-settings select, .imp-settings input {
+  background:var(--panel-3); color:var(--ink); border:0.5px solid var(--line); border-radius:6px;
+  padding:4px 6px; font-family:inherit; font-size:12px;
+}
+.imp-settings input { width:80px; }
+.imp-settings input:disabled { opacity:0.4; }
+.imp-progress { display:none; align-items:center; gap:10px; font-size:11px; color:var(--ink-mute); }
+.imp-bar { flex:1; height:4px; background:var(--line-soft); border-radius:2px; overflow:hidden; }
+#impBarFill { height:100%; width:0; background:var(--lab); transition:width 0.2s; }
+.imp-error {
+  display:none; font-size:12px; color:var(--bad); background:rgba(251,113,133,0.08);
+  border-left:2px solid var(--bad); padding:8px 10px; border-radius:0;
+}
+.imp-body { display:none; grid-template-columns:minmax(0, 1fr) minmax(0, 1.25fr); gap:14px; }
+.imp-preview {
+  aspect-ratio:5/4; min-height:200px; border-radius:8px; overflow:hidden; border:0.5px solid var(--line);
+  background:radial-gradient(ellipse at center, #0d1018 0%, #06080f 70%);
+}
+.imp-nopreview { display:flex; height:100%; align-items:center; justify-content:center; color:var(--ink-dim); font-size:12px; }
+.imp-report { display:flex; flex-direction:column; gap:7px; font-size:12px; }
+.imp-row { display:flex; gap:10px; align-items:baseline; }
+.imp-row .k { flex:0 0 118px; color:var(--ink-head); font-size:11px; text-transform:uppercase; letter-spacing:0.08em; }
+.imp-row .v { color:var(--ink); flex:1; min-width:0; overflow-wrap:anywhere; }
+.imp-row .v.good { color:var(--good); } .imp-row .v.warn { color:var(--warn); } .imp-row .v.bad { color:var(--bad); }
+.imp-sub { color:var(--ink-mute); font-size:11px; }
+.imp-chip {
+  display:inline-block; font-family:'IBM Plex Mono','JetBrains Mono',monospace; font-size:10px;
+  padding:1px 6px; border-radius:3px; margin-right:2px; border-left:2px solid var(--ink-dim);
+  background:rgba(255,255,255,0.03); color:var(--ink-mute);
+}
+.imp-chip.good { border-left-color:var(--good); color:var(--good); }
+.imp-chip.warn { border-left-color:var(--warn); color:var(--warn); }
+.imp-chip.bad  { border-left-color:var(--bad);  color:var(--bad); }
+.imp-warn {
+  margin-top:4px; font-size:11px; color:var(--warn); background:rgba(245,158,11,0.07);
+  border-left:2px solid var(--warn); padding:7px 9px; line-height:1.5; border-radius:0;
+}
+.imp-offset { display:none; align-items:center; gap:10px; font-size:12px; color:var(--ink-2); }
+.imp-offset input[type=range] { flex:1; accent-color:var(--lab); }
+#impOffsetVal { font-family:'IBM Plex Mono','JetBrains Mono',monospace; min-width:84px; text-align:right; color:var(--ink); }
+.imp-foot { display:flex; justify-content:flex-end; gap:8px; }
+@media (max-width:640px){
+  .imp-body { grid-template-columns:1fr; }
+  .imp-row .k { flex-basis:96px; }
+}

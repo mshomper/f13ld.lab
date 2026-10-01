@@ -15,12 +15,15 @@
 | (follow-ups) | Demo C → hyperuniform trabecular; buckling/yield ratio uses the crush axis; stress–strain plot redesign (collision-aware labels, off-scale buckling strip, MPa / normalized toggle) |
 | **v0.8.1** | Nonlinear crush: mean-strain reset (root cause), inexact Newton, early stop, predictor, GPU-resident CG, batched real-pair FFT, cached bind groups |
 | **v0.8.2** | PI / shell normalization kept on import (older recipes default OFF); normalized PI and shell rendering in the viewer; connectivity selector (all networks / largest / keep everything); per-network FE buckling |
+| **v0.9.0** (branch `stl-import`) | STL unit-cell import: periodic signed-distance grid, `import` kernel, report card, wall offset, IndexedDB store, export with embedded grid. See `STL_IMPORT_SCOPE.md` §7–8 |
 
 ---
 
 ## 1. CURRENT FOCUS — STL unit-cell import
 
 Matt redirected the 2026-09-30 evening session from buckling speed to STL import. Full scope, data path and test plan: [`STL_IMPORT_SCOPE.md`](STL_IMPORT_SCOPE.md). Work is on branch `stl-import`.
+
+**Status (2026-09-30):** all three phases built and validated on `stl-import` (results in the scope doc §8). Waiting on Matt's click-test on the branch preview, including a GPU elastic run on an imported cell and a few of his own CAD STLs, before merging to main.
 
 ### 1.1 Decisions (Matt, 2026-09-30)
 

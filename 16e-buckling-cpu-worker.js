@@ -78,6 +78,7 @@ var BUCKLE_WORKER_FILES = [
   '14a-connectivity.js',
   '13-kernels.js',
   '13b-kernels-new.js',
+  '13c-import-kernel.js',     /* STL-imported cells: grid arrives with each job */
   '16c-buckling-cpu-ref.js',   /* dense helpers (Jacobi, Cholesky) + legacy spectral path */
   '16h-buckling-fe.js'         /* v0.8.0 production buckling: voxel FE */
 ];
@@ -85,7 +86,7 @@ var BUCKLE_WORKER_FILES = [
 /* Bump on any solver-file change so the worker's importScripts refetches
    instead of serving a stale cached copy (the blob worker has its own cache,
    separate from the main page). */
-var BUCKLE_SOLVER_VERSION = 'fe-h8i-2';
+var BUCKLE_SOLVER_VERSION = 'fe-h8i-3';
 
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes
@@ -97,6 +98,7 @@ var BUCKLE_WORKER_ONMESSAGE =
   '  var job = e.data, N = job.N, opts = job.opts || {};\n' +
   '  if (_feRelease){ clearTimeout(_feRelease); _feRelease = null; }\n' +
   '  try {\n' +
+  '    if (job.importGrid) registerImportGrid(job.importGrid);   /* STL import: the page sends its grid */\n' +
   '    var fe = (opts.method || "fe") === "fe";\n' +
   '    var one = fe ? homogenizeBucklingFE(job.recipe, N, { axes: opts.axes, connectivity: opts.connectivity })\n' +
   '                 : homogenizeBucklingCPU(job.recipe, N, opts);\n' +
@@ -170,7 +172,14 @@ BucklingPool.prototype._dispatch = function(){
     var item = this.queue.shift();
     rec.busy = true; rec.jobId = item.id;
     var t = item.task;
-    rec.worker.postMessage({ id: item.id, recipe: t.recipe, N: t.N, opts: t.opts });
+    var msg = { id: item.id, recipe: t.recipe, N: t.N, opts: t.opts };
+    /* STL-imported cell: workers can't see the page's grid store, so the
+       grid (n³ bytes) rides with the job; the worker registers it by hash. */
+    if (t.recipe && t.recipe.family === 'import' && typeof importGridMessage === 'function'){
+      var ig = importGridMessage(t.recipe);
+      if (ig) msg.importGrid = ig;
+    }
+    rec.worker.postMessage(msg);
   }
 };
 

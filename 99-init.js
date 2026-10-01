@@ -28,6 +28,13 @@
   // 3. First render (preloaded demo designs are already in LAB_STATE)
   renderDesignGrid();
 
+  // 3b. Imported STL cells: load their grids from IndexedDB, then re-render
+  //     (until then their cards show the SVG fallback and runs skip them)
+  if (typeof hydrateImportGrids === 'function'){
+    hydrateImportGrids().then(function(changed){ if (changed) renderDesignGrid(); })
+      .catch(function(e){ console.warn('[import] grid restore failed:', e); });
+  }
+
   // 4. Handle ?r= URL param (replaces demo set with imported design)
   setTimeout(ingestUrlParam, 50);
 
@@ -39,7 +46,7 @@
     }, 150);
   });
 
-  console.log('%c F13LD.lab · v0.8.2 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
+  console.log('%c F13LD.lab · v0.9.0 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
   console.log('Phase 6 · nonlinear J2 plasticity + adaptive crush live · real σ_y retires the buckling seam · σ–ε comparison tab');
   console.log('Loaded demo recipes: ' + Object.keys(DEMO_RECIPES).join(', '));
 })();

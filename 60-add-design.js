@@ -148,6 +148,7 @@ function onAddDesignClick(){
     if (!raw) return;
     try {
       var json = JSON.parse(raw);
+      if (typeof isImportDesignJson === 'function' && isImportDesignJson(json)){ ingestImportDesignJson(json, json.name || 'pasted.json'); return; }
       var design = normalizeDesignJson(json, json.name || 'pasted.json');
       LAB_STATE.designs.push(design);
       if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();
@@ -167,11 +168,14 @@ function onAddDesignClick(){
   // Default: file picker
   var input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.json,application/json';
+  input.accept = '.json,application/json,.stl';
   input.style.display = 'none';
   input.onchange = function(e){
     if (e.target.files && e.target.files[0]){
-      ingestDesignFile(e.target.files[0]);
+      var f = e.target.files[0];
+      /* an STL goes to the import dialog (61-import-stl.js) */
+      if (/\.stl$/i.test(f.name) && typeof openImportDialog === 'function') openImportDialog(f);
+      else ingestDesignFile(f);
     }
     document.body.removeChild(input);
   };
@@ -189,6 +193,8 @@ function ingestDesignFile(file){
   reader.onload = function(ev){
     try {
       var json = JSON.parse(ev.target.result);
+      /* saved imported STL cell (grid embedded) — async path in 61-import-stl.js */
+      if (typeof isImportDesignJson === 'function' && isImportDesignJson(json)){ ingestImportDesignJson(json, file.name); return; }
       var design = normalizeDesignJson(json, file.name);
       LAB_STATE.designs.push(design);
       if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();

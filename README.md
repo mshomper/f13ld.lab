@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.8.2 · alpha · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.9.0 · alpha · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,16 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.9.0
+
+**Import a unit cell from any CAD program as an STL** (*+ Import STL*, drop an `.stl` on the page, or pick one in *+ Add Design*). The cell is turned once into a periodic signed-distance grid (128³, stored in the browser by content hash), and a new `import` kernel family samples it, so stiffness, crush, buckling, connectivity, density and the viewer all run on it unchanged.
+- **Import report before adding:** density, face match per axis (do opposite faces line up — is this one full period?), whether the solid spans the cell on each axis and how many networks it forms, thinnest wall with voxels at N = 32 / 64 / 128 and a recommended grid, and mesh health (open / non-manifold edges, watertight).
+- **Units and cell size:** mm or inch. *Fit to part* uses the bounding box; sides within 2 % of each other (typical CAD export) are accepted as a cube. *Set* takes a cell size and centers the part. Cells with unequal sides are refused for now.
+- **Wall offset slider** thickens or thins every wall evenly (live preview and density), also adjustable later from the card (⚙).
+- **Save with geometry** (⤓ on the card): a JSON with the grid embedded (~100–300 kB) that reloads anywhere through *+ Add Design*.
+- **Robust fill:** inside/outside is decided by scanlines along x, y and z with a majority vote, so small gaps and flipped triangles are tolerated; broken meshes are flagged.
+- Validated against native recipes meshed to STL: Schwarz P density / stiffness / buckling within 0.01 %; gyroid sheet density −0.1 %, stiffness −0.2 %, buckling −2.3 % (N = 32). See [`docs/STL_IMPORT_SCOPE.md`](./docs/STL_IMPORT_SCOPE.md).
 
 ## What's new in v0.8.2
 
@@ -207,7 +217,7 @@ Phase 4 takes the solver from Phase 3's normal-only 3×3 to the full Voigt 6×6 
 
 ## Architecture summary
 
-Static HTML/CSS/JS. No backend. No build step. WebGPU compute off the main thread, WebGL2 raymarching for visualization, and a CPU Web Worker pool for linear buckling (one axis per worker). Geometry generated from vault parameters at lab-open time using ported family code from F13LD.sweep — no rasters stored anywhere in the suite.
+Static HTML/CSS/JS. No backend. No build step. WebGPU compute off the main thread, WebGL2 raymarching for visualization, and a CPU Web Worker pool for linear buckling (one axis per worker). Geometry generated from vault parameters at lab-open time using ported family code from F13LD.sweep. The one exception is an STL-imported cell, stored once as a 128³ signed-distance grid in the browser's IndexedDB (keyed by content hash) and embedded in its saved JSON.
 
 ## Development
 

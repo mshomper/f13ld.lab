@@ -1581,7 +1581,14 @@ LabRaymarcher.prototype.destroy = function() {
 function recipeForDesign(design) {
   if (!design) return null;
   /* Imported recipe takes priority — the user explicitly loaded this */
-  if (design.recipe) return design.recipe;
+  if (design.recipe) {
+    /* STL import: the grid loads from IndexedDB after page load.  Until it is
+       registered (or if it is gone) the card shows the SVG fallback and runs
+       skip this design. */
+    if (design.recipe.family === 'import' &&
+        !(typeof importGridReady === 'function' && importGridReady(design.recipe))) return null;
+    return design.recipe;
+  }
 
   /* Imports without a recipe go straight to SVG fallback (don't
      mislead the user with a demo recipe pretending to be their import). */

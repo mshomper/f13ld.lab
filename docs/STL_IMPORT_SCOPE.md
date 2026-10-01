@@ -1,6 +1,6 @@
 # F13LD.lab — STL Unit-Cell Import (Scope)
 
-**Status:** Approved 2026-09-30; in progress on branch `stl-import`. Decisions are recorded in §6.
+**Status:** Implemented as v0.9.0 on branch `stl-import` (2026-09-30). Decisions in §6, what was built in §7, validation results in §8.
 **Written against:** v0.8.2 (main `a7eb5b4`), 2026-09-30
 **Goal:** Let a user import a unit cell from any CAD program as an STL, and run every lab solver on it (stiffness, crush, buckling) exactly as on a native F13LD recipe.
 **Out of scope:** Whole parts and non-repeating specimens. Those need a different test setup (platens and loaded faces), not an import.
@@ -141,3 +141,52 @@ This can run in parallel with the buckling speed work (Sprint B2); the two don't
 - **Exports embed the geometry**, so a shared file reloads anywhere.
 - **Face match only warns**, never blocks. Cells below the green band are tagged "not periodic" on their card.
 - **Test files:** generated STLs meshed from native recipes for the exact comparisons; Matt supplies a few real CAD STLs for the final check.
+
+---
+
+## 7. As built (v0.9.0)
+
+| File | Role |
+|---|---|
+| `13c-import-kernel.js` | `IMPORT_GRIDS` registry, `ImportKernel` (`KERNELS.import`), periodic trilinear sampling, `importGridMessage` for workers |
+| `14c-stl-import.js` | STL parse, mesh health, cell mapping, three-axis scanline fill with majority vote, face match, periodic exact distance transform (256³), thinnest wall, 128³ master grid; runs in a Blob worker |
+| `61-import-stl.js` | Dialog, report card, preview, wall offset slider, IndexedDB store (`f13ld.lab.imports` / `grids`), hydration on load, card pills and buttons, export / re-import with the grid embedded, page-level STL drop |
+| `16e-buckling-cpu-worker.js` | Loads 13c; each job for an import design carries the grid (≈2 MB copy); the worker registers it by hash |
+| `21-raymarcher.js` | `recipeForDesign` returns null for an import whose grid isn't loaded (SVG fallback, runs skip it) |
+| `40-design-grid.js` | Import pills (geometry missing / not periodic / walls ±) and ⚙ ⤓ buttons |
+| `60-add-design.js` | `.stl` accepted in the Add Design picker; saved import JSON routed to the async loader |
+| `99-init.js` | Restores imported grids from IndexedDB after the first render |
+
+Details that differ from the plan above:
+- **Sign:** stored distance is negative inside (the lab's solid mode keeps field < offset). The wall offset is the existing solid-mode `offset`, in field units (`offset = mm × 2π / cell`).
+- **Near-cubic cells:** in *fit* mode each axis of the bounding box is mapped to the full cell, so a cell exported 1 % short on one side still meets its periodic neighbor (a gap would have cut every strut crossing that face). The stretch is shown in the report.
+- **Face match** compares slices two fine voxels in from each face (spacing 3 across the face) against the same spacing inside, so sub-voxel trimming artifacts (~20 µm on a 5 mm cell) don't flag a good cell.
+- **Thinnest wall** is the 5th percentile of 2·d_in − 0.5 over centers of maximal inscribed balls (voxels whose inside distance is at least that of all 26 neighbours, ≥ 2 voxels deep). Simpler ridge tests picked up convex surfaces, the voxel staircase and the diagonal medial sheets at strut junctions. On the wall offset slider it is shifted by 2 × offset (approximate).
+- **Storage:** 8-bit grid, clamp ±0.8 field units (13 % of the cell), step ≈ 1/8 of a master voxel. Content hash = SHA-256 of the bytes plus n and R (FNV fallback outside secure contexts). Saved JSON gzips the grid (`CompressionStream`): ~100 kB for a strut lattice, a few hundred kB for TPMS.
+- The record in localStorage carries only the hash, settings and a report summary; the recipe carries only `import.hash`.
+
+Not done in v1 (candidates for later):
+- `?r=` URL loading of a saved import JSON (file and paste work).
+- Pruning old grids from IndexedDB (they are small; nothing deletes them).
+- Changing units or cell size after import needs the STL again (it isn't kept).
+- The spectral-era "N64 · PRONE" predictor pill also appears on imported cards; the FE grid rule in NEXT_STEPS replaces it.
+
+## 8. Validation (2026-09-30)
+
+Test STLs were meshed from native lab geometries (marching cubes, 160 nodes per cell) with `proto/stl-import/genstl.py`; `proto/stl-import/run_tests.js` reruns everything below.
+
+| Test | Result | Pass |
+|---|---|---|
+| Schwarz P (444k triangles) vs native, N = 64 | density +0.01 %, 0.09 % of voxels differ; Ex, Ez, Gxy within 0.01 % (CPU reference); buckling zz identical at N = 32 (5,952 MPa) | Yes |
+| Gyroid sheet t = 0.3 vs native | density −0.14 %; Ex −0.21 %, Gxy −0.17 % (N = 64); buckling −2.3 % (N = 32) | Yes |
+| Simple-cubic strut lattice, r = 0.12 cell | Ez/Es 0.0473 vs strut area fraction πr² = 0.0452 (+5 % from the nodes), Gxy/Es 0.0014 (bending-dominated); thinnest wall 1.16 mm vs 1.20 mm drawn (mesh facets) | Yes |
+| Cell cut off-period (80 % of a period) | face match 65.6 % on every axis → red, card tagged "not periodic" | Yes |
+| 0.25 % of triangles removed | 3,331 open edges reported, not watertight; fill agreement 98 %; density unchanged (0.4998) | Yes |
+| Same cell in inches, and moved off the origin | identical density, face match and walls | Yes |
+| Two interwoven strut networks | 2 networks, both span x, y and z; per-network FE buckling ran through the browser worker pool | Yes |
+| One side 1 % long | accepted, stretched 0.99 %, identical density | Yes |
+| One side 3 % long | refused with the sizes shown; *set* cell size then works (part centered) | Yes |
+| 1.1M triangles | 10.6 s in a worker (node timing; distance transform ≈ 6.8 s of it) | About at target |
+| Browser: import → preview → slider → add → reload → adjust → save JSON → reload JSON | all work; grid restored from IndexedDB after reload; saved JSON 107 kB | Yes |
+| GPU elastic run on an imported cell | not verifiable headless (SwiftShader doesn't finish any elastic run, native demos included); the GPU path builds voxels through the same `buildVoxels` | Click-test |
+
