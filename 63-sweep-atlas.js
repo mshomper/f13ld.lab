@@ -243,7 +243,7 @@ function openSweepAtlas() {
   ov.id = 'atOverlay'; ov.className = 'imp-overlay at-overlay';
   ov.innerHTML =
     '<div class="at-page" role="dialog" aria-label="Sweep Atlas">' +
-      '<header class="at-top"><div><div class="at-title">Sweep Atlas <span class="at-ver">' + swEsc(SWEEP_STATE.name || '') + '</span></div>' +
+      '<header class="at-top"><div><div class="at-title">Sweep Atlas <span class="at-ver">' + swEsc(typeof sweepTitle === 'function' ? sweepTitle() : (SWEEP_STATE.name || '')) + '</span></div>' +
         '<div class="at-meta" id="atMeta"></div></div>' +
         '<button class="dc-icon-btn" title="Close" onclick="closeSweepAtlas()">×</button></header>' +
       '<div class="at-controls" id="atControls"></div>' +
