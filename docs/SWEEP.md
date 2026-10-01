@@ -187,3 +187,20 @@ Same matrix, void 1e-6 throughout, second grid one coarser (order 2). 40 of 41 s
 - **Iterations:** median +1.6 %; contact lattices rose more (G3 +48 %, hitting the 300 cap on yy at residual 1.003e-4; B5 +20 %; B10 +14 %). The main solves were no slower (N = 128 median 17.1 s vs 19.0 s).
 - Full tables: the analysis report kept with the session (`void_1e-6_report.md`).
 
+## 8. Matched-feature comparison on measured geometry (Matt, 2026-10-01)
+
+Decision: compare at the feature size the lab actually builds, not the prescribed wall ratio. The sheet (C4) and skeletal (D7) baselines stay as given in the matrix; physical differences go in a comparison note in the paper.
+
+**Matched PI run: A4m, wall ratio 0.1364** (pipe radius 0.0682 T), solid 11.63 % at N = 64. Its narrowest tube width is 0.126 T on the continuous field, matching the 0.126 T thinnest feature the matrix gives C4 and D7. A4 (wall ratio 0.126) builds 0.117–0.120 T.
+
+| Run | Setting | Solid % (N = 64) | Narrowest tube width, continuous field: min / median / max | Voxel thinnest (5th pct, N = 256) | Voxel median (N = 256) | Matrix says |
+|---|---|---|---|---|---|---|
+| A4 | PI wall ratio 0.126 | 10.29 | 0.117 / 0.118 / 0.120 T | 0.113 T | 0.119 T | thinnest 0.126 T |
+| **A4m** | PI wall ratio 0.1364 | 11.63 | 0.124 / **0.126** / 0.129 T | 0.122 T | 0.127 T | — |
+| C4 | sheet, c = 0.6453 | 42.03 | — | 0.124 T | 0.146 T | thinnest 0.126 T, mean wall 0.14 T |
+| D7 | skeletal, c = 1.2786 | 6.92 | — | 0.130 T | 0.151 T | thinnest neck 0.126 T, median strut 0.138 T |
+
+**Methods.** *Continuous field* (PI only): 60 tube-axis points (local minima of the PI distance), at each the narrowest of 600 chords through the point, step 0.001 T, same field formula as the lab and F13LD.tpms. Bisection on wall ratio for a median of 0.126 T gave 0.1364 (the 5th percentile is 0.126 T as well). *Voxel*: the lab's thinnest-feature measure (maximal inscribed balls of the periodic distance transform, 2√d + 0.5), at N = 256 for resolution, after island trim. The two disagree for PI: voxel bisection to 0.126 T would give wall ratio 0.143. The likely cause is that a flattened tube's medial axis widens into a ribbon whose edge balls are smaller than the tube's true minor width, pulling the voxel 5th percentile ~3–4 % low; the continuous chord measures the minor width directly, so it sets A4m. For skeletal struts the voxel median includes node balls and reads high. Under the one voxel measure the trio reads C4 0.124, D7 0.130, A4m 0.122 T — within about ±4 % of 0.126 T, which is the size of difference to state in the comparison note.
+
+**To run:** `PI-TPMS_section5_matched_feature.csv` (A4, A4m, C4, D7; same columns as the §5 matrix). Loading it replaces the current sweep in the browser, so export the 41-run results first (the panel asks).
+
