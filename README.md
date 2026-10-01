@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.9.1 · alpha · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.10.0 · alpha · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** All rights reserved · License under review
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,10 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.10.0
+
+**Parameter sweep** (⟳ Sweep). Run a list of elastic homogenizations and export the stiffness of each: the 21 upper-triangle terms ÷ solid modulus, Ex…Gxy, solid fraction before and after island trim, iterations, final residual and wall time. Make the list from a run-matrix CSV (surface, PI / sheet / skeletal mode, shift, wall ratio or level, grid, Poisson's ratio, optional expected solid fraction and reference stiffness) or by sweeping one parameter of a loaded design (level, sheet thickness, PI wall ratio or shift, grain/noise level or half-width, wall offset of an imported STL cell). Precision toggle: CG tolerance 1e-4 or 1e-5. Results persist across reloads. See [`docs/SWEEP.md`](./docs/SWEEP.md).
 
 ## What's new in v0.9.1
 

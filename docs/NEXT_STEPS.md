@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.9.1 · 2026-09-30 · STL unit-cell import merged
+**As of:** v0.10.0 · 2026-10-01 · parameter sweep on branch `sweep` (STL import merged)
 **Full history of the last session:** [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md)
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -16,10 +16,18 @@
 | **v0.8.1** | Nonlinear crush: mean-strain reset (root cause), inexact Newton, early stop, predictor, GPU-resident CG, batched real-pair FFT, cached bind groups |
 | **v0.8.2** | PI / shell normalization kept on import (older recipes default OFF); normalized PI and shell rendering in the viewer; connectivity selector (all networks / largest / keep everything); per-network FE buckling |
 | **v0.9.0 / v0.9.1** | STL unit-cell import: periodic signed-distance grid, `import` kernel, report card, wall offset, IndexedDB store, export with embedded grid. See `STL_IMPORT_SCOPE.md` §7–8 |
+| **v0.10.0** (branch `sweep`) | Parameter sweep: run-matrix CSV or one-parameter sweep of a loaded design → elastic stiffness per run, CSV export. Solver records final residual and takes a per-call tolerance. See `SWEEP.md` |
 
 ---
 
-## 1. CURRENT FOCUS — STL unit-cell import
+## 1. CURRENT FOCUS — PI-TPMS paper sweep (v0.10.0)
+
+Matt's PI-TPMS Paper 1, Section 5: a 41-run matrix (sets A–G: PI-gyroid scaling, junction type / anisotropy, sheet and skeletal gyroid baselines, Poisson check, grid convergence, Fischer–Koch resolution) run through the new Sweep panel. See [`SWEEP.md`](SWEEP.md).
+
+- **Decisions (Matt, 2026-10-01):** keep the lab's island trim (faithful to how cells are built physically) and report trim differences as notes; precision is a toggle (1e-4 / 1e-5); check A6 at N = 128 before changing the solver.
+- **Open accuracy question:** A6 at N = 64 is 7–11 % below Vixiv's stiffness at matching density. N = 128 result in `SWEEP.md` §4. If the gap is resolution, the fix is partial-volume voxels (queued below).
+
+## 1b. STL unit-cell import (done, v0.9.0–v0.9.1)
 
 Matt redirected the 2026-09-30 evening session from buckling speed to STL import. Full scope, data path and test plan: [`STL_IMPORT_SCOPE.md`](STL_IMPORT_SCOPE.md). Work is on branch `stl-import`.
 

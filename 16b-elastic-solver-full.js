@@ -1246,9 +1246,14 @@ ElasticSolverFull.prototype.solveLoadCaseFull = async function(eps_bar, opts) {
   var iters = 0;
   var converged = false;
   var breakReason = 'max_iter';
+  /* v0.10.0 sweep — per-call tolerance / iteration cap (defaults unchanged)
+     and the final relative residual, recorded for the run log. */
+  var cgTol = this.cgTol || CG_TOL_FULL;
+  var cgMaxit = this.cgMaxiter || CG_MAXITER_FULL;
+  var finalResidual = Math.sqrt(rr) / bNorm;
 
   /* 3. CG loop */
-  for (var it = 0; it < CG_MAXITER_FULL; it++) {
+  for (var it = 0; it < cgMaxit; it++) {
     iters = it + 1;
 
     var encA = d.createCommandEncoder();
@@ -1275,7 +1280,8 @@ ElasticSolverFull.prototype.solveLoadCaseFull = async function(eps_bar, opts) {
 
     var rrNew = await this._dotPair(this.r, this.r);
     var relRes = Math.sqrt(rrNew) / bNorm;
-    if (relRes < CG_TOL_FULL) {
+    finalResidual = relRes;
+    if (relRes < cgTol) {
       converged = true;
       breakReason = 'converged';
       break;
@@ -1324,7 +1330,7 @@ ElasticSolverFull.prototype.solveLoadCaseFull = async function(eps_bar, opts) {
       : await this.extractStressOnlyForLCFull(sigArr_6);
   }
 
-  return { sigma: sigma, iters: iters, converged: converged, breakReason: breakReason, fields: fields };
+  return { sigma: sigma, iters: iters, converged: converged, breakReason: breakReason, fields: fields, finalResidual: finalResidual };
 };
 
 
@@ -1379,7 +1385,8 @@ ElasticSolverFull.prototype.homogenizeFull = async function(opts) {
       axis:        voigtLabels[lc],
       iters:       res.iters,
       converged:   res.converged,
-      breakReason: res.breakReason
+      breakReason: res.breakReason,
+      finalResidual: res.finalResidual
     });
   }
 
@@ -1547,6 +1554,8 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var t0 = performance.now();
   var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt,
                           args.nWeights, args.pipeR, args.phaseShift);
+  var insideRaw = 0;   /* v0.10.0 sweep — solid fraction before island trim */
+  for (var vr = 0; vr < solid.length; vr++) insideRaw += solid[vr];
   /* Connectivity gate — keep only the largest periodic solid component so
      floating islands don't seed spurious modes (default-on from the run). */
   if (opts.pruneLargest && typeof pruneVoxels === 'function') {
@@ -1616,6 +1625,8 @@ async function solveDesignElasticFull(recipe, N, opts) {
     window.__sharedFFTBatched = fft;
   }
   var solver = new ElasticSolverFull(N, fft);
+  if (opts.cgTol) solver.cgTol = opts.cgTol;           /* v0.10.0 sweep precision toggle */
+  if (opts.cgMaxiter) solver.cgMaxiter = opts.cgMaxiter;
   solver.uploadDesign(solid, Gamma, C_s, C_v, C_0);
 
   var t2 = performance.now();
@@ -1722,6 +1733,8 @@ async function solveDesignElasticFull(recipe, N, opts) {
     Ex_MPa:   Ex,  Ey_MPa:  Ey,  Ez_MPa:  Ez,
     Gxy_MPa:  Gxy, Gxz_MPa: Gxz, Gyz_MPa: Gyz,
     nu_xy:    nu_xy, nu_xz: nu_xz, nu_yz: nu_yz,
+    rho_raw:  insideRaw / solid.length,   /* before island trim */
+    cgTol:    opts.cgTol || CG_TOL_FULL,
     C_eff:    Array.from(C_phys),
     S:        Array.from(S_phys),
     zenerA:   zenerA,

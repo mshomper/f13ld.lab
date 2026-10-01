@@ -40,9 +40,10 @@
     <div class="fh-right">
       <button class="fh-action-btn ghost" id="addDesignBtn" onclick="onAddDesignClick()">+ Add Design</button>
       <button class="fh-action-btn ghost" id="importStlBtn" onclick="openImportDialog()" title="Import a unit cell from any CAD program as an STL">+ Import STL</button>
+      <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.9.1</span>
+      <span class="fh-version">v0.10.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -208,6 +209,7 @@
 <script src="50-controls.js"></script>
 <script src="60-add-design.js"></script>
 <script src="61-import-stl.js"></script>
+<script src="62-sweep.js"></script>
 <script src="99-init.js"></script>
 
 </body>

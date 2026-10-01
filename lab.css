@@ -760,3 +760,30 @@ html, body {
 .imp-key { display:inline-block; width:9px; height:9px; border-radius:2px; vertical-align:middle; margin-right:4px; }
 .imp-key.a { background:#1D9E75; } .imp-key.b { background:#7F77DD; } .imp-key.ab { background:#e1e1eb; }
 @media (max-width:640px){ .imp-faceview { margin-left:0; flex-direction:column; } }
+
+/* ============ PARAMETER SWEEP (62-sweep.js) ============ */
+.sw-dialog { width:min(1240px, 100%); }
+.sw-source { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2fr); gap:12px; }
+.sw-box { border:0.5px solid var(--line); border-radius:8px; padding:10px 12px; display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
+.sw-box-t { font-size:11px; text-transform:uppercase; letter-spacing:0.1em; color:var(--ink-head); }
+.sw-box .imp-settings { gap:10px; }
+.sw-box .imp-settings input { width:84px; }
+.sw-bar { display:flex; flex-direction:column; gap:6px; font-size:12px; }
+.sw-bar-row { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
+.sw-bar-row select { background:var(--panel-3); color:var(--ink); border:0.5px solid var(--line); border-radius:6px; padding:3px 6px; font-family:inherit; font-size:12px; }
+.sw-bar a { color:var(--lab); }
+.sw-spacer { flex:1; }
+.sw-table-wrap { max-height:46vh; overflow:auto; border:0.5px solid var(--line); border-radius:8px; }
+.sw-table { width:100%; border-collapse:collapse; font-family:'IBM Plex Mono','JetBrains Mono',monospace; font-size:11px; }
+.sw-table th { position:sticky; top:0; background:var(--panel-2); color:var(--ink-head); font-weight:500; text-align:right; padding:5px 7px; border-bottom:0.5px solid var(--line); white-space:nowrap; }
+.sw-table td { text-align:right; padding:3px 7px; border-bottom:0.5px solid var(--line-soft); color:var(--ink-2); white-space:nowrap; }
+.sw-table td.id, .sw-table td.set, .sw-table th:nth-child(2), .sw-table th:nth-child(3) { text-align:left; }
+.sw-table td.set { max-width:380px; overflow:hidden; text-overflow:ellipsis; }
+.sw-table tr.done td { color:var(--ink); }
+.sw-table tr.cur td { background:var(--lab-soft); color:var(--lab); }
+.sw-table tr.err td.sw-err { color:var(--bad); text-align:left; white-space:normal; }
+.sw-table td.warn { color:var(--warn); }
+.sw-table sup { color:var(--warn); }
+.sw-notes .imp-warn { max-height:16vh; overflow:auto; }
+.fh-action-btn.sw-running { color:var(--lab); border-color:var(--lab); }
+@media (max-width:760px){ .sw-source { grid-template-columns:1fr; } }

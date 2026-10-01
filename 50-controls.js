@@ -297,6 +297,10 @@ function setDesignCount(text){
    Real solver pipeline lands in Phases 3–6.
    ============================================================ */
 function onRunClick(){
+  if (typeof SWEEP_STATE !== 'undefined' && SWEEP_STATE.running){
+    alert('A parameter sweep is running. Stop it from the Sweep panel first.');
+    return;
+  }
   if (RUN_STATE.running){
     cancelRun();
     return;
