@@ -118,3 +118,15 @@ Gradient-normalized PI-TPMS tubes are round when thin but narrower than the nomi
 
 The normalized distance is a first-order estimate (φ/|∇φ| and the angle between the surfaces at the point), so tubes flatten as the radius approaches the surfaces' curvature radius. F13LD.tpms uses the same formula, so this is the geometry both tools build — relevant wherever a paper quotes the thinnest feature of a PI structure from its wall ratio (e.g. the matched-feature comparison at 0.126 T: A4's narrowest width is 0.118 T).
 
+
+## 6. First full run of the §5 matrix (Matt, GPU, 2026-10-01) — solver findings
+
+All 41 runs converged (CG 1e-4, island trim on; it removed nothing). Whole matrix: 300 s; N = 128 runs ~19 s each.
+
+- **GPU = CPU reference.** A6 at N = 64: GPU Ex / Ey / Ez 1.4564e-2 / 1.5051e-2 / 3.7866e-3, CPU 1.456e-2 / 1.506e-2 / 3.791e-3.
+- **Void stiffness (1e-4 × E_s) inflates low-density runs.** A1–A3 read 1.0–1.4e-4 above Vixiv on every axis — a constant offset the size of the void stiffness — and B7's unloaded axes sit at ~1.9e-4. Test, A3 at N = 64 (CPU reference): void 1e-4 → 1e-6 drops Ex 1.115e-3 → 0.919e-3 (−18 %), Ey −22 %, Ez 3.43e-4 → 2.18e-4 (−36 %), with the same iteration count (326 vs 330). A3's apparent +6 % agreement with Vixiv at N = 128 is the void stiffening cancelling the stair-step softening. The offset matters wherever E is within ~100× of the void value (roughly under 20 % solid for these PI lattices).
+- **Grid convergence (F set).** A5 PI at N = 32 / 64 / 128: observed order ≈ 1.9–2.0 for Ex and Ey; extrapolated Ex 4.570e-3, Ey 4.622e-3 vs Vixiv 4.579e-3, 4.625e-3 (−0.2 %, −0.1 %). Ez order ≈ 1.4, extrapolated +10 % above Vixiv (N = 128 alone is +5 %). C3 sheet: order ≈ 1.2, N = 128 is 1.6 % below the extrapolated 0.1271. (N = 32 is under-resolved, so the observed orders are indicative.)
+- **Directional checks.** B3: E across [111] identical in every direction (spread < 0.01 %), 7.4× stiffer than along [111] (E[111] 1.18e-3; Vixiv ~8×, 0.0012). B9: within 2.4 % around [111] at every tilt (criterion 3 %), axis 4.27e-2, transverse 4.07e-2. B10: 19.6× stiffer along [111] than across (Vixiv ~23×). A-set and B1: Ez/Ex 0.23–0.29.
+- **B8 vs B4:** B4 is 11.7× stiffer than B8 in their stiff directions (Vixiv 16.7×).
+- **Fischer–Koch jump (G set) is a topology change.** Euler characteristic of the voxel solid at N = 128, (0, ⅛, ½): loops per cell 25 (wall ratio 0.15–0.16) → 33 (0.17) → 41 (0.175–0.19) → 57 (0.20–0.21). New tube-to-tube contacts form between 0.16 and 0.175 and again between 0.19 and 0.20. At fixed grid the lab's Ez rises 7× and Ey 2× from 0.17 to 0.19. G1 (0.17) sits mid-transition, which is why it disagrees most with Vixiv (Ez 0.46×): stiffness at a contact onset is very sensitive to resolution.
+- **Open: B6 (⅛, ¼, ⅜).** Ey matches Vixiv (+4 %), but the lab finds Ex = Ez = 3.5e-4 where Vixiv reports ~0. The voxel solid is one network spanning x, y and z at N = 64 and 128, with constant topology from wall ratio 0.11 to 0.15, so the x/z load path is in the lab's geometry, not a single-grid artifact.
