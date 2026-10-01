@@ -25,7 +25,7 @@
 Matt's PI-TPMS Paper 1, Section 5: a 41-run matrix (sets A–G: PI-gyroid scaling, junction type / anisotropy, sheet and skeletal gyroid baselines, Poisson check, grid convergence, Fischer–Koch resolution) run through the new Sweep panel. See [`SWEEP.md`](SWEEP.md).
 
 - **Decisions (Matt, 2026-10-01):** keep the lab's island trim (faithful to how cells are built physically) and report trim differences as notes; precision is a toggle (1e-4 / 1e-5); check A6 at N = 128 before changing the solver.
-- **Open accuracy question:** A6 at N = 64 is 7–11 % below Vixiv's stiffness at matching density. N = 128 result in `SWEEP.md` §4. If the gap is resolution, the fix is partial-volume voxels (queued below).
+- **Accuracy vs Vixiv (A6):** N = 64 is 7–11 % low, N = 128 is 2–5 % low, first-order extrapolation lands within ~3 %. The gap is voxel resolution (stair-stepped tubes), not solver bias. Next decision for Matt: run the matrix at N = 128, extrapolate from N = 64 + 128 pairs, or add partial-volume voxels first (`SWEEP.md` §4).
 
 ## 1b. STL unit-cell import (done, v0.9.0–v0.9.1)
 

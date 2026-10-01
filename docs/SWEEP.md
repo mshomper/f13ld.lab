@@ -77,4 +77,9 @@ A6 — PI-gyroid (0, ⅛, ½), wall ratio 0.19, 19.83 % solid (no islands), ν =
 |---|---|---|---|---|
 | Vixiv | 1.637e-2 | 1.647e-2 | 4.066e-3 | — |
 | N = 64 (12 voxels across the tube) | 1.456e-2 | 1.506e-2 | 3.791e-3 | −11 % / −9 % / −7 % |
-| N = 128 | *pending* | | | |
+| N = 128 (24 voxels across the tube) | 1.556e-2 | 1.575e-2 | 3.985e-3 | −4.9 % / −4.4 % / −2.0 % |
+| Extrapolated (2 × N128 − N64) | 1.656e-2 | 1.644e-2 | 4.179e-3 | +1.2 % / −0.2 % / +2.8 % |
+
+Doubling the grid roughly halves the gap, which is the first-order convergence expected from a stair-stepped voxel surface, and the extrapolated values land within ~3 % of Vixiv. So the gap is resolution, not a solver bias: lab stiffness approaches Vixiv's from below as the tube gets more voxels. The extrapolation assumes first-order convergence (two grids can't confirm the order). Solver record at N = 128: 329 CG iterations over six load cases (34–81 each), 2,539 s on the CPU reference; the GPU solve is much faster.
+
+Consequence for the §5 matrix: runs at N = 64 with 8–13 voxels across the thinnest feature will read roughly 5–12 % low, runs at N = 128 roughly 2–5 % low. Partial-volume voxels (queued) should cut this error at a given grid.
