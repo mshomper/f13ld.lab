@@ -32,7 +32,10 @@ var VOIGT = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
 var SWEEP_STATE = {
   open: false, running: false, stopRequested: false,
   name: '', source: null,          /* 'csv' | 'builder' */
-  runs: [],                        /* run definitions (see sweepRunFromCsvRow / sweepBuildRuns) */
+  runs: [],                        /* run definitions (sweepRunFromCsvRow / sweepRunsFromCombos) */
+  bases: {},                       /* builder sweeps: base recipe(s) the runs modify */
+  axes: null,                      /* builder sweeps: [{key,label,unit,values,byVf}] for maps */
+  review: null,                    /* builder review in progress (not saved) */
   results: {},                     /* run_id → result record */
   selected: {},                    /* run_id → bool */
   precision: 'standard',
@@ -46,30 +49,70 @@ var SWEEP_STATE = {
 };
 
 /* ── Persistence ──────────────────────────────────────────── */
-function sweepSave() {
-  try {
-    localStorage.setItem(SWEEP_STORE_KEY, JSON.stringify({
-      v: 1, name: SWEEP_STATE.name, source: SWEEP_STATE.source, runs: SWEEP_STATE.runs,
-      results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
-      preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder,
-      voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order
-    }));
-  } catch (e) { console.warn('[sweep] not saved (storage full or blocked):', e); }
+/* Saved in IndexedDB ('f13ld.lab.sweep' / 'state' / key 'current') so big
+   sweeps aren't capped by localStorage's ~5 MB; writes are coalesced.
+   Older sweeps saved in localStorage are read once and moved over. */
+var _swDbP = null, _swSaveT = 0;
+function sweepDb() {
+  if (_swDbP) return _swDbP;
+  _swDbP = new Promise(function (resolve, reject) {
+    if (typeof indexedDB === 'undefined') { reject(new Error('IndexedDB unavailable')); return; }
+    var req = indexedDB.open('f13ld.lab.sweep', 1);
+    req.onupgradeneeded = function () { req.result.createObjectStore('state'); };
+    req.onsuccess = function () { resolve(req.result); };
+    req.onerror = function () { reject(req.error); };
+  });
+  _swDbP.catch(function () { _swDbP = null; });
+  return _swDbP;
 }
+function sweepSnapshot() {
+  return { v: 2, name: SWEEP_STATE.name, source: SWEEP_STATE.source, runs: SWEEP_STATE.runs, bases: SWEEP_STATE.bases, axes: SWEEP_STATE.axes,
+    results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
+    preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder,
+    voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order, timing: SWEEP_STATE.timing };
+}
+function sweepSave() {
+  if (_swSaveT) return;
+  _swSaveT = setTimeout(function () {
+    _swSaveT = 0;
+    var snap = sweepSnapshot();
+    sweepDb().then(function (db) {
+      var tx = db.transaction('state', 'readwrite');
+      tx.objectStore('state').put(snap, 'current');
+    }).catch(function (e) {
+      try { localStorage.setItem(SWEEP_STORE_KEY, JSON.stringify(snap)); } catch (e2) { console.warn('[sweep] not saved:', e2); }
+    });
+  }, 250);
+}
+function sweepApplySaved(p) {
+  if (!p || !Array.isArray(p.runs)) return false;
+  SWEEP_STATE.name = p.name || ''; SWEEP_STATE.source = p.source || null;
+  SWEEP_STATE.runs = p.runs; SWEEP_STATE.results = p.results || {};
+  SWEEP_STATE.bases = p.bases || {}; SWEEP_STATE.axes = p.axes || null;
+  SWEEP_STATE.selected = p.selected || {}; SWEEP_STATE.precision = p.precision || 'standard';
+  SWEEP_STATE.preview = p.preview || {};
+  SWEEP_STATE.builder = p.builder || {};
+  if (p.voidRatio > 0) SWEEP_STATE.voidRatio = p.voidRatio;
+  SWEEP_STATE.refine = p.refine || 'off'; SWEEP_STATE.order = p.order || 2;
+  SWEEP_STATE.timing = p.timing || SWEEP_STATE.timing || {};
+  return true;
+}
+var SWEEP_LOADED = null;
 function sweepLoad() {
-  try {
-    var raw = localStorage.getItem(SWEEP_STORE_KEY);
-    if (!raw) return;
-    var p = JSON.parse(raw);
-    if (!p || p.v !== 1 || !Array.isArray(p.runs)) return;
-    SWEEP_STATE.name = p.name || ''; SWEEP_STATE.source = p.source || null;
-    SWEEP_STATE.runs = p.runs; SWEEP_STATE.results = p.results || {};
-    SWEEP_STATE.selected = p.selected || {}; SWEEP_STATE.precision = p.precision || 'standard';
-    SWEEP_STATE.preview = p.preview || {};
-    SWEEP_STATE.builder = p.builder || {};
-    if (p.voidRatio > 0) SWEEP_STATE.voidRatio = p.voidRatio;
-    SWEEP_STATE.refine = p.refine || 'off'; SWEEP_STATE.order = p.order || 2;
-  } catch (e) {}
+  var legacy = null;
+  try { var raw = localStorage.getItem(SWEEP_STORE_KEY); if (raw) legacy = JSON.parse(raw); } catch (e) {}
+  SWEEP_LOADED = sweepDb().then(function (db) {
+    return new Promise(function (resolve) {
+      var req = db.transaction('state', 'readonly').objectStore('state').get('current');
+      req.onsuccess = function () { resolve(req.result || null); };
+      req.onerror = function () { resolve(null); };
+    });
+  }).catch(function () { return null; }).then(function (saved) {
+    if (saved) sweepApplySaved(saved);
+    else if (legacy && sweepApplySaved(legacy)) { sweepSave(); }
+    try { localStorage.removeItem(SWEEP_STORE_KEY); } catch (e) {}
+    if (SWEEP_STATE.open) { sweepRenderBuilder(); sweepRender(); }
+  });
 }
 
 /* ── Geometry helpers ─────────────────────────────────────── */
@@ -186,52 +229,7 @@ function sweepLoadCsvText(text, name) {
   return { runs: runs, errors: errs, name: name };
 }
 
-/* ── Builder: parameters per family / mode ────────────────── */
-function sweepParamsFor(recipe) {
-  var g = recipe.geometry || {}, fam = recipe.family, mode = g.mode || 'solid', out = [];
-  function geo(key, label, unit, def) {
-    out.push({ key: key, label: label, unit: unit || '',
-      get: function (r) { var v = (r.geometry || {})[key]; return v != null ? v : def; },
-      set: function (r, v) { r.geometry = r.geometry || {}; r.geometry[key] = v; } });
-  }
-  if (fam === 'import') {
-    var cell = g.cellSizeMm || 5;
-    out.push({ key: 'wallOffsetMm', label: 'Wall offset', unit: 'mm',
-      get: function (r) { return (r.geometry && r.geometry.wallOffsetMm) || 0; },
-      set: function (r, v) { r.geometry.wallOffsetMm = v; r.geometry.offset = v * 2 * Math.PI / cell; } });
-    return out;
-  }
-  if (fam === 'tpms') {
-    if (mode === 'pi-tpms') {
-      out.push({ key: 'wall_ratio', label: 'Wall ratio (tube diameter ÷ cell)', unit: '',
-        get: function (r) { return (r.geometry.pipeR != null ? r.geometry.pipeR : 0.1) / Math.PI; },
-        set: function (r, v) { r.geometry.pipeR = v * Math.PI; } });
-      ['x', 'y', 'z'].forEach(function (a) {
-        out.push({ key: 'shift_' + a, label: 'Shift ' + a + ' (cycles)', unit: '',
-          get: function (r) { return ((r.geometry.phaseShift || {})[a]) || 0; },
-          set: function (r, v) { r.geometry.phaseShift = r.geometry.phaseShift || { x: 0, y: 0, z: 0 }; r.geometry.phaseShift[a] = v; } });
-      });
-    } else if (mode === 'shell') {
-      geo('wallThickness', 'Sheet half-thickness (level c)', '', 0.3);
-      geo('offset', 'Level offset', '', 0);
-    } else {
-      geo('offset', 'Level (solid where field < level)', '', 0);
-    }
-    return out;
-  }
-  if (fam === 'grain') { geo('center', 'Level', '', 0); geo('half_width', 'Half-width', '', 0.15); return out; }
-  if (fam === 'noise') {
-    function surf(key, label, def) {
-      out.push({ key: key, label: label, unit: '',
-        get: function (r) { var v = (r.surface || {})[key]; return v != null ? v : def; },
-        set: function (r, v) { r.surface = r.surface || {}; r.surface[key] = v; } });
-    }
-    surf('center', 'Level', 0); surf('half_width', 'Half-width', 0.15);
-    return out;
-  }
-  return out;
-}
-
+/* ── Builder runs (v0.11.0) ───────────────────────────────── */
 /* Recipe the solver would use for a loaded design (demo designs resolve
    through recipeForDesign; imported ones carry their own). */
 function sweepRecipeOf(d) {
@@ -239,23 +237,61 @@ function sweepRecipeOf(d) {
   return r || null;
 }
 
-function sweepBuildRuns(design, paramKey, from, to, steps, N, nu, prefix) {
-  var base = sweepClone(sweepRecipeOf(design));
-  var p = sweepParamsFor(base).filter(function (x) { return x.key === paramKey; })[0];
-  if (!p) throw new Error('that parameter does not apply to this design');
-  steps = Math.max(1, Math.min(200, steps | 0));
-  var runs = [];
-  for (var i = 0; i < steps; i++) {
-    var v = steps === 1 ? from : from + (to - from) * i / (steps - 1);
-    v = +v.toPrecision(10);
-    var r = sweepClone(base);
-    p.set(r, v);
-    var id = prefix + String(i + 1).padStart(2, '0');
-    r.name = id;
-    runs.push({ id: id, tier: '', set: design.title, purpose: p.label + ' = ' + v, note: '',
-      label: design.title, shift: '', N: N, nu: nu,
-      param: { name: p.key, value: v }, expectedVf: null, ref: null, recipe: r });
+/* Builder runs keep one base recipe per sweep (SWEEP_STATE.bases) plus the
+   values written into it, so a large sweep of a large recipe (a beam with
+   hundreds of struts) stays small.  CSV runs carry their own recipe. */
+function sweepRecipeForRun(run) {
+  if (run.recipe) return run.recipe;
+  var base = SWEEP_STATE.bases && SWEEP_STATE.bases[run.baseId];
+  if (!base) throw new Error('base design for ' + run.id + ' is missing');
+  var r = sweepClone(base);
+  (run.applied || []).forEach(function (a) { sweepSetPath(r, a.p, a.v); });
+  r.name = run.id;
+  return r;
+}
+
+/* Values typed as a list ("0, 1/8, 0.25") or a range (from, to, steps). */
+function sweepValues(spec) {
+  var list = String(spec.list || '').trim();
+  if (list) {
+    var vals = list.split(/[,;\s]+/).filter(Boolean).map(sweepFrac);
+    if (vals.some(function (v) { return !isFinite(v); })) throw new Error('the list "' + list + '" has a value that isn’t a number');
+    return vals;
   }
+  var from = parseFloat(spec.from), to = parseFloat(spec.to), steps = parseInt(spec.steps, 10);
+  if (!isFinite(from) || !isFinite(to) || !(steps >= 1)) throw new Error('enter a start, an end and a number of steps (or a list of values)');
+  steps = Math.min(steps, 1000);
+  var out = [];
+  for (var i = 0; i < steps; i++) out.push(+(steps === 1 ? from : from + (to - from) * i / (steps - 1)).toPrecision(10));
+  return out;
+}
+
+function sweepFmtVal(v) { return (v == null || !isFinite(v)) ? '—' : String(+(+v).toPrecision(4)); }
+
+/* Turn reviewed combinations into runs (skipped ones unticked). */
+function sweepRunsFromCombos(plan, combos) {
+  var runs = [], twoD = !!plan.spec2, w = String(Math.max(plan.n1, plan.n2 || 1)).length;
+  combos.forEach(function (c) {
+    if (c.unreachable) return;
+    var id = 'S' + String(c.i + 1).padStart(w, '0') + (twoD ? '-' + String(c.j + 1).padStart(w, '0') : '');
+    var r = sweepClone(plan.base), applied = [];
+    if (plan.spec2) sweepParamSet(r, plan.spec2, c.v2);
+    sweepParamSet(r, plan.spec1, c.v1);
+    [plan.spec1].concat(plan.spec2 ? [plan.spec2] : []).forEach(function (sp) {
+      sp.apply.forEach(function (ap) { applied.push({ p: ap.p, v: sweepGetPath(r, ap.p) }); });
+    });
+    var params = [{ key: plan.spec1.key, name: plan.spec1.label, unit: plan.spec1.unit, value: c.v1 }];
+    if (plan.spec2) params.push({ key: plan.spec2.key, name: plan.spec2.label, unit: plan.spec2.unit, value: c.v2 });
+    var purpose = params.map(function (p) { return p.name + ' = ' + sweepFmtVal(p.value) + (p.unit ? ' ' + p.unit : ''); }).join(', ');
+    if (c.target != null) purpose = 'target ' + (c.target * 100).toFixed(2) + ' % solid → ' + purpose;
+    runs.push({
+      id: id, tier: '', set: plan.title, purpose: purpose, note: '', label: plan.title, shift: '',
+      N: plan.N, nu: plan.nu, baseId: 'b0', applied: applied, grid: [c.i, c.j],
+      param: { name: plan.spec1.key, value: c.v1 }, params: params,
+      expectedVf: c.target != null ? +(c.target * 100).toFixed(4) : null, ref: null,
+      quick: c.stats ? { vf_trim: c.stats.vf_trim, spans: c.stats.spans, thinVox32: c.stats.thinVox } : null
+    });
+  });
   return runs;
 }
 
@@ -294,19 +330,37 @@ async function sweepSolveAt(recipe, N, prec, conn) {
     captureFieldsLCs: [], cgTol: prec.tol, cgMaxiter: prec.maxiter, voidRatio: SWEEP_STATE.voidRatio
   });
   var wall = (performance.now() - t0) / 1000;
-  if (!R.valid) throw new Error('solve invalid at N = ' + N + ': ' + (R.reject_reason || 'unknown'));
+  var noLoad = null;
+  if (!R.valid) {
+    /* v0.12 — the solver rejects any axis whose modulus reads ≤ 0 or above the solid.  Layers and
+       strands (B6) have unloaded axes that read ~0, sometimes a hair negative, after a converged
+       solve: keep those with a warning instead of discarding the run. */
+    var bad = (R.badAxes || []).map(function (a) { var k = { xx: 'Ex', yy: 'Ey', zz: 'Ez' }[a]; return { axis: a.charAt(0), E: R[k + '_MPa'] / SWEEP_ES }; });
+    var lim = sweepNoLoadLimit();
+    var keep = R.reject_reason === 'nonconvergent' && R.C_eff && R.converged && bad.length &&
+               bad.every(function (b) { return isFinite(b.E) && Math.abs(b.E) <= lim; });
+    if (!keep) {
+      var why = bad.length ? bad.map(function (b) { return 'E' + b.axis + ' = ' + (isFinite(b.E) ? b.E.toExponential(2) : String(b.E)); }).join(', ') : '';
+      throw new Error('solve rejected at N = ' + N + ': ' + (R.reject_reason === 'nonconvergent'
+        ? (R.converged ? 'modulus outside 0 … E solid (' + why + ' ÷ E solid)' : 'did not converge' + (why ? ' (' + why + ' ÷ E solid)' : ''))
+        : (R.reject_reason || 'unknown')));
+    }
+    noLoad = bad;
+  }
   var per = R.perLC || [], itersBy = {}, resMax = 0, itTot = 0;
   per.forEach(function (p, k) {
     itersBy['iters_' + VOIGT[k]] = p.iters; itTot += p.iters;
     if (p.finalResidual != null && p.finalResidual > resMax) resMax = p.finalResidual;
   });
   var Cfull = R.C_eff.map(function (v) { return v / SWEEP_ES; });
-  return { N: N, R: R, Cfull: Cfull, wall: wall, iters: itTot, itersBy: itersBy, residual: resMax, converged: !!R.converged };
+  return { N: N, R: R, Cfull: Cfull, wall: wall, iters: itTot, itersBy: itersBy, residual: resMax, converged: !!R.converged, noLoad: noLoad };
 }
+/* An axis reading within this of zero (÷ E solid) carries no load: 20 × the void stiffness, at least 1e-5. */
+function sweepNoLoadLimit() { return Math.max(20 * (SWEEP_STATE.voidRatio || 1e-4), 1e-5); }
 
 async function sweepRunOne(run) {
   var prec = SWEEP_PRECISION[SWEEP_STATE.precision] || SWEEP_PRECISION.standard;
-  var recipe = sweepClone(run.recipe);
+  var recipe = sweepClone(sweepRecipeForRun(run));
   recipe.material = { Es_MPa: SWEEP_ES, nu: run.nu };
   if (recipe.family === 'import' && !(typeof importGridReady === 'function' && importGridReady(recipe)))
     throw new Error('imported geometry is not loaded');
@@ -324,6 +378,7 @@ async function sweepRunOne(run) {
     nu_xy: R.nu_xy, nu_xz: R.nu_xz, nu_yz: R.nu_yz,
     iters: A.iters, itersBy: A.itersBy, residual: A.residual, converged: A.converged, wall_s: A.wall
   };
+  if (A.noLoad) res.noLoad = A.noLoad;
   /* Optional second grid + extrapolation: C_ext = C_fine + (C_fine − C_coarse) / (2^p − 1),
      element by element, then constants from C_ext. */
   var N2 = sweepCompanionN(run.N, SWEEP_STATE.refine);
@@ -355,6 +410,17 @@ function sweepNotesFor(run, r) {
     n.push('island trim removed ' + r.trim_removed_pct.toFixed(2) + ' % of the solid (' + r.vf_voxel.toFixed(2) + ' → ' + r.vf_solved.toFixed(2) + ' % of the cell)');
   if (!r.converged) n.push('did not converge to ' + r.tol + ' in ' + r.maxiter + ' iterations per load case');
   if (r.extNote) n.push(r.extNote);
+  if (r.noLoad) n.push('no load on ' + r.noLoad.map(function (b) { return b.axis; }).join(', ') + ': ' +
+    r.noLoad.map(function (b) { return 'E' + b.axis + ' reads ' + b.E.toExponential(1); }).join(', ') +
+    ' ÷ E solid, i.e. zero within solver noise — kept (the solver alone would reject it)');
+  if (r.C) {
+    var negG = ['44', '55', '66'].filter(function (k) { return r.C['C' + k] < 0; });
+    if (negG.length) {
+      var dmax = Math.max(r.C.C11, r.C.C22, r.C.C33);
+      n.push('negative shear stiffness ' + negG.map(function (k) { return 'C' + k + ' = ' + r.C['C' + k].toExponential(1); }).join(', ') +
+        ' (' + (Math.abs(Math.min.apply(null, negG.map(function (k) { return r.C['C' + k]; }))) / dmax * 100).toFixed(2) + ' % of the largest normal term) — not physical; rerun at high precision to see whether it is tolerance');
+    }
+  }
   if (run.ref && run.ref.Ex != null) {
     var fl = [], src = r.ext && r.ext.Ex != null ? r.ext : r;
     ['Ex', 'Ey', 'Ez'].forEach(function (k) {
@@ -367,7 +433,7 @@ function sweepNotesFor(run, r) {
 }
 
 /* ── Geometry checks (worker) ─────────────────────────────── */
-var SWEEP_GEOM_VERSION = 'swg-1';
+var SWEEP_GEOM_VERSION = 'swg-2';
 var SWEEP_THIN_VOX = 6;          /* Matt, 2026-10-01: flag under 6 voxels across the thinnest feature */
 var _swWorker = null, _swJobs = {}, _swNext = 1;
 function sweepGeomWorker() {
@@ -380,6 +446,7 @@ function sweepGeomWorker() {
   _swWorker.onmessage = function (ev) {
     var m = ev.data, j = _swJobs[m.id];
     if (!j) return;
+    if (m.progress) { if (j.onProgress) j.onProgress(m.progress); return; }
     delete _swJobs[m.id];
     if (m.ok) j.resolve(m); else j.reject(new Error(m.message || 'geometry check failed'));
   };
@@ -389,10 +456,10 @@ function sweepGeomWorker() {
   };
   return _swWorker;
 }
-function sweepGeomCall(msg) {
+function sweepGeomCall(msg, onProgress) {
   return new Promise(function (resolve, reject) {
     var id = _swNext++;
-    _swJobs[id] = { resolve: resolve, reject: reject };
+    _swJobs[id] = { resolve: resolve, reject: reject, onProgress: onProgress };
     msg.id = id;
     if (msg.recipe && msg.recipe.family === 'import' && typeof importGridMessage === 'function') msg.importGrid = importGridMessage(msg.recipe);
     sweepGeomWorker().postMessage(msg);
@@ -410,7 +477,7 @@ async function sweepPreviewAll() {
   for (var i = 0; i < todo.length; i++) {
     var run = todo[i];
     try {
-      var m = await sweepGeomCall({ type: 'stats', recipe: run.recipe, N: run.N, connectivity: conn });
+      var m = await sweepGeomCall({ type: 'stats', recipe: sweepRecipeForRun(run), N: run.N, connectivity: conn });
       var st = m.stats; st.connectivity = conn;
       SWEEP_STATE.preview[run.id] = st;
       if (sweepFlags(run, st).some(function (f) { return f.level === 'skip'; })) SWEEP_STATE.selected[run.id] = false;
@@ -437,7 +504,7 @@ function sweepFlags(run, st) {
   if (!st.spans.x && !st.spans.y && !st.spans.z) { f.push({ level: 'skip', short: 'no load path', text: 'the solid spans the cell on no axis' }); return f; }
   if (!(st.spans.x && st.spans.y && st.spans.z)) {
     var ax = ['x', 'y', 'z'].filter(function (a) { return st.spans[a]; }).join(', ');
-    f.push({ level: 'warn', short: 'spans ' + ax + ' only', text: 'carries load along ' + ax + ' only; stiffness on the other axes will sit near the void level (about 1e-4)' });
+    f.push({ level: 'warn', short: 'spans ' + ax + ' only', text: 'carries load along ' + ax + ' only; stiffness on the other axes will sit near the void level (about ' + (SWEEP_STATE.voidRatio || 1e-4).toExponential(0) + ' of the solid)' });
   }
   if (st.vf_trim < 0.02) f.push({ level: 'warn', short: '< 2 % solid', text: 'very low solid fraction (' + pct(st.vf_trim) + ')' });
   if (st.vf_trim > 0.95) f.push({ level: 'warn', short: '> 95 % solid', text: 'very high solid fraction (' + pct(st.vf_trim) + ')' });
@@ -469,6 +536,8 @@ async function sweepStart() {
     try {
       var res = await sweepRunOne(run);
       SWEEP_STATE.results[run.id] = res;
+      sweepRecordTiming(run.N, res.wall_s - (res.companion ? res.companion.wall_s : 0));
+      if (res.companion) sweepRecordTiming(res.companion.N, res.companion.wall_s);
       console.log('[sweep] ' + run.id + ' N=' + run.N + ' vf ' + res.vf_solved.toFixed(2) + '% Ex ' + res.Ex.toExponential(3) +
                   ' Ey ' + res.Ey.toExponential(3) + ' Ez ' + res.Ez.toExponential(3) + ' · ' + res.wall_s.toFixed(1) + ' s');
     } catch (err) {
@@ -476,6 +545,7 @@ async function sweepStart() {
       console.error('[sweep] ' + run.id + ' failed:', err);
     }
     sweepSave();
+    if (typeof atlasOnResult === 'function') atlasOnResult();
   }
   SWEEP_STATE.running = false; SWEEP_STATE.current = null;
   sweepRender(); sweepPaintHeaderBtn();
@@ -489,7 +559,7 @@ function sweepCsvCell(v) {
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 function sweepExportCsv() {
-  var cols = ['run_id', 'tier', 'set', 'purpose', 'grid_N', 'nu_s', 'cg_tol', 'connectivity', 'param_name', 'param_value',
+  var cols = ['run_id', 'tier', 'set', 'purpose', 'grid_N', 'nu_s', 'cg_tol', 'connectivity', 'param_name', 'param_value', 'param2_name', 'param2_value',
               'expected_vf_pct', 'vf_voxel_pct', 'vf_measured_pct', 'vf_check_rel_pct', 'trim_removed_pct'];
   cols.push('void_ratio');
   for (var i = 1; i <= 6; i++) for (var j = i; j <= 6; j++) cols.push('C' + i + j);
@@ -510,6 +580,7 @@ function sweepExportCsv() {
     var row = {
       run_id: run.id, tier: run.tier, set: run.set, purpose: run.purpose, grid_N: run.N, nu_s: run.nu,
       param_name: run.param && run.param.name, param_value: run.param && run.param.value,
+      param2_name: run.params && run.params[1] ? run.params[1].key : '', param2_value: run.params && run.params[1] ? run.params[1].value : '',
       expected_vf_pct: run.expectedVf, error: r.error || ''
     };
     if (!r.error) {
@@ -567,12 +638,9 @@ function openSweepPanel() {
     '<div class="imp-dialog sw-dialog" role="dialog" aria-label="Parameter sweep">' +
       '<div class="imp-head"><div class="imp-title">Parameter sweep</div>' +
         '<button class="dc-icon-btn" title="Close (a running sweep keeps going)" onclick="closeSweepPanel()">×</button></div>' +
-      '<div class="sw-source">' +
-        '<div class="sw-box"><div class="sw-box-t">From a run matrix</div>' +
-          '<div class="imp-note">CSV with run_id, surface, mode, shift, wall_ratio or tube_radius_over_T, level_c, grid_N, nu_s, expected_vf_pct (optional reference columns vixiv_Ex / Ey / Ez).</div>' +
-          '<button class="fh-action-btn ghost" onclick="sweepPickCsv()">Load CSV…</button></div>' +
-        '<div class="sw-box"><div class="sw-box-t">Build one</div><div id="swBuilder"></div></div>' +
-      '</div>' +
+      '<div class="sw-box sw-build"><div class="sw-box-t">Build a sweep</div><div id="swBuilder"></div></div>' +
+      '<div class="sw-csvrow imp-sub">Or run a list from a CSV run matrix (run_id, surface, mode, shift, wall_ratio, level_c, grid_N, nu_s, expected_vf_pct) ' +
+        '<button class="fh-action-btn ghost" onclick="sweepPickCsv()">Load CSV\u2026</button></div>' +
       '<div class="sw-bar" id="swBar"></div>' +
       '<div class="sw-table-wrap"><table class="sw-table" id="swTable"></table></div>' +
       '<div class="sw-notes" id="swNotes"></div>' +
@@ -581,7 +649,7 @@ function openSweepPanel() {
   SWEEP_STATE.open = true;
   sweepRenderBuilder();
   sweepRender();
-  sweepPreviewAll();
+  (SWEEP_LOADED || Promise.resolve()).then(function () { if (SWEEP_STATE.open) { sweepRenderBuilder(); sweepRender(); sweepPreviewAll(); } });
 }
 function closeSweepPanel() {
   var ov = swEl('swOverlay');
@@ -610,118 +678,284 @@ function sweepPickCsv() {
   document.body.appendChild(input); input.click();
 }
 
-function sweepReplaceRuns(runs, name, source) {
+function sweepReplaceRuns(runs, name, source, extra) {
   var hasResults = Object.keys(SWEEP_STATE.results).length > 0;
-  if (hasResults && !confirm('Replace the current sweep? Its results will be cleared (export them first if you need them).')) return;
+  if (hasResults && !confirm('Replace the current sweep? Its results will be cleared (export them first if you need them).')) return false;
   SWEEP_STATE.runs = runs; SWEEP_STATE.name = name; SWEEP_STATE.source = source;
+  SWEEP_STATE.bases = (extra && extra.bases) || {}; SWEEP_STATE.axes = (extra && extra.axes) || null;
   SWEEP_STATE.results = {}; SWEEP_STATE.selected = {}; SWEEP_STATE.preview = {};
   runs.forEach(function (r) { SWEEP_STATE.selected[r.id] = true; });
   sweepSave(); sweepRender();
   sweepPreviewAll();
+  return true;
 }
 
-/* Builder settings live in SWEEP_STATE.builder so a redraw (changing the
-   design, parameter or step mode, or after creating runs) keeps the grid,
-   Poisson's ratio, steps and range.  The range resets only when the design,
-   parameter or step mode changes, because the old numbers no longer apply. */
+/* ── Builder UI (v0.11.0) ─────────────────────────────────
+   Settings live in SWEEP_STATE.builder (kept across redraws and reloads).
+   Two parameters; each is a range (from, to, steps) or a typed list.
+   Parameter 1 can instead step by solid fraction when solid grows steadily
+   with it.  Review resolves every combination and checks its geometry at
+   N = 32 before anything is created. */
+var SWEEP_BUILDER_FIELDS = ['design', 'p1', 'by', 'from1', 'to1', 'steps1', 'list1', 'p2', 'from2', 'to2', 'steps2', 'list2', 'N', 'nu'];
 function sweepReadBuilder() {
   var b = SWEEP_STATE.builder || (SWEEP_STATE.builder = {});
-  if (!swEl('swN')) return b;
-  b.design = swEl('swDesign').value; b.param = swEl('swParam').value; b.by = swEl('swBy').value;
-  b.from = swEl('swFrom').value; b.to = swEl('swTo').value; b.steps = swEl('swSteps').value;
-  b.N = swEl('swN').value; b.nu = swEl('swNu').value;
+  SWEEP_BUILDER_FIELDS.forEach(function (f) { var el = swEl('swb_' + f); if (el) b[f] = el.value; });
   return b;
 }
-function sweepBuilderChanged() { sweepReadBuilder(); sweepSave(); }
+function sweepBuilderChanged(redraw) {
+  sweepReadBuilder(); SWEEP_STATE.review = null; sweepSave();
+  if (redraw) sweepRenderBuilder(); else sweepRenderReview();
+}
+
+function sweepBuilderDesigns() {
+  return LAB_STATE.designs.filter(function (d) { var r = sweepRecipeOf(d); return r && sweepParamCatalog(r).length; });
+}
 
 function sweepRenderBuilder() {
   var el = swEl('swBuilder');
   if (!el) return;
   var b = sweepReadBuilder();
-  var ds = LAB_STATE.designs.filter(function (d) { var r = sweepRecipeOf(d); return r && sweepParamsFor(r).length; });
-  if (!ds.length) { el.innerHTML = '<div class="imp-note">Load a design with an adjustable parameter first (TPMS, PI-TPMS, grain, noise or an imported STL cell).</div>'; return; }
-  var sel = b.design;
-  if (!ds.some(function (d) { return d.id === sel; })) sel = ds[0].id;
-  var d = ds.filter(function (x) { return x.id === sel; })[0];
-  var rec = sweepRecipeOf(d);
-  var ps = sweepParamsFor(rec);
-  var pk = ps.some(function (p) { return p.key === b.param; }) ? b.param : ps[0].key;
-  var p = ps.filter(function (x) { return x.key === pk; })[0];
-  var cur = p.get(rec);
-  var canVf = sweepTargetable(rec, pk);
-  var byVf = canVf && b.by === 'vf';
-  var rangeKey = sel + '|' + pk + '|' + (byVf ? 'vf' : 'value');
-  if (b.rangeKey !== rangeKey || b.from == null || b.from === '' || b.to == null || b.to === '') {
-    b.from = byVf ? '5' : String(+cur.toPrecision(4));
-    b.to = byVf ? '40' : String(+(cur === 0 ? 0.1 : cur * 2).toPrecision(4));
-    b.rangeKey = rangeKey;
+  var ds = sweepBuilderDesigns();
+  if (!ds.length) { el.innerHTML = '<div class="imp-note">Load a design first. Every family works: TPMS and PI-TPMS, grain, noise, beam, bundle, wave and imported STL cells.</div>'; return; }
+  if (!ds.some(function (d) { return d.id === b.design; })) b.design = ds[0].id;
+  var d = ds.filter(function (x) { return x.id === b.design; })[0], rec = sweepRecipeOf(d);
+  var cat = sweepParamCatalog(rec);
+  if (!cat.some(function (c) { return c.key === b.p1; })) { b.p1 = cat[0].key; b.from1 = b.to1 = null; }
+  if (b.p2 && b.p2 !== 'none' && (!cat.some(function (c) { return c.key === b.p2; }) || b.p2 === b.p1)) { b.p2 = 'none'; }
+  var s1 = cat.filter(function (c) { return c.key === b.p1; })[0];
+  var s2 = (b.p2 && b.p2 !== 'none') ? cat.filter(function (c) { return c.key === b.p2; })[0] : null;
+  var canVf = !!s1.target, byVf = canVf && b.by === 'vf';
+  var key1 = b.design + '|' + b.p1 + '|' + (byVf ? 'vf' : 'v');
+  if (b.key1 !== key1 || b.from1 == null || b.from1 === '') {
+    var c1 = sweepParamGet(rec, s1);
+    b.from1 = byVf ? '5' : sweepFmtVal(s1.hint ? Math.max(s1.hint[0], c1 * 0.5) : c1 * 0.5);
+    b.to1 = byVf ? '40' : sweepFmtVal(s1.hint ? Math.min(s1.hint[1], c1 === 0 ? s1.hint[1] / 2 : c1 * 1.5) : (c1 === 0 ? 0.1 : c1 * 1.5));
+    b.list1 = ''; b.key1 = key1;
   }
-  var N = String(b.N || 64), nu = b.nu != null && b.nu !== '' ? b.nu : String((rec.material && rec.material.nu) || 0.34);
-  var steps = b.steps || '5';
-  b.design = sel; b.param = pk; b.by = byVf ? 'vf' : 'value'; b.N = N; b.nu = nu; b.steps = steps;
+  var key2 = b.design + '|' + (b.p2 || 'none');
+  if (s2 && (b.key2 !== key2 || b.from2 == null || b.from2 === '')) {
+    var c2 = sweepParamGet(rec, s2);
+    b.from2 = sweepFmtVal(c2); b.to2 = sweepFmtVal(c2 === 0 ? (s2.hint ? s2.hint[1] / 2 : 0.5) : c2 * 1.5); b.steps2 = b.steps2 || '3'; b.list2 = '';
+  }
+  b.key2 = key2;
+  b.steps1 = b.steps1 || '5'; b.N = String(b.N || 64);
+  b.nu = (b.nu != null && b.nu !== '') ? b.nu : String((rec.material && rec.material.nu) || 0.34);
+  b.by = byVf ? 'vf' : 'value'; b.p2 = s2 ? b.p2 : 'none';
+
+  function opt(c, sel) { return '<option value="' + swEsc(c.key) + '"' + (c.key === sel ? ' selected' : '') + '>' + swEsc(c.label + (c.unit ? ' (' + c.unit + ')' : '')) + '</option>'; }
+  function opts(sel, exclude, withNone) {
+    var cur = cat.filter(function (c) { return c.group !== 'other' && c.key !== exclude; }), oth = cat.filter(function (c) { return c.group === 'other' && c.key !== exclude; });
+    return (withNone ? '<option value="none"' + (sel === 'none' ? ' selected' : '') + '>none</option>' : '') +
+      cur.map(function (c) { return opt(c, sel); }).join('') +
+      (oth.length ? '<optgroup label="Other numeric fields">' + oth.map(function (c) { return opt(c, sel); }).join('') + '</optgroup>' : '');
+  }
+  function inp(f, w, extra) { return '<input id="swb_' + f + '" style="width:' + w + 'px" value="' + swEsc(b[f] == null ? '' : b[f]) + '" onchange="sweepBuilderChanged()"' + (extra || '') + '>'; }
+  var now1 = sweepParamGet(rec, s1), now2 = s2 ? sweepParamGet(rec, s2) : null;
   el.innerHTML =
-    '<div class="imp-settings">' +
-      '<label>Design <select id="swDesign" onchange="sweepRenderBuilder()">' + ds.map(function (x) {
-        return '<option value="' + x.id + '"' + (x.id === sel ? ' selected' : '') + '>' + swEsc(x.label.split('·').pop().trim() + ' · ' + x.title) + '</option>'; }).join('') + '</select></label>' +
-      '<label>Parameter <select id="swParam" onchange="sweepRenderBuilder()">' + ps.map(function (x) {
-        return '<option value="' + x.key + '"' + (x.key === pk ? ' selected' : '') + '>' + swEsc(x.label) + '</option>'; }).join('') + '</select></label>' +
-      '<label>Step by <select id="swBy" onchange="sweepRenderBuilder()">' +
-        '<option value="value"' + (byVf ? '' : ' selected') + '>parameter value</option>' +
-        (canVf ? '<option value="vf"' + (byVf ? ' selected' : '') + '>solid fraction</option>' : '') + '</select></label>' +
-    '</div><div class="imp-settings">' +
-      (byVf
-        ? '<label>From <input id="swFrom" type="number" step="any" min="0" max="100" value="' + swEsc(b.from) + '" onchange="sweepBuilderChanged()"> %</label>' +
-          '<label>To <input id="swTo" type="number" step="any" min="0" max="100" value="' + swEsc(b.to) + '" onchange="sweepBuilderChanged()"> %</label>'
-        : '<label>From <input id="swFrom" type="number" step="any" value="' + swEsc(b.from) + '" onchange="sweepBuilderChanged()"></label>' +
-          '<label>To <input id="swTo" type="number" step="any" value="' + swEsc(b.to) + '" onchange="sweepBuilderChanged()"></label>') +
-      '<label>Steps <input id="swSteps" type="number" min="1" max="200" value="' + swEsc(steps) + '" onchange="sweepBuilderChanged()"></label>' +
-      (byVf ? '<span class="imp-sub">solid % before island trim, exact at the chosen grid</span>'
-            : '<span class="imp-sub">' + (p.unit ? p.unit + ' · ' : '') + 'now ' + (+cur.toPrecision(4)) + '</span>') +
-    '</div><div class="imp-settings">' +
-      '<label>Grid <select id="swN" onchange="sweepBuilderChanged()">' + ['32', '64', '128'].map(function (n) {
-        return '<option' + (n === N ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></label>' +
-      '<label>Poisson’s ratio <input id="swNu" type="number" step="0.001" min="0" max="0.499" value="' + swEsc(nu) + '" onchange="sweepBuilderChanged()"></label>' +
-      '<button class="fh-action-btn ghost" onclick="sweepBuildFromUI()">Create runs</button>' +
-    '</div>';
+    '<div class="imp-settings"><label>Design <select id="swb_design" onchange="sweepBuilderChanged(true)">' + ds.map(function (x) {
+      return '<option value="' + x.id + '"' + (x.id === b.design ? ' selected' : '') + '>' + swEsc(x.label.split('·').pop().trim() + ' · ' + x.title) + '</option>'; }).join('') + '</select></label>' +
+      '<span class="imp-sub">' + swEsc(rec.family) + (rec.geometry && rec.geometry.mode ? ' · ' + swEsc(rec.geometry.mode) : '') + '</span></div>' +
+    '<div class="sw-prow"><span class="sw-pn">1</span>' +
+      '<select id="swb_p1" onchange="sweepBuilderChanged(true)">' + opts(b.p1, null, false) + '</select>' +
+      (canVf ? '<select id="swb_by" onchange="sweepBuilderChanged(true)"><option value="value"' + (byVf ? '' : ' selected') + '>by value</option><option value="vf"' + (byVf ? ' selected' : '') + '>by solid fraction</option></select>' : '<input type="hidden" id="swb_by" value="value">') +
+      '<label>from ' + inp('from1', 66) + (byVf ? ' %' : '') + '</label><label>to ' + inp('to1', 66) + (byVf ? ' %' : '') + '</label><label>steps ' + inp('steps1', 44) + '</label>' +
+      (byVf ? '<input type="hidden" id="swb_list1" value="">' : '<label>or values ' + inp('list1', 120, ' placeholder="e.g. 0.05, 0.1, 0.2"') + '</label>') +
+      '<span class="imp-sub">' + (byVf ? (s1.target === 'threshold' ? 'exact at the grid' : 'found by bisection') : 'now ' + sweepFmtVal(now1)) + '</span></div>' +
+    '<div class="sw-prow"><span class="sw-pn">2</span>' +
+      '<select id="swb_p2" onchange="sweepBuilderChanged(true)">' + opts(b.p2, b.p1, true) + '</select>' +
+      (s2 ? '<label>from ' + inp('from2', 66) + '</label><label>to ' + inp('to2', 66) + '</label><label>steps ' + inp('steps2', 44) + '</label>' +
+            '<label>or values ' + inp('list2', 120, ' placeholder="e.g. 0, 1/8, 1/4"') + '</label><span class="imp-sub">now ' + sweepFmtVal(now2) + '</span>'
+          : '<span class="imp-sub">optional second parameter</span>') + '</div>' +
+    '<div class="imp-settings"><label>Grid <select id="swb_N" onchange="sweepBuilderChanged()">' + ['32', '64', '128'].map(function (n) {
+        return '<option' + (n === b.N ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></label>' +
+      '<label>Poisson’s ratio ' + inp('nu', 64) + '</label>' +
+      '<button class="fh-action-btn" onclick="sweepReview()">Review</button></div>' +
+    '<div id="swReview"></div>';
+  sweepRenderReview();
 }
 
-function sweepBuildFromUI() {
-  if (SWEEP_STATE.running) return;
-  sweepBuilderChanged();
-  var d = LAB_STATE.designs.filter(function (x) { return x.id === swEl('swDesign').value; })[0];
-  var from = parseFloat(swEl('swFrom').value), to = parseFloat(swEl('swTo').value), steps = parseInt(swEl('swSteps').value, 10);
-  var N = parseInt(swEl('swN').value, 10), nu = parseFloat(swEl('swNu').value);
-  if (!d || !isFinite(from) || !isFinite(to) || !(steps >= 1)) { alert('Enter a start, end and number of steps.'); return; }
-  if (!(nu >= 0 && nu < 0.5)) { alert('Poisson’s ratio must be between 0 and 0.5.'); return; }
-  var key = swEl('swParam').value;
-  var byVf = swEl('swBy') && swEl('swBy').value === 'vf';
-  if (!byVf) {
-    try {
-      var runs = sweepBuildRuns(d, key, from, to, steps, N, nu, 'S');
-      sweepReplaceRuns(runs, (d.title + '_' + key).replace(/\s+/g, '_'), 'builder');
-    } catch (e) { alert(e.message); }
-    return;
+/* Plan from the builder fields (throws with a plain message when incomplete). */
+function sweepPlan() {
+  var b = sweepReadBuilder();
+  var d = LAB_STATE.designs.filter(function (x) { return x.id === b.design; })[0];
+  if (!d) throw new Error('pick a design');
+  var base = sweepClone(sweepRecipeOf(d)), cat = sweepParamCatalog(base);
+  var s1 = cat.filter(function (c) { return c.key === b.p1; })[0];
+  var s2 = (b.p2 && b.p2 !== 'none') ? cat.filter(function (c) { return c.key === b.p2; })[0] : null;
+  var byVf = b.by === 'vf' && s1.target;
+  var nu = parseFloat(b.nu), N = parseInt(b.N, 10);
+  if (!(nu >= 0 && nu < 0.5)) throw new Error('Poisson’s ratio must be between 0 and 0.5');
+  var v1 = null, targets = null;
+  if (byVf) {
+    var lo = parseFloat(b.from1), hi = parseFloat(b.to1), st = parseInt(b.steps1, 10);
+    if (!(lo >= 0 && lo <= 100 && hi >= 0 && hi <= 100 && st >= 1)) throw new Error('solid fractions are percentages from 0 to 100, with at least one step');
+    targets = sweepValues({ from: lo / 100, to: hi / 100, steps: st });
+  } else v1 = sweepValues({ from: b.from1, to: b.to1, steps: b.steps1, list: b.list1 });
+  var v2 = s2 ? sweepValues({ from: b.from2, to: b.to2, steps: b.steps2, list: b.list2 }) : null;
+  return { design: d, title: d.title, base: base, spec1: s1, spec2: s2, byVf: !!byVf, values1: v1, targets: targets, values2: v2,
+           n1: byVf ? targets.length : v1.length, n2: s2 ? v2.length : 1, N: N, nu: nu };
+}
+
+/* Review: resolve values + quick geometry check at N = 32, in the worker. */
+async function sweepReview() {
+  if (SWEEP_STATE.running || (SWEEP_STATE.review && SWEEP_STATE.review.busy)) return;
+  var plan;
+  try { plan = sweepPlan(); } catch (e) { SWEEP_STATE.review = { error: e.message }; sweepRenderReview(); return; }
+  var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
+  var rv = SWEEP_STATE.review = { plan: plan, busy: true, done: 0, total: plan.n1 * plan.n2, combos: [], stage: 'checking' };
+  sweepRenderReview();
+  try {
+    var m = await sweepGeomCall({ type: 'review', recipe: plan.base, spec1: plan.spec1, spec2: plan.spec2, values1: plan.values1,
+      values2: plan.values2, byVf: plan.byVf, targets: plan.targets, N: plan.N, checkN: 32, connectivity: conn },
+      function (p) { if (SWEEP_STATE.review !== rv) return; rv.done = p.done; rv.stage = p.stage; if (p.combo) rv.combos.push(p.combo); sweepRenderReviewSoon(); });
+    if (SWEEP_STATE.review !== rv) return;
+    rv.combos = m.combos; rv.busy = false;
+  } catch (e) { rv.busy = false; rv.error = e.message; }
+  sweepRenderReview();
+}
+var _swRevT = 0;
+function sweepRenderReviewSoon() { if (_swRevT) return; _swRevT = setTimeout(function () { _swRevT = 0; sweepRenderReview(); }, 120); }
+
+function sweepComboSkip(c) {
+  if (c.unreachable) return 'target out of reach';
+  if (c.error) return 'check failed';
+  var st = c.stats;
+  if (!st) return null;
+  if (st.vf_raw === 0) return 'empty';
+  if (st.vf_trim >= 0.999) return 'fully solid';
+  if (!st.spans.x && !st.spans.y && !st.spans.z) return 'no load path';
+  return null;
+}
+
+function sweepRenderReview() {
+  var el = swEl('swReview');
+  if (!el) return;
+  var rv = SWEEP_STATE.review;
+  if (!rv) { el.innerHTML = ''; return; }
+  if (rv.error) { el.innerHTML = '<div class="imp-error" style="display:block">' + swEsc(rv.error) + '</div>'; return; }
+  var plan = rv.plan, nRuns = plan.n1 * plan.n2, N2 = sweepCompanionN(plan.N, SWEEP_STATE.refine);
+  var solves = nRuns * (N2 ? 2 : 1);
+  var fakeRuns = []; for (var q = 0; q < nRuns; q++) fakeRuns.push({ N: plan.N });
+  var eta = sweepEta(fakeRuns);
+  var combos = rv.combos || [], skipped = 0, thin = 0, vmin = Infinity, vmax = -Infinity, partial = 0;
+  combos.forEach(function (c) {
+    if (sweepComboSkip(c)) { skipped++; return; }
+    var st = c.stats; if (!st) return;
+    vmin = Math.min(vmin, st.vf_trim); vmax = Math.max(vmax, st.vf_trim);
+    if (st.thinVox != null && st.thinVox * plan.N / 32 < SWEEP_THIN_VOX) thin++;
+    if (!(st.spans.x && st.spans.y && st.spans.z)) partial++;
+  });
+  var kv = function (n, l) { return '<div class="sw-kv"><div class="n">' + n + '</div><div class="l">' + l + '</div></div>'; };
+  var hw = sweepHardwareNote(plan.N);
+  var store = sweepStorageEstimate(nRuns, plan);
+  var h = '<div class="sw-review">' +
+    '<div class="sw-kvs">' +
+      kv(nRuns.toLocaleString(), 'runs' + (plan.spec2 ? ' (' + plan.n1 + ' × ' + plan.n2 + ')' : '')) +
+      kv(solves.toLocaleString(), 'solves' + (N2 ? ' (N = ' + plan.N + ' and ' + N2 + ')' : ' at N = ' + plan.N)) +
+      kv('≈ ' + sweepFmtDur(eta), sweepHasTiming() ? 'at this machine’s measured speed' : 'estimate (no runs timed yet)') +
+      kv(isFinite(vmin) ? (vmin * 100).toFixed(1) + '–' + (vmax * 100).toFixed(1) + ' %' : (rv.busy ? '…' : '—'), 'solid fraction (N = 32 check)') +
+    '</div>';
+  if (rv.busy) h += '<div class="imp-progress" style="display:flex"><div class="imp-bar"><div style="height:100%;background:var(--lab);width:' +
+      Math.round(100 * rv.done / Math.max(1, rv.total)) + '%"></div></div><span>' + (rv.stage === 'targeting' ? 'Finding values for each solid fraction… ' : 'Checking geometry ') + rv.done + ' / ' + rv.total + '</span></div>';
+  h += sweepReviewMap(plan, combos);
+  var notes = [];
+  if (!rv.busy) {
+    if (skipped) notes.push(skipped + ' run' + (skipped === 1 ? '' : 's') + ' will be skipped (empty, fully solid, no load path or target out of reach) — shown hatched');
+    if (partial) notes.push(partial + ' carry load on only some axes');
+    if (thin) {
+      var fake128 = fakeRuns.map(function () { return { N: 128 }; });
+      var up = plan.N < 128 ? ' — the whole sweep at N = 128 would take about ' + sweepFmtDur(sweepEta(fake128)) : '';
+      notes.push(thin + ' would have features thinner than ' + SWEEP_THIN_VOX + ' voxels at N = ' + plan.N + up);
+    }
   }
-  if (!(from >= 0 && from <= 100 && to >= 0 && to <= 100)) { alert('Solid fractions are percentages from 0 to 100.'); return; }
-  steps = Math.max(1, Math.min(200, steps | 0));
-  var fr = [];
-  for (var i = 0; i < steps; i++) fr.push((steps === 1 ? from : from + (to - from) * i / (steps - 1)) / 100);
-  var btn = document.activeElement; if (btn && btn.tagName === 'BUTTON') { btn.disabled = true; btn.textContent = 'Finding values…'; }
-  sweepGeomCall({ type: 'target', recipe: sweepRecipeOf(d), key: key, N: N, fractions: fr }).then(function (m) {
-    if (!m.values) throw new Error('this parameter can\u2019t be stepped by solid fraction');
-    var runs = sweepBuildRuns(d, key, 0, 0, 1, N, nu, 'S');   /* template */
-    runs = m.values.map(function (v, k) {
-      var r = sweepClone(runs[0]), p = sweepParamsFor(r.recipe).filter(function (x) { return x.key === key; })[0];
-      v = +v.toPrecision(8);
-      p.set(r.recipe, v);
-      r.id = 'S' + String(k + 1).padStart(2, '0'); r.recipe.name = r.id;
-      r.param = { name: key, value: v };
-      r.purpose = 'target ' + (fr[k] * 100).toFixed(2) + ' % solid → ' + p.label + ' = ' + v;
-      r.expectedVf = +(fr[k] * 100).toFixed(4);
-      return r;
-    });
-    sweepReplaceRuns(runs, (d.title + '_' + key + '_by_vf').replace(/\s+/g, '_'), 'builder');
-  }).catch(function (e) { alert(e.message); }).then(function () { sweepRenderBuilder(); });
+  if (hw) notes.push(hw);
+  notes.push(store);
+  h += '<div class="imp-sub sw-rnotes">' + notes.map(swEsc).join('<br>') + '</div>';
+  h += '<div class="sw-rfoot"><button class="fh-action-btn ghost" onclick="SWEEP_STATE.review=null;sweepRenderReview()">Back</button>' +
+       '<button class="fh-action-btn" onclick="sweepCommitReview()"' + (rv.busy ? ' disabled' : '') + '>Create ' + (nRuns - skipped).toLocaleString() + ' runs' + (skipped ? ' (+' + skipped + ' skipped)' : '') + '</button></div>';
+  el.innerHTML = h + '</div>';
+}
+
+/* Parameter-1 × parameter-2 map of solid fraction at the N = 32 check. */
+function sweepReviewMap(plan, combos) {
+  var n1 = plan.n1, n2 = plan.n2;
+  if (n1 * n2 > 2500) return '<div class="imp-sub">' + (n1 * n2).toLocaleString() + ' runs — too many to draw the map</div>';
+  var byKey = {};
+  combos.forEach(function (c) { byKey[c.i + ',' + c.j] = c; });
+  var lab1 = plan.byVf ? plan.targets.map(function (t) { return (t * 100).toFixed(1) + '%'; }) : plan.values1.map(sweepFmtVal);
+  var lab2 = plan.spec2 ? plan.values2.map(sweepFmtVal) : [''];
+  var cw = Math.max(10, Math.min(40, Math.floor(560 / n1)));
+  var h = '<div class="sw-map"><div class="sw-map-ax imp-sub">' + swEsc(plan.spec1.label) + (plan.byVf ? ' (by solid fraction)' : '') + ' →' +
+          (plan.spec2 ? ' · rows: ' + swEsc(plan.spec2.label) : '') + '</div><table class="sw-mtab"><tr><th></th>';
+  var every = Math.ceil(n1 / Math.floor(560 / 44));
+  for (var i = 0; i < n1; i++) h += '<th style="width:' + cw + 'px">' + (i % every === 0 ? swEsc(lab1[i]) : '') + '</th>';
+  h += '</tr>';
+  for (var j = 0; j < n2; j++) {
+    h += '<tr><th>' + swEsc(lab2[j]) + '</th>';
+    for (var i2 = 0; i2 < n1; i2++) {
+      var c = byKey[i2 + ',' + j], skip = c ? sweepComboSkip(c) : null, st = c && c.stats, bg = 'transparent', cls = '', tip = '';
+      if (c && skip) { cls = 'skip'; tip = skip; }
+      else if (st) { bg = sweepSeqColor(st.vf_trim); tip = (st.vf_trim * 100).toFixed(1) + ' % solid' + (st.thinVox != null ? ' · thinnest ≈ ' + (st.thinVox * plan.N / 32).toFixed(1) + ' vox at N = ' + plan.N : '') +
+        (!(st.spans.x && st.spans.y && st.spans.z) ? ' · spans ' + ['x', 'y', 'z'].filter(function (a) { return st.spans[a]; }).join('') + ' only' : ''); }
+      if (c) tip = sweepFmtVal(c.v1) + (plan.spec2 ? ', ' + sweepFmtVal(c.v2) : '') + ' — ' + tip;
+      h += '<td class="' + cls + '" style="background:' + bg + '" title="' + swEsc(tip) + '"></td>';
+    }
+    h += '</tr>';
+  }
+  return h + '</table><div class="sw-legend imp-sub"><span class="sw-ramp"></span> solid fraction 0 → 60 %+ <span class="sw-hatch"></span> skipped</div></div>';
+}
+function sweepSeqColor(v) {
+  /* F13LD ramp: deep slate → brand green → neon */
+  var stops = [[0, [20, 28, 36]], [0.15, [16, 84, 66]], [0.35, [29, 158, 117]], [0.6, [200, 245, 66]]];
+  v = Math.max(0, Math.min(0.6, v));
+  for (var k = 1; k < stops.length; k++) if (v <= stops[k][0]) {
+    var a = stops[k - 1], b = stops[k], f = (v - a[0]) / (b[0] - a[0]);
+    return 'rgb(' + a[1].map(function (x, i) { return Math.round(x + (b[1][i] - x) * f); }).join(',') + ')';
+  }
+  return 'rgb(200,245,66)';
+}
+
+
+/* Hardware limits: no run-count cap; warn when the grid exceeds what the
+   detected GPU tier handles, refuse when there is no WebGPU at all. */
+function sweepHardwareNote(N) {
+  if (typeof HW === 'undefined') return null;
+  if (HW.webgpu_available === false) return 'WebGPU is not available in this browser, so the sweep can’t run here.';
+  var maxN = (typeof autoPickGrid === 'function') ? autoPickGrid() : 128;
+  if (N > maxN) return 'This GPU is rated for N = ' + maxN + ' (' + (HW.tier || 'unknown') + ' tier); N = ' + N + ' may run out of GPU memory or be slow.';
+  return null;
+}
+function sweepStorageEstimate(nRuns, plan) {
+  var perRun = 3.5 + (SWEEP_STATE.refine !== 'off' ? 2.5 : 0) + 0.4;   /* kB: result + second grid + geometry check */
+  var base = JSON.stringify(plan.base).length / 1024;
+  var total = nRuns * perRun + base;
+  return 'Saved in this browser: about ' + (total < 1024 ? Math.round(total) + ' kB' : (total / 1024).toFixed(1) + ' MB') + ' for the results' +
+         (sweepStoreQuota ? ' (' + sweepStoreQuota + ' free)' : '');
+}
+var sweepStoreQuota = null;
+if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.estimate) {
+  navigator.storage.estimate().then(function (e) { if (e && e.quota) { var f = (e.quota - (e.usage || 0)) / 1048576; sweepStoreQuota = f > 1024 ? (f / 1024).toFixed(0) + ' GB' : Math.round(f) + ' MB'; } }).catch(function () {});
+}
+
+function sweepCommitReview() {
+  var rv = SWEEP_STATE.review;
+  if (!rv || rv.busy || !rv.combos) return;
+  var runs = sweepRunsFromCombos(rv.plan, rv.combos);
+  var skipIds = {};
+  rv.combos.forEach(function (c) {
+    if (!c.unreachable && sweepComboSkip(c)) {
+      var w = String(Math.max(rv.plan.n1, rv.plan.n2 || 1)).length;
+      skipIds['S' + String(c.i + 1).padStart(w, '0') + (rv.plan.spec2 ? '-' + String(c.j + 1).padStart(w, '0') : '')] = true;
+    }
+  });
+  var axes = [{ key: rv.plan.spec1.key, label: rv.plan.spec1.label, unit: rv.plan.spec1.unit, byVf: rv.plan.byVf,
+                values: rv.plan.byVf ? rv.plan.targets.map(function (t) { return t * 100; }) : rv.plan.values1 }];
+  if (rv.plan.spec2) axes.push({ key: rv.plan.spec2.key, label: rv.plan.spec2.label, unit: rv.plan.spec2.unit, values: rv.plan.values2 });
+  var name = (rv.plan.title + '_' + rv.plan.spec1.label + (rv.plan.spec2 ? '_x_' + rv.plan.spec2.label : '')).replace(/[^\w.-]+/g, '_');
+  if (!sweepReplaceRuns(runs, name, 'builder', { bases: { b0: rv.plan.base }, axes: axes })) return;
+  runs.forEach(function (r) { if (skipIds[r.id]) SWEEP_STATE.selected[r.id] = false; });
+  SWEEP_STATE.review = null;
+  sweepSave(); sweepRenderBuilder(); sweepRender();
 }
 
 function sweepSelect(mode) {
@@ -746,21 +980,26 @@ function sweepClearResults(onlySelected) {
 function sweepSetOpt(k, v) { if (!SWEEP_STATE.running) { SWEEP_STATE[k] = v; sweepSave(); sweepRenderBar(); sweepRender(); } }
 function sweepSetPrecision(v) { if (!SWEEP_STATE.running) { SWEEP_STATE.precision = v; sweepSave(); sweepRenderBar(); } }
 
-function sweepEta(todoRuns) {
-  /* seconds per run by grid, from finished runs of this sweep; fallback guesses */
-  var byN = {}, guess = { 32: 3, 64: 15, 128: 120 };
-  for (var id in SWEEP_STATE.results) {
-    var r = SWEEP_STATE.results[id];
-    if (r && r.wall_s) {
-      (byN[r.N] = byN[r.N] || []).push(r.wall_s - (r.companion ? r.companion.wall_s : 0));
-      if (r.companion) (byN[r.companion.N] = byN[r.companion.N] || []).push(r.companion.wall_s);
-    }
-  }
+/* Seconds per solve by grid on this machine: a running average kept across
+   sweeps (SWEEP_STATE.timing, saved), else defaults from a mid-range desktop
+   GPU (Matt's 2026-10-01 run: ~2 s at N = 32/64, ~19 s at 128). */
+var SWEEP_TIME_GUESS = { 32: 2, 64: 3, 128: 20 };
+function sweepRecordTiming(N, sec) {
+  if (!(sec > 0)) return;
+  var t = SWEEP_STATE.timing || (SWEEP_STATE.timing = {}), e = t[N] || (t[N] = { n: 0, mean: 0 });
+  e.n = Math.min(e.n + 1, 50); e.mean += (sec - e.mean) / e.n;   /* running mean, recent-weighted after 50 */
+}
+function sweepSecPerSolve(N) {
+  var t = SWEEP_STATE.timing && SWEEP_STATE.timing[N];
   var hi = SWEEP_STATE.precision === 'high' ? 1.6 : 1;
-  function one(N) { var a = byN[N]; return a ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : guess[N] * hi; }
+  if (t && t.n) return t.mean * hi;
+  return (SWEEP_TIME_GUESS[N] || 20) * hi;
+}
+function sweepHasTiming() { var t = SWEEP_STATE.timing || {}; return Object.keys(t).some(function (k) { return t[k] && t[k].n; }); }
+function sweepEta(todoRuns) {
   return todoRuns.reduce(function (s, run) {
     var N2 = sweepCompanionN(run.N, SWEEP_STATE.refine);
-    return s + one(run.N) + (N2 ? one(N2) : 0);
+    return s + sweepSecPerSolve(run.N) + (N2 ? sweepSecPerSolve(N2) : 0);
   }, 0);
 }
 function sweepFmtDur(s) { return s < 90 ? Math.round(s) + ' s' : (s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h'); }
@@ -800,14 +1039,17 @@ function sweepRenderBar() {
         : '') +
       (SWEEP_STATE.running
         ? '<span class="imp-sub">Running ' + swEsc(SWEEP_STATE.current || '') + ' · ~' + sweepFmtDur(sweepEta(nTodo)) + ' left</span>' +
+          '<button class="fh-action-btn ghost" onclick="openSweepAtlas()"' + (nDone ? '' : ' disabled') + '>◈ Atlas</button>' +
           '<button class="fh-action-btn ghost" onclick="SWEEP_STATE.stopRequested=true;this.disabled=true;this.textContent=\'Stopping after this run…\'">Stop</button>'
         : (nTodo.length ? '<span class="imp-sub">' + nTodo.length + ' to run · ~' + sweepFmtDur(sweepEta(nTodo)) + '</span>' : '') +
           '<button class="fh-action-btn ghost" onclick="sweepClearResults(true)">Clear selected</button>' +
           '<button class="fh-action-btn ghost" onclick="sweepExportCsv()"' + (nDone ? '' : ' disabled') + '>Export CSV</button>' +
+          '<button class="fh-action-btn ghost" onclick="openSweepAtlas()"' + (nDone ? '' : ' disabled') + ' title="Explore the results: geometry, stiffness surface, parameter map and charts">◈ Atlas</button>' +
           '<button class="fh-action-btn" onclick="sweepStart()"' + (nTodo.length && !SWEEP_STATE.previewing ? '' : ' disabled') + '>▶ Run ' + nTodo.length + '</button>') +
     '</div>';
 }
 
+var SWEEP_UI = { notesOpen: false };
 function sweepRender() {
   sweepRenderBar();
   var tb = swEl('swTable'), notes = swEl('swNotes');
@@ -818,16 +1060,17 @@ function sweepRender() {
     (showExp ? '<th>Expected %</th>' : '') + '<th>Solid %</th><th>Ex</th><th>Ey</th><th>Ez</th><th>Gyz</th><th>Gxz</th><th>Gxy</th>' +
     (showRef ? '<th title="Ex, Ey, Ez ÷ reference">÷ ref</th>' : '') +
     '<th>Iter.</th><th>Resid.</th><th>Time</th><th class="fl">Checks</th></tr></thead><tbody>';
-  var allNotes = [];
+  var allNotes = [], noteRuns = {};
   SWEEP_STATE.runs.forEach(function (run) {
     var r = SWEEP_STATE.results[run.id], cur = SWEEP_STATE.current === run.id;
     var cls = cur ? 'cur' : (r && r.error ? 'err' : (r ? 'done' : ''));
-    var setting = run.param ? run.param.name + ' ' + (+(+run.param.value).toPrecision(4)) : '';
+    var setting = run.params ? run.params.map(function (p) { return p.name + ' ' + sweepFmtVal(p.value); }).join(' \u00b7 ')
+                             : (run.param ? run.param.name + ' ' + (+(+run.param.value).toPrecision(4)) : '');
     if (run.shift) setting = run.shift + ' · ' + setting;
     h += '<tr class="' + cls + '" title="' + swEsc(run.purpose + (run.note ? ' — ' + run.note : '')) + '">' +
       '<td><input type="checkbox"' + (SWEEP_STATE.selected[run.id] ? ' checked' : '') + (SWEEP_STATE.running ? ' disabled' : '') +
         ' onchange="sweepToggle(\'' + run.id + '\', this.checked)"></td>' +
-      '<td class="id">' + swEsc(run.id) + '</td><td class="set">' + swEsc((run.label ? run.label.split(' · ')[0] + ' · ' : '') + setting) + '</td>' +
+      '<td class="id">' + swEsc(run.id) + '</td><td class="set">' + swEsc((run.recipe && run.label ? run.label.split(' · ')[0] + ' · ' : '') + setting) + '</td>' +
       '<td>' + run.N + '</td><td>' + run.nu + '</td>' + (showExp ? '<td>' + (run.expectedVf != null ? run.expectedVf : '') + '</td>' : '');
     var st = SWEEP_STATE.preview[run.id], flags = sweepFlags(run, st);
     var flagHtml = '<td class="fl">' + (st ? (flags.length ? flags.map(function (f) {
@@ -851,13 +1094,21 @@ function sweepRender() {
       h += '<td' + vfCls + '>' + r.vf_solved.toFixed(2) + (r.trim_removed_pct > 0.005 ? '<sup title="before island trim ' + r.vf_voxel.toFixed(2) + ' %">*</sup>' : '') + '</td>' +
         ec('Ex') + ec('Ey') + ec('Ez') + ec('Gyz') + ec('Gxz') + ec('Gxy') + ratios +
         '<td' + (r.converged ? '' : ' class="warn"') + '>' + r.iters + '</td><td>' + r.residual.toExponential(1) + '</td><td>' + sweepFmtDur(r.wall_s) + '</td>';
-      (r.notes || []).forEach(function (n) { allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(n)); });
+      (r.notes || []).forEach(function (n) { noteRuns[run.id] = 1; allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(n)); });
     } else h += preVf + '<td colspan="' + (7 + (showRef ? 1 : 0)) + '"></td><td></td><td></td>';
     h += flagHtml + '</tr>';
-    if (st && !r) flags.forEach(function (f) { if (f.level !== 'info') allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(f.text)); });
+    if (st && !r) flags.forEach(function (f) { if (f.level !== 'info') { noteRuns[run.id] = 1; allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(f.text)); } });
   });
   tb.innerHTML = h + '</tbody>';
-  if (notes) notes.innerHTML = allNotes.length ? '<div class="imp-warn">' + allNotes.join('<br>') + '</div>' : '';
+  var nNoteRuns = Object.keys(noteRuns).length;
+  if (notes) {
+    var prevOpen = notes.querySelector('details');
+    if (prevOpen) SWEEP_UI.notesOpen = prevOpen.open;
+    notes.innerHTML = allNotes.length
+      ? '<details class="sw-ndet"' + (SWEEP_UI.notesOpen ? ' open' : '') + ' ontoggle="SWEEP_UI.notesOpen=this.open"><summary>Notes and warnings (' + allNotes.length + ')' +
+        '<span class="imp-sub">on ' + nNoteRuns + ' run' + (nNoteRuns === 1 ? '' : 's') + '</span></summary><div class="imp-warn">' + allNotes.join('<br>') + '</div></details>'
+      : '';
+  }
 }
 
 function sweepPaintHeaderBtn(i, n) {

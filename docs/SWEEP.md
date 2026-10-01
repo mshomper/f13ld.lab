@@ -1,4 +1,4 @@
-# F13LD.lab — Parameter Sweep (v0.10.0)
+# F13LD.lab — Parameter Sweep (v0.12.0)
 
 **Open:** ⟳ Sweep in the header. The panel can be closed while a sweep runs; the header button shows progress (e.g. *Sweep 12/41*). Run All is blocked while a sweep is running, and a sweep won't start during a run.
 
@@ -34,17 +34,31 @@ One row per run. Columns read (others are ignored, `purpose` / `note` / `set` / 
 | Sheet | `shell`, offset 0, wall thickness = c (no field rescaling; the lab uses the raw gyroid, range ±1.5) |
 | Skeletal | `solid` on −φ with offset −c |
 
-### 1.2 Build one from a loaded design
+### 1.2 Build one from a loaded design (the main way, v0.11)
 
-Pick a design, one parameter, a start, an end and a number of steps (linear, up to 200), a grid and a Poisson's ratio.
+The builder sits at the top of the Sweep panel; loading a CSV is the second row. Pick a design, **parameter 1**, optionally **parameter 2**, a grid and a Poisson's ratio. Each parameter takes either a start, an end and a number of steps, or a list of values (`0, 1/8, 1/4` — fractions allowed). Two parameters make the full grid (parameter 1 × parameter 2). Parameter 1 can be stepped by value or by solid fraction (§1.4) when it is a threshold-type parameter.
+
+Parameters come from the design's own recipe, so every family works (catalogue in `14d-voxel-stats.js`, `sweepParamCatalog`):
 
 | Design | Parameters |
 |---|---|
 | TPMS solid | Level |
-| TPMS sheet | Sheet half-thickness (c), level offset |
+| TPMS sheet | Sheet half-thickness, level offset |
 | PI-TPMS | Wall ratio (tube diameter ÷ cell), shift x / y / z (cycles) |
-| Grain, noise | Level, half-width |
+| Beam (new schema) | Radius scale, radius x / y / z, node ball radius, node smoothing; old schema: radius. No uniform offset — the capsule distance plateaus outside the strut halo, so an offset is not uniform |
+| Bundle | Each structure's own numeric fields, sheet width, offset |
+| Wave | Iso level, thickness, phase/time, offset |
+| Grain, noise | Level / center, half-width |
 | Imported STL cell | Wall offset (mm) — the same control as the import dialog's slider |
+| Any family | Any other numeric field of the recipe (listed under *Other*) |
+
+**Review before creating.** *Review* voxelizes every combination at N = 32 in a background worker (no solves) and shows, before anything is committed:
+
+- runs (n₁ × n₂), total solves (doubled when a second grid is on), estimated time and the solid-fraction range;
+- a parameter-1 × parameter-2 map of solid fraction, with skipped combinations hatched (empty, fully solid, no load path, or a solid-fraction target out of reach);
+- notes: how many runs carry load on only some axes, how many will have features under 6 voxels at the chosen grid (and what the sweep would cost at N = 128), a hardware note, and storage.
+
+Time estimates use this machine's measured seconds per solve at each grid (kept across sweeps); before the first run they fall back to rough guesses (2 / 3 / 20 s at N = 32 / 64 / 128). There is no run cap: the hardware note says when a grid is above what the GPU tier handles comfortably, and long sweeps are the user's call (Matt, 2026-10-01). *Create* writes the runs (ids `S{i}-{j}`) and unticks the skipped ones; the builder keeps its settings, including the grid.
 
 ### 1.3 Geometry check before solving
 
@@ -77,7 +91,7 @@ For parameters where solid is a threshold on a per-voxel quantity (TPMS level, s
 
 ## 3. Results
 
-Kept in the browser (localStorage `f13ld.lab.sweep.v1`), so a reload resumes; loading a new run list asks before clearing. *Clear selected* re-queues runs.
+Kept in the browser (IndexedDB `f13ld.lab.sweep`, migrated from the old localStorage key on first load), so a reload resumes; loading a new run list asks before clearing. *Clear selected* re-queues runs. Builder sweeps also export `param2_name param2_value`.
 
 **Export CSV** — one row per finished run:
 
@@ -89,7 +103,33 @@ Kept in the browser (localStorage `f13ld.lab.sweep.v1`), so a reload resumes; lo
 | Engineering constants | `Ex Ey Ez Gyz Gxz Gxy` (÷ E_s), `nu_xy nu_xz nu_yz` |
 | Solver record | `iters_total iters_xx … iters_xy final_residual_max converged wall_time_s` |
 | Reference | `ref_Ex ref_Ey ref_Ez ratio_Ex ratio_Ey ratio_Ez` |
-| Other | `notes` (build check, trim, convergence, reference differences over 5 %), `error` |
+| Other | `notes` (build check, trim, convergence, no-load axes, negative shear terms, reference differences over 5 %), `error` |
+
+**Axes with no load (v0.12).** The solver rejects a result when any axis modulus reads ≤ 0 or above the solid. Layers and strands have unloaded axes that read zero within solver noise — sometimes a hair negative (B6: Ex = Ez ≈ −6e-6 at void 1e-6). The sweep now keeps such a run, with a *no load on x, z* note, when the solve converged and every rejected axis is within 20 × the void stiffness of zero (at least 1e-5 ÷ E solid). Anything else is still an error, now with the reason and the values (*modulus outside 0 … E solid* or *did not converge*). A negative shear term (C44, C55, C66) gets its own note: not physical, rerun at high precision.
+
+**Notes and warnings** under the run table fold into one line (*Notes and warnings (67) on 41 runs*); click to open. The open/closed state is kept while the sweep runs.
+
+## 3b. Sweep Atlas (v0.11, v0.12)
+
+**◈ Atlas** in the sweep bar opens an explorer over the current sweep's results (enabled once one run has finished; it also works mid-sweep and refreshes after each run). Everything is in-lab; F13LD brand colors on the dark theme. A self-contained HTML export is a later option — the lab is not MIT-licensed, so an export would carry results and views only.
+
+| View | What it shows |
+|---|---|
+| Controls | Series (parameter-2 value for builder sweeps, CSV set otherwise), a slider through the series, run-grid vs extrapolated values (when a second grid was run), stiffness ÷ E solid or in MPa (material picked in the run controls, else the design's own) |
+| Cell geometry | The lab's ray-marcher on the selected run's recipe, 1 cell or 2×2×2. Rebuilt once the selection settles, so the slider stays smooth |
+| Directional Young's modulus | The lab's stiffness surface, E(n) = 1 / (vᵀ S v); readout of E max and its direction (dense sphere probe), E min, max / min, and a *strand-like* note when stiffness sits only in a narrow cone |
+| Readout | Connectivity class, flags from the geometry check, solid %, Ex Ey Ez, Gyz Gxz Gxy, max / min E, and the 6 × 6 stiffness matrix as a heatmap (numerical zeros shown as 0) |
+| Parameter map | Builder sweeps: parameter 1 × parameter 2 colored by connectivity, solid fraction, stiffest or softest axis, or Ez; unsolved and skipped cells marked; click to select. CSV sweeps: a table of the series |
+| Stiffness vs solid fraction | Ex, Ey, Ez of the selected series on a log axis, with the Voigt bound; hollow points show the other grid when a second grid was run |
+| Stiffness surface (v0.12) | Two-parameter builder sweeps: parameter 1 across, parameter 2 in depth, stiffness up — stiffest or softest axis, Ex, Ey, Ez, all three together (see-through, axis colors), the mean, a shear modulus or solid fraction; log or linear; colored by value or connectivity; contour lines on the floor; unsolved or skipped runs are holes. Hover for values, click to select. Drawn in lab code on a plain canvas (no extra WebGL context) |
+| Design space | Every run; color = connectivity, shape = series; y = stiffest axis, softest axis, Ez or the mean |
+| Data check | Runs solved, convergence, positive semi-definite matrices, shear terms positive, axes with no load, Voigt bound, stiffness rising with solid fraction within a series (drops over 3 % listed), connectivity counts, resolution and island-trim flags, any runs at void 1e-4 |
+
+**3-D views (v0.12).** Geometry, stiffness surface and the stiffness-vs-parameters surface share a CAD tumble: drag to tumble about the screen axes (the part follows the cursor and can roll over the top), right- or shift-drag to pan, scroll to zoom toward the cursor, double-click or ⌂ for the isometric home view. An x/y/z triad sits in the corner of the geometry and modulus views. **⛓ linked** (default on) turns the geometry and the modulus surface together, so a stiff lobe lines up with the struts that carry it; click to unlink. The run slider moves in place while dragging; the readout, matrix, surface and charts follow live.
+
+**Connectivity class** = number of eigenvalues of C above 1 % of the largest: 6 → connected 3-D lattice, 1 → strands only, otherwise partially connected. Directional moduli use the compliance of C with 1e-6 × max(Cᵢᵢ) added on the diagonal, so disconnected directions read near zero instead of failing.
+
+---
 
 ## 4. Accuracy check against Vixiv (A6, before the sweep)
 
@@ -132,3 +172,18 @@ All 41 runs converged (CG 1e-4, island trim on; it removed nothing). Whole matri
 - **Fischer–Koch jump (G set) is a topology change.** Euler characteristic of the voxel solid at N = 128, (0, ⅛, ½): loops per cell 25 (wall ratio 0.15–0.16) → 33 (0.17) → 41 (0.175–0.19) → 57 (0.20–0.21). New tube-to-tube contacts form between 0.16 and 0.175 and again between 0.19 and 0.20. At fixed grid the lab's Ez rises 7× and Ey 2× from 0.17 to 0.19. G1 (0.17) sits mid-transition, which is why it disagrees most with Vixiv (Ez 0.46×): stiffness at a contact onset is very sensitive to resolution.
 - **B6 (⅛, ¼, ⅜) — resolved: void stiffness.** At void 1e-4 the lab found Ex = Ez = 3.5e-4 where Vixiv reports ~0 (Ey matched, +4 %). The voxel solid is one network spanning x, y and z (N = 64 and 128, wall ratio 0.11–0.15), but at void 1e-6 (N = 64, CPU reference) Ex = Ez = −6.4e-6 — zero to solver accuracy — and Ey = 7.52e-4: the x/z stiffness was the void bridging the layers, not CG precision. Ey also dropped 23 % (it carried void stiffness too) and now sits 20 % below Vixiv at N = 64, the usual under-resolution, which the finer grid / extrapolation recovers.
 - **Void 1e-6 is low enough.** A3 at N = 64: void 1e-8 vs 1e-6 changes Ex by −0.2 % and Ez by −0.6 %, same 330 iterations.
+
+**Correction (§7):** the F-set agreement with Vixiv above (−0.2 %, −0.1 %) and the A3 match were at void 1e-4; at void 1e-6 the same extrapolation sits 5–6 % below Vixiv.
+
+## 7. Void 1e-6 rerun of the §5 matrix (Matt, GPU, 2026-10-01)
+
+Same matrix, void 1e-6 throughout, second grid one coarser (order 2). 40 of 41 solved; B6 was rejected by the solver's physicality check (*nonconvergent* label; its x/z read ≈ −6e-6) — v0.12 keeps such runs with a warning (§3).
+
+- **The void offset was not a flat +1e-4.** In units of the void modulus it added 1.2–1.6× on sheet and skeletal runs, 1.1–4× on the A set and 4.5–8× on Fischer–Koch and near-contact PI lattices (B4, B8, B10, G). What decides the size is how soft the axis is (≲ 1e-2 ÷ E solid), not the solid fraction: G1 at 33 % solid lost 19–20 % on Ex and Ez, B4 / B5 11–13 % on Ex, B10 25 % on shear. Sheet and skeletal runs moved under 1 %.
+- **Vixiv ratios, now consistent.** A1–A3 went from +6…+364 % high to 8–21 % low. Median run-grid ratio: 0.86 at N = 64, 0.89 at N = 128 (not the 2–5 % low read from the void-1e-4 A6 check). Extrapolated columns: median 0.93.
+- **Grid convergence orders unchanged** (A5: Ex 1.84, Ey 1.95, Ez 1.35; C3 sheet 1.23), but the three-grid extrapolation of A5 now sits at 0.950 / 0.941 of Vixiv on Ex / Ey (Ez 0.975). A5's solid fraction matches Vixiv, so the remaining ~5 % is not resolution or solid fraction. One plausible reason: displacement-based finite elements on a finite mesh read slightly stiff, voxel FFT reads soft, so the true value lies between — unconfirmed.
+- **B7 has a negative shear term:** C44 = C55 = −7.0e-6 (0.18 % of its largest eigenvalue, above solver noise), same sign on both grids. Rerun at 1e-5 to see whether it is tolerance (Matt rerunning B6 and B7 on his GPU).
+- **Fischer–Koch jump persists and sharpens:** Ez × 8.5 from wall ratio 0.17 to 0.19 (was × 7.0; Vixiv × 3.5).
+- **Iterations:** median +1.6 %; contact lattices rose more (G3 +48 %, hitting the 300 cap on yy at residual 1.003e-4; B5 +20 %; B10 +14 %). The main solves were no slower (N = 128 median 17.1 s vs 19.0 s).
+- Full tables: the analysis report kept with the session (`void_1e-6_report.md`).
+

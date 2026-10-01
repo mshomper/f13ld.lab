@@ -1686,7 +1686,12 @@ async function solveDesignElasticFull(recipe, N, opts) {
       name: recipe.name, family: family, mode: args.mode, rho: rho,
       valid: false, reject_reason: 'nonconvergent', badAxes: badAxes,
       Es_MPa: Es, nu: nu, Ex_MPa: Ex, Ey_MPa: Ey, Ez_MPa: Ez,
-      converged: hom.allConverged, perLC: hom.perLC, connectivity: connectivity
+      converged: hom.allConverged, perLC: hom.perLC, connectivity: connectivity,
+      /* v0.12 — the full result rides along so a caller (the sweep) can keep a run whose
+         unloaded axis reads ~0 or slightly negative instead of discarding it */
+      Gxy_MPa: Gxy, Gxz_MPa: Gxz, Gyz_MPa: Gyz, nu_xy: nu_xy, nu_xz: nu_xz, nu_yz: nu_yz,
+      rho_raw: insideRaw / solid.length, cgTol: opts.cgTol || CG_TOL_FULL, voidRatio: voidRatio,
+      C_eff: Array.from(C_phys), S: Array.from(S_phys), iters: hom.totalIters
     };
   }
 

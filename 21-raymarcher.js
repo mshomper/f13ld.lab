@@ -53,7 +53,7 @@ function buildLabRaymarcherFS(stepCount) {
     '#version 300 es',
     'precision highp float; precision highp sampler3D;',
     'out vec4 fragColor;',
-    'uniform vec2 res; uniform mat3 rot; uniform float zoom;',
+    'uniform vec2 res; uniform mat3 rot; uniform float zoom; uniform vec2 uPan;',
     'uniform float thickness; uniform float isoLevel; uniform float uTopoMode;',
     'uniform float uHalfInvert; uniform float uPipeR;',
     'uniform vec3  uPipeOffset;',
@@ -388,7 +388,7 @@ function buildLabRaymarcherFS(stepCount) {
 
     'void main() {',
     '  vec2 uv = (gl_FragCoord.xy - res*0.5) / min(res.x, res.y);',
-    '  vec3 ro = rot * vec3(0.0, 0.0, zoom);',
+    '  vec3 ro = rot * vec3(uPan.x, uPan.y, zoom);',
     '  vec3 rd = normalize(rot * vec3(uv.x, uv.y, -1.6));',
     '  float r = clamp(length(uv) * 1.1, 0.0, 1.0);',
     /* Push 5.4/5.5 — viewport background: darker sage base (#6b6e64) with
@@ -759,7 +759,7 @@ LabRaymarcher.prototype._compileShader = function() {
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   /* Cache uniform locations */
   var L = {};
-  ['res','rot','zoom','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset','uNormMode','uTexNG',
+  ['res','rot','zoom','uPan','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset','uNormMode','uTexNG',
    'uLipschitz','uField','uFieldMin','uFieldMax','uTile','uNrmStep',
    /* A.2 — Deformed/Stress view uniforms */
    'uViewMode','uDispUploaded','uDeformAmp','uDisp','uDispOffset','uDispScale',
@@ -1362,7 +1362,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
   /* Pointer drag — rotate _rotY (horizontal drag) and _rotX (vertical
      drag).  Active only in deform/stress modes; geom mode auto-rotates. */
   this.canvas.addEventListener('pointerdown', function(e) {
-    if (self._viewMode === 'geom') return;
+    if (self._extControl || self._viewMode === 'geom') return;
     self._pointerDown = true;
     self._lastPointerX = e.clientX;
     self._lastPointerY = e.clientY;
@@ -1398,7 +1398,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
 
   /* Wheel zoom — active only in deform/stress.  Clamp [8, 40]. */
   this.canvas.addEventListener('wheel', function(e) {
-    if (self._viewMode === 'geom') return;
+    if (self._extControl || self._viewMode === 'geom') return;
     e.preventDefault();
     var z = self._u.zoom;
     /* Scroll up (negative deltaY) → zoom in (smaller z) */
@@ -1438,8 +1438,9 @@ LabRaymarcher.prototype._render = function(t) {
   /* Build rotation matrix (Y then X) */
   var cy = Math.cos(this._rotY), sy = Math.sin(this._rotY);
   var cx = Math.cos(this._rotX), sx = Math.sin(this._rotX);
-  /* mat3, column-major:  Rx · Ry */
-  var rot = new Float32Array([
+  /* mat3, column-major:  Rx · Ry.  v0.12 — an external controller (the Sweep Atlas
+     tumble) can supply its own camera matrix in _rotM and a pan in _u.panX / panY. */
+  var rot = this._rotM || new Float32Array([
     cy,        0,    -sy,
     sx*sy,    cx,    sx*cy,
     cx*sy,   -sx,    cx*cy
@@ -1464,6 +1465,7 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform2f(u.res, w, h);
   gl.uniformMatrix3fv(u.rot, false, rot);
   gl.uniform1f(u.zoom,        S.zoom);
+  gl.uniform2f(u.uPan,        S.panX || 0, S.panY || 0);
   gl.uniform1f(u.thickness,   S.thickness);
   gl.uniform1f(u.isoLevel,    S.isoLevel);
   gl.uniform1f(u.uTopoMode,   S.topoMode);

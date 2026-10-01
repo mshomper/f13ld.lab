@@ -174,6 +174,7 @@ var LAB_SV_VS = [
   'uniform float uCmax;',
   'uniform mat3 uRot;',
   'uniform float uZoom;',
+  'uniform vec2 uPan;',
   'uniform float uAspect;',
   'out float vColor;',             /* color stretch input — for cividis */
   'out vec3 vNormal;',             /* radial direction — diffuse approx */
@@ -243,7 +244,7 @@ var LAB_SV_VS = [
   /* Orthographic projection — no perspective for this small inline
      canvas; the radial-property visualization reads cleanest with
      a flat camera.  uAspect adjusts X to keep the surface circular. */
-  '  gl_Position = vec4(world.x * uZoom / uAspect, world.y * uZoom, world.z * 0.5, 1.0);',
+  '  gl_Position = vec4(world.x * uZoom / uAspect + uPan.x, world.y * uZoom + uPan.y, world.z * 0.5, 1.0);',
 
   /* Analytic surface normal of the displaced surface r(n̂)·n̂ via two
      tangent finite-differences.  Replaces the old radial approximation so
@@ -457,7 +458,7 @@ StiffnessViz.prototype._compileShader = function() {
      returns the location of element 0; subsequent elements are at
      ['uS[1]', 'uS[2]', …].  We bind via uniform1fv with the whole array. */
   var L = {};
-  ['uS[0]','uREmax','uCmin','uCmax','uRot','uZoom','uAspect'].forEach(function(name){
+  ['uS[0]','uREmax','uCmin','uCmax','uRot','uZoom','uAspect','uPan'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -651,7 +652,8 @@ StiffnessViz.prototype._render = function() {
   /* Row-major equivalent of  R_x(rotX) · R_y(rotY) — applied as a
      column-major mat3 so the WebGL convention matches.  Using direct
      element layout to avoid pulling in a matrix lib. */
-  var rot = new Float32Array([
+  /* v0.12 — an external controller (the Sweep Atlas tumble) can supply _rotM and _u.panX / panY */
+  var rot = this._rotM || new Float32Array([
      cy,         0,     -sy,
      sx * sy,    cx,     sx * cy,
      cx * sy,   -sx,     cx * cy
@@ -666,6 +668,7 @@ StiffnessViz.prototype._render = function() {
   gl.uniformMatrix3fv(this._uloc.uRot, false, rot);
   gl.uniform1f (this._uloc.uZoom,    this._u.zoom);
   gl.uniform1f (this._uloc.uAspect,  w / h);
+  gl.uniform2f (this._uloc.uPan,     this._u.panX || 0, this._u.panY || 0);
 
   /* Mesh attribs are already bound from _uploadMesh; rebind defensively
      in case another GL context (the raymarcher's) was just active. */
@@ -698,6 +701,7 @@ StiffnessViz.prototype._attachInteractionHandlers = function() {
   var self = this;
 
   this.canvas.addEventListener('pointerdown', function(e) {
+    if (self._extControl) return;
     self._pointerDown = true;
     self._userInteracted = true;     /* push 5.3 — disables auto-rotate permanently */
     self._lastPointerX = e.clientX;
@@ -736,6 +740,7 @@ StiffnessViz.prototype._attachInteractionHandlers = function() {
      the wide range.  Push 5.3 — wheel also counts as user interaction,
      stopping auto-rotate. */
   this.canvas.addEventListener('wheel', function(e) {
+    if (self._extControl) return;
     e.preventDefault();
     self._userInteracted = true;
     var z = self._u.zoom;

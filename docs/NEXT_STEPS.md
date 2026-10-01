@@ -17,14 +17,20 @@
 | **v0.8.2** | PI / shell normalization kept on import (older recipes default OFF); normalized PI and shell rendering in the viewer; connectivity selector (all networks / largest / keep everything); per-network FE buckling |
 | **v0.9.0 / v0.9.1** | STL unit-cell import: periodic signed-distance grid, `import` kernel, report card, wall offset, IndexedDB store, export with embedded grid. See `STL_IMPORT_SCOPE.md` §7–8 |
 | **v0.10.0 / v0.10.1** | Parameter sweep: run-matrix CSV or one-parameter sweep of a loaded design → elastic stiffness per run, CSV export. Solver records final residual and takes a per-call tolerance. See `SWEEP.md` |
+| **v0.11.0** | Sweep builder for every family, two parameters, review before creating (solves, time, solid-fraction map); Sweep Atlas (geometry, directional modulus, matrix, parameter map, charts, data check). See `SWEEP.md` §1.2, §3b |
+| **v0.12.0** | Atlas: CAD tumble + linked rotation, 3-D stiffness surface, smooth slider. Sweep keeps no-load-axis runs (B6) with a warning, flags negative shear, collapsible notes. Void 1e-6 rerun analysed (`SWEEP.md` §7) |
 
 ---
 
-## 1. CURRENT FOCUS — PI-TPMS paper sweep (v0.10.0)
+## 1. CURRENT FOCUS — PI-TPMS paper sweep (v0.10.0 → v0.11.0)
 
 Matt's PI-TPMS Paper 1, Section 5: a 41-run matrix (sets A–G: PI-gyroid scaling, junction type / anisotropy, sheet and skeletal gyroid baselines, Poisson check, grid convergence, Fischer–Koch resolution) run through the new Sweep panel. See [`SWEEP.md`](SWEEP.md).
 
 - **Decisions (Matt, 2026-10-01):** keep the lab's island trim (faithful to how cells are built physically) and report trim differences as notes; precision is a toggle (1e-4 / 1e-5); check A6 at N = 128 before changing the solver.
+- **v0.11 (Matt, 2026-10-01):** the builder is the main way people will use the sweep, so it must work for every family and show total solves and cost before committing; no run cap beyond a hardware note; Atlas in-lab first (HTML export later — the lab is the one non-MIT tool), F13LD brand colors, no Vixiv reference values in the Atlas; charts written in the lab's own code with a Plotly-like look.
+- **Void 1e-6 rerun (`SWEEP.md` §7):** lab now reads ~10 % below Vixiv at the run grid and ~5 % below after extrapolation; the earlier near-perfect matches were the void stiffness. Matt is rerunning B6 and B7 at 1e-5 on his GPU (B7 has a small negative shear term).
+- **Noticed, not yet checked:** the axis triad on the main lab's geometry tiles is drawn from the rotation matrix's columns, while the ray-marcher shows the part with that matrix's transpose — the triad may not match the part's true orientation (the Atlas computes its own and is consistent).
+- **Open question for Matt:** re-base the matched-feature comparison on measured PI tube widths (`SWEEP.md` §5)?
 - **Accuracy vs Vixiv (A6):** N = 64 is 7–11 % low, N = 128 is 2–5 % low, first-order extrapolation lands within ~3 %. The gap is voxel resolution (stair-stepped tubes), not solver bias. Next decision for Matt: run the matrix at N = 128, extrapolate from N = 64 + 128 pairs, or add partial-volume voxels first (`SWEEP.md` §4).
 
 ## 1b. STL unit-cell import (done, v0.9.0–v0.9.1)
