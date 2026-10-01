@@ -1,7 +1,7 @@
 # F13LD.lab
 
 **Status:** v0.10.0 · alpha · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
-**License:** All rights reserved · License under review
+**License:** [PolyForm Noncommercial 1.0.0](./LICENSE.md): free for research and non-commercial use; anyone may run it to reproduce published results (see [NOTICE](./NOTICE)). Commercial licences: matt@notarobot-eng.com
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
 📓 **[Per-phase engineering logs](./docs/)** — handoff-quality records of every phase, decision, and bug
