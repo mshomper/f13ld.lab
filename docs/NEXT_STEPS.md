@@ -45,7 +45,7 @@ Matt's PI-TPMS Paper 1, Section 5: the run matrix is now **42 rows** (A4m added;
 
 ## 1a. Next dev cycle — pick up (in suggested order)
 
-1. **Analyse the production pass** with Matt: Figure 6 data, verification table vs Vixiv, fitted density exponents, directional-mean columns. Check B7's shear and B6's no-load axes at 1e-5.
+1. **Production pass done and checked (`SWEEP.md` §9).** Next: build Figure 6, the verification table and the Section 5 text from it with Matt — Figure 6 data, verification table vs Vixiv, fitted density exponents, directional-mean columns. Check B7's shear and B6's no-load axes at 1e-5.
 2. **Thinnest feature, properly** (Matt: "later" — this is the next lab feature). (a) A `thinnest_feature_T` export column. (b) Fix the voxel estimator's low bias on flattened tubes (the medial ribbon's edge balls — ~3–4 % low on PI; see `SWEEP.md` §8), e.g. keep only ridge points whose ball is a local maximum along the ridge, or measure minor width by chords at ridge points. (c) Builder: *step by thinnest feature*, like step by solid fraction.
 3. **Partial-volume voxels** (laminate mixing, Kabel/Merkert/Schneider 2015) — the lab's N = 64 numbers are 11–14 % low on thin PI/skeletal walls; this would shrink the grid gap and the need for extrapolation.
 4. **Elastic solver speed (16b GPU-resident CG):** still 2 blocking `mapAsync` per CG iteration. Port the v0.8.1 nonlinear approach. Directly speeds up sweeps.

@@ -229,3 +229,29 @@ Decision: compare at the feature size the lab actually builds, not the prescribe
 
 **Production pass for the paper (next):** the 42-row matrix at High precision (1e-5), void 1e-6, second grid **64 ↔ 128 pair**, order 2 — about 15–20 min on Matt's GPU. It also reruns B5, B6, B7 and G3 at the tighter tolerance.
 
+## 9. Production pass — 42-row matrix (Matt, GPU, 2026-10-01)
+
+High precision (CG 1e-5), void 1e-6, second grid **64 ↔ 128 pair**, order 2. 42 of 42 solved (F1 / F3 pair 32 + 64), 23 min total. Every matrix (run grid and extrapolated) is positive semi-definite. Only G3 is flagged: its N = 128 solve converged, its N = 64 partner stopped at 1,000 iterations (residual 3.8e-5).
+
+**Against Vixiv** (63 axis values with a reference; extrapolated unless stated): median **0.945** (IQR 0.92–0.96). N = 128 alone 0.917, N = 64 alone 0.80. The ratio rises with solid fraction (A1 ≈ 0.93 → A8 ≈ 0.97), the resolution signature. Low outliers: G1 (Ez 0.40, Ey 0.75 — contact onset), A2 Ey 0.88, G3 Ey 0.87, B5 0.90, B10 0.91.
+
+| Check | Lab | Vixiv / expectation |
+|---|---|---|
+| A-set density exponent (power-law fit, Ex / Ez) | **2.08 / 2.12** (local 2.03–2.12) | Vixiv at the same points 2.07 / 2.11 |
+| Sheet (C) / skeletal (D) exponent | 1.42 / 2.20 | — |
+| A-set Ez / Ex | 0.24–0.25 (B1 0.22) | ≈ ¼ |
+| B3 across / along [111] | 8.2×, identical in every direction across | ~8× |
+| B9 transverse isotropy | spread < 0.01 % around [111]; axis 0.0437, transverse 0.0407 | within 3 %; 0.046 / 0.042 |
+| B10 along / across [111] | 23.9× | ~23× |
+| B4 / B8 on their stiff axes | 17.0× | 16.7× |
+| B6 | Ex, Ez ≈ +3e-6 (zero), Ey 0.97 of Vixiv | stiffness along y only |
+| B7 | shear terms now positive (8e-7) | strands — the v0.12 negative shear was CG tolerance |
+| G set Ez, wall ratio 0.17 → 0.19 | × 8.1 | × 3.5 |
+| Poisson check E1–E3 vs A4m / C4 / D7 (directional mean) | +0.2 % / −0.1 % / +1.1 % | ranking holds at ν = 0.34 |
+
+**Grid convergence (F set, three grids):** A5 Ex / Ey / Ez order 1.82 / 1.95 / 1.41; the 64 + 128 order-2 extrapolation agrees with the three-grid value within 0.5 % on Ex / Ey and 2 % on Ez. Shear converges at order ≈ 0.8, so order-2 extrapolated shear moduli read ~6 % low — quote shear with that caveat. C3 sheet order 1.23.
+
+**B8 nuance:** on its axes B8 is 17× softer than B4 (matching Vixiv), but it has a needle-like lobe along the face diagonal [011] (E max 0.068, above B4's 0.052); only 1 % of directions reach 20 % of that. It is stiff only along strands — relevant to the "crossing junctions don't make a lattice stiff" point.
+
+**Lower-confidence points:** A1 (3.2 voxels across at N = 64; its extrapolation adds ~12 % over N = 128), G3 (partner grid unconverged; extrapolation +3–4 % over N = 128 — quote N = 128 or note it), F1 (intentionally coarse). Build checks within 3 %: B3 −2.2 %, F1 −2.9 %, A2 −1.2 %, D7 / E3 −1.1 %.
+
