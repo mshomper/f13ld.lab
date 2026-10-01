@@ -204,3 +204,17 @@ Decision: compare at the feature size the lab actually builds, not the prescribe
 
 **To run:** `PI-TPMS_section5_matched_feature.csv` (A4, A4m, C4, D7; same columns as the §5 matrix). Loading it replaces the current sweep in the browser, so export the 41-run results first (the panel asks).
 
+**Results (Matt, GPU, CG 1e-5, void 1e-6, N = 64 + 128, extrapolated order 2; ÷ E solid):**
+
+| Run | Solid % | Ex | Ey | Ez | E[111] | Directional mean E | E max (direction) | Mean E ÷ solid fraction |
+|---|---|---|---|---|---|---|---|---|
+| A4 (prescribed 0.126) | 10.29 | 0.00383 | 0.00392 | 0.00094 | 0.00390 | 0.00330 | 0.00573 (0, 0.88, 0.48) | 0.032 |
+| **A4m (measured 0.126)** | 11.63 | 0.00513 | 0.00512 | 0.00124 | 0.00532 | 0.00444 | 0.00763 (0, 0.88, 0.48) | 0.038 |
+| C4 sheet | 42.03 | 0.185 | 0.185 | 0.185 | 0.212 | 0.201 | 0.212 [111] | 0.477 |
+| D7 skeletal | 6.92 | 0.00290 | 0.00290 | 0.00290 | 0.00689 | 0.00468 | 0.00689 [111] | 0.068 |
+
+- Re-basing on measured width adds 13 % solid and 31–34 % stiffness on every axis; the anisotropy is unchanged (Ez / Ex 0.24).
+- At a matched 0.126 T feature, A4m is 1.77× stiffer than D7 along x and y, 0.43× along z, and about equal on the directional mean (−5 %), with 1.7× the solid. C4 is ~40× stiffer at 3.6× the solid.
+- D7 is strongly cubic-anisotropic (E[111] = 2.4 × E axis), so axis-only comparisons understate it; report the directional mean or E max / E min alongside the axis values.
+- Grid: N = 128 is 2.5–3.2 % below the extrapolated value for PI and skeletal (0.6 % for the sheet); N = 64 is 11–14 % low. Use the extrapolated columns.
+
