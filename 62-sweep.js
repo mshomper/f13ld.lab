@@ -37,6 +37,7 @@ var SWEEP_STATE = {
   selected: {},                    /* run_id → bool */
   precision: 'standard',
   preview: {},                     /* run_id → geometry stats (14d-voxel-stats.js) */
+  builder: {},                     /* last builder settings (kept across redraws and reloads) */
   previewing: false, previewDone: 0, previewTotal: 0,
   current: null, startedAt: 0, log: []
 };
@@ -47,7 +48,7 @@ function sweepSave() {
     localStorage.setItem(SWEEP_STORE_KEY, JSON.stringify({
       v: 1, name: SWEEP_STATE.name, source: SWEEP_STATE.source, runs: SWEEP_STATE.runs,
       results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
-      preview: SWEEP_STATE.preview
+      preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder
     }));
   } catch (e) { console.warn('[sweep] not saved (storage full or blocked):', e); }
 }
@@ -61,6 +62,7 @@ function sweepLoad() {
     SWEEP_STATE.runs = p.runs; SWEEP_STATE.results = p.results || {};
     SWEEP_STATE.selected = p.selected || {}; SWEEP_STATE.precision = p.precision || 'standard';
     SWEEP_STATE.preview = p.preview || {};
+    SWEEP_STATE.builder = p.builder || {};
   } catch (e) {}
 }
 
@@ -548,22 +550,45 @@ function sweepReplaceRuns(runs, name, source) {
   sweepPreviewAll();
 }
 
+/* Builder settings live in SWEEP_STATE.builder so a redraw (changing the
+   design, parameter or step mode, or after creating runs) keeps the grid,
+   Poisson's ratio, steps and range.  The range resets only when the design,
+   parameter or step mode changes, because the old numbers no longer apply. */
+function sweepReadBuilder() {
+  var b = SWEEP_STATE.builder || (SWEEP_STATE.builder = {});
+  if (!swEl('swN')) return b;
+  b.design = swEl('swDesign').value; b.param = swEl('swParam').value; b.by = swEl('swBy').value;
+  b.from = swEl('swFrom').value; b.to = swEl('swTo').value; b.steps = swEl('swSteps').value;
+  b.N = swEl('swN').value; b.nu = swEl('swNu').value;
+  return b;
+}
+function sweepBuilderChanged() { sweepReadBuilder(); sweepSave(); }
+
 function sweepRenderBuilder() {
   var el = swEl('swBuilder');
   if (!el) return;
+  var b = sweepReadBuilder();
   var ds = LAB_STATE.designs.filter(function (d) { var r = sweepRecipeOf(d); return r && sweepParamsFor(r).length; });
   if (!ds.length) { el.innerHTML = '<div class="imp-note">Load a design with an adjustable parameter first (TPMS, PI-TPMS, grain, noise or an imported STL cell).</div>'; return; }
-  var sel = swEl('swDesign') ? swEl('swDesign').value : ds[0].id;
+  var sel = b.design;
   if (!ds.some(function (d) { return d.id === sel; })) sel = ds[0].id;
   var d = ds.filter(function (x) { return x.id === sel; })[0];
   var rec = sweepRecipeOf(d);
   var ps = sweepParamsFor(rec);
-  var pk = swEl('swParam') && ps.some(function (p) { return p.key === swEl('swParam').value; }) ? swEl('swParam').value : ps[0].key;
+  var pk = ps.some(function (p) { return p.key === b.param; }) ? b.param : ps[0].key;
   var p = ps.filter(function (x) { return x.key === pk; })[0];
   var cur = p.get(rec);
-  var nu = (rec.material && rec.material.nu) || 0.34;
   var canVf = sweepTargetable(rec, pk);
-  var byVf = canVf && swEl('swBy') && swEl('swBy').value === 'vf';
+  var byVf = canVf && b.by === 'vf';
+  var rangeKey = sel + '|' + pk + '|' + (byVf ? 'vf' : 'value');
+  if (b.rangeKey !== rangeKey || b.from == null || b.from === '' || b.to == null || b.to === '') {
+    b.from = byVf ? '5' : String(+cur.toPrecision(4));
+    b.to = byVf ? '40' : String(+(cur === 0 ? 0.1 : cur * 2).toPrecision(4));
+    b.rangeKey = rangeKey;
+  }
+  var N = String(b.N || 64), nu = b.nu != null && b.nu !== '' ? b.nu : String((rec.material && rec.material.nu) || 0.34);
+  var steps = b.steps || '5';
+  b.design = sel; b.param = pk; b.by = byVf ? 'vf' : 'value'; b.N = N; b.nu = nu; b.steps = steps;
   el.innerHTML =
     '<div class="imp-settings">' +
       '<label>Design <select id="swDesign" onchange="sweepRenderBuilder()">' + ds.map(function (x) {
@@ -575,22 +600,24 @@ function sweepRenderBuilder() {
         (canVf ? '<option value="vf"' + (byVf ? ' selected' : '') + '>solid fraction</option>' : '') + '</select></label>' +
     '</div><div class="imp-settings">' +
       (byVf
-        ? '<label>From <input id="swFrom" type="number" step="any" min="0" max="100" value="5"> %</label>' +
-          '<label>To <input id="swTo" type="number" step="any" min="0" max="100" value="40"> %</label>'
-        : '<label>From <input id="swFrom" type="number" step="any" value="' + (+cur.toPrecision(4)) + '"></label>' +
-          '<label>To <input id="swTo" type="number" step="any" value="' + (+(cur === 0 ? 0.1 : cur * 2).toPrecision(4)) + '"></label>') +
-      '<label>Steps <input id="swSteps" type="number" min="1" max="200" value="5"></label>' +
+        ? '<label>From <input id="swFrom" type="number" step="any" min="0" max="100" value="' + swEsc(b.from) + '" onchange="sweepBuilderChanged()"> %</label>' +
+          '<label>To <input id="swTo" type="number" step="any" min="0" max="100" value="' + swEsc(b.to) + '" onchange="sweepBuilderChanged()"> %</label>'
+        : '<label>From <input id="swFrom" type="number" step="any" value="' + swEsc(b.from) + '" onchange="sweepBuilderChanged()"></label>' +
+          '<label>To <input id="swTo" type="number" step="any" value="' + swEsc(b.to) + '" onchange="sweepBuilderChanged()"></label>') +
+      '<label>Steps <input id="swSteps" type="number" min="1" max="200" value="' + swEsc(steps) + '" onchange="sweepBuilderChanged()"></label>' +
       (byVf ? '<span class="imp-sub">solid % before island trim, exact at the chosen grid</span>'
             : '<span class="imp-sub">' + (p.unit ? p.unit + ' · ' : '') + 'now ' + (+cur.toPrecision(4)) + '</span>') +
     '</div><div class="imp-settings">' +
-      '<label>Grid <select id="swN"><option>32</option><option selected>64</option><option>128</option></select></label>' +
-      '<label>Poisson’s ratio <input id="swNu" type="number" step="0.001" min="0" max="0.499" value="' + nu + '"></label>' +
+      '<label>Grid <select id="swN" onchange="sweepBuilderChanged()">' + ['32', '64', '128'].map(function (n) {
+        return '<option' + (n === N ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></label>' +
+      '<label>Poisson’s ratio <input id="swNu" type="number" step="0.001" min="0" max="0.499" value="' + swEsc(nu) + '" onchange="sweepBuilderChanged()"></label>' +
       '<button class="fh-action-btn ghost" onclick="sweepBuildFromUI()">Create runs</button>' +
     '</div>';
 }
 
 function sweepBuildFromUI() {
   if (SWEEP_STATE.running) return;
+  sweepBuilderChanged();
   var d = LAB_STATE.designs.filter(function (x) { return x.id === swEl('swDesign').value; })[0];
   var from = parseFloat(swEl('swFrom').value), to = parseFloat(swEl('swTo').value), steps = parseInt(swEl('swSteps').value, 10);
   var N = parseInt(swEl('swN').value, 10), nu = parseFloat(swEl('swNu').value);
