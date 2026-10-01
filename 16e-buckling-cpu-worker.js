@@ -86,7 +86,7 @@ var BUCKLE_WORKER_FILES = [
 /* Bump on any solver-file change so the worker's importScripts refetches
    instead of serving a stale cached copy (the blob worker has its own cache,
    separate from the main page). */
-var BUCKLE_SOLVER_VERSION = 'fe-h8i-3';
+var BUCKLE_SOLVER_VERSION = 'fe-h8i-4';
 
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes

@@ -107,6 +107,7 @@ function sweepParamGet(recipe, spec) {
   return v / (a.k || 1);
 }
 function sweepParamSet(recipe, spec, v) {
+  if (spec.integer) v = Math.max(1, Math.round(v));
   for (var i = 0; i < spec.apply.length; i++) sweepSetPath(recipe, spec.apply[i].p, v * (spec.apply[i].k || 1));
 }
 
@@ -130,6 +131,10 @@ function sweepParamCatalog(recipe) {
       ['x', 'y', 'z'].forEach(function (a) {
         add({ key: 'shift_' + a, label: 'Shift ' + a, unit: 'cycles', def: 0, target: null, apply: [{ p: 'geometry.phaseShift.' + a, k: 1 }] });
       });
+      /* v0.13.0 — field B frequency (whole-number multiple of field A; 1 = classic PI-TPMS).
+         integer: values are rounded when applied, builder defaults to 1…4. */
+      add({ key: 'fieldBFreq', label: 'Field B frequency (whole multiple of A)', unit: '×', def: 1, target: null, hint: [1, 4],
+            integer: true, apply: [{ p: 'geometry.fieldBFreq', k: 1 }] });
     } else if (mode === 'shell') {
       add({ key: 'wallThickness', label: 'Sheet half-thickness (level c)', unit: '', def: 0.3, target: 'threshold', hint: [0.01, 1.5],
             apply: [{ p: 'geometry.wallThickness', k: 1 }], thresholdPath: 'geometry.wallThickness' });
@@ -195,7 +200,7 @@ function sweepParamCatalog(recipe) {
     have['geometry.node_ball_radius'] = have['geometry.node_smoothing_k'] = true;   /* old beam schema ignores these */
   }
   out.forEach(function (s) { s.apply.forEach(function (a) { have[a.p] = true; }); });
-  var SKIP = /(^|\.)(cellSizeMm|cellMult|cell_size_mm|cell|cell_scale(_[xyz])?|symmetryId|structure|twist_mode|warp_mode|warp_frame|col_handed|z_handed|braid_col_handed|mode|topology)$/;
+  var SKIP = /(^|\.)(cellSizeMm|cellMult|cell_size_mm|cell|cell_scale(_[xyz])?|fieldBScale|field_b_scale|field_b_freq|symmetryId|structure|twist_mode|warp_mode|warp_frame|col_handed|z_handed|braid_col_handed|mode|topology)$/;
   ['geometry', 'surface', 'field'].forEach(function (blk) {
     (function walk(obj, prefix, depth) {
       if (!obj || typeof obj !== 'object' || Array.isArray(obj) || depth > 2) return;
@@ -256,17 +261,30 @@ function sweepThresholdField(recipe, spec, N) {
   } else if (tp === 'geometry.pipeR' && mode === 'pi-tpms') {
     var ps = args.phaseShift || {}, TP = 2 * Math.PI;
     var dx = (ps.x || 0) * TP, dy = (ps.y || 0) * TP, dz = (ps.z || 0) * TP;
+    /* v0.13.0 — mirrors buildVoxels: φA has the preset constant restored
+       (offset), and field-pair recipes take field B from tpmsPairB */
+    var off = args.offset || 0, pair = params.pair;
+    var evA = function (x, y, z) { return ev(x, y, z) - off; };
+    var evB = pair ? function (x, y, z) { return tpmsPairB(pair, x, y, z, dx, dy, dz); }
+                   : function (x, y, z) { return ev(x + dx, y + dy, z + dz) - off; };
+    var gradB = function (x, y, z) {
+      if (!pair) return grad(x + dx, y + dy, z + dz);
+      var gx = (evB(x + NORM_E, y, z) - evB(x - NORM_E, y, z)) * INV2E;
+      var gy = (evB(x, y + NORM_E, z) - evB(x, y - NORM_E, z)) * INV2E;
+      var gz = (evB(x, y, z + NORM_E) - evB(x, y, z - NORM_E)) * INV2E;
+      return { gx: gx, gy: gy, gz: gz, mag: Math.sqrt(gx * gx + gy * gy + gz * gz) };
+    };
     if (params.piNorm) {
       each(function (x, y, z) {
-        var a = ev(x, y, z), b = ev(x + dx, y + dy, z + dz);
-        var gA = grad(x, y, z), gB = grad(x + dx, y + dy, z + dz);
+        var a = evA(x, y, z), b = evB(x, y, z);
+        var gA = grad(x, y, z), gB = gradB(x, y, z);
         var mA = Math.max(gA.mag, NORM_EPS), mB = Math.max(gB.mag, NORM_EPS);
         var dA = a / mA, dB = b / mB;
         var cs = (gA.gx * gB.gx + gA.gy * gB.gy + gA.gz * gB.gz) / (mA * mB);
         if (cs > NORM_COSCLAMP) cs = NORM_COSCLAMP; if (cs < -NORM_COSCLAMP) cs = -NORM_COSCLAMP;
         return Math.sqrt(Math.max(dA * dA - 2 * cs * dA * dB + dB * dB, 0) / (1 - cs * cs));
       });
-    } else each(function (x, y, z) { return Math.max(Math.abs(ev(x, y, z)), Math.abs(ev(x + dx, y + dy, z + dz))); });
+    } else each(function (x, y, z) { return Math.max(Math.abs(evA(x, y, z)), Math.abs(evB(x, y, z))); });
     toPath = ident;
   } else if (/\.(half_width|center)$/.test(tp) && (family === 'grain' || family === 'noise')) {
     var iso = params.isoLevel, inv = !!params.halfInvert;

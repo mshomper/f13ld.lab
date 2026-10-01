@@ -330,6 +330,18 @@ function normalizeDesignJson(json, filename){
     }
   }
 
+  /* Field-pair PI-TPMS (v0.13.0): name both fields, e.g. "gyroid × Fischer-Koch S (2×) · pi-tpms" */
+  if (family === 'tpms' && !json.title && !json.name){
+    var _gB = json.geometry || {};
+    var _kB = Math.round(+(_gB.field_b_freq != null ? _gB.field_b_freq : _gB.fieldBFreq) || 1);
+    var _sB = json.surface_b || null;
+    if (_sB || _kB > 1){
+      var _aLbl = presetLabel || 'TPMS';
+      var _bLbl = _sB ? (_sB.label || (TPMS_RAW_PRESET_TABLE[_sB.preset] && TPMS_RAW_PRESET_TABLE[_sB.preset].label) || _sB.preset || 'custom') : _aLbl;
+      title = _aLbl + ' \u00d7 ' + _bLbl + (_kB > 1 ? ' (' + _kB + '\u00d7)' : '') + (rawMode ? ' \u00b7 ' + rawMode : '');
+    }
+  }
+
   /* ── 6. Build a renderable lab recipe ─────────────────────── */
   var recipe = null;
   var recipeNote = '';
@@ -355,6 +367,11 @@ function normalizeDesignJson(json, filename){
     /* Phase shift — snake_case → camelCase */
     var ps = extG.phase_shift != null ? extG.phase_shift : extG.phaseShift;
     if (ps != null) labG.phaseShift = ps;
+    /* v0.13.0 — field-pair PI-TPMS: field B frequency multiple + amplitude match */
+    var fbf = extG.field_b_freq != null ? extG.field_b_freq : extG.fieldBFreq;
+    if (fbf != null) labG.fieldBFreq = fbf;
+    var fbs = extG.field_b_scale != null ? extG.field_b_scale : extG.fieldBScale;
+    if (fbs != null) labG.fieldBScale = fbs;
     /* v0.8.2 — gradient-normalization flags from F13LD.tpms / F13LD.mesh
        (pi_normalize: cylindrical PI-TPMS pipes, radius in distance units;
        shell_normalize: constant-thickness walls).  Were dropped here, so every
@@ -374,6 +391,20 @@ function normalizeDesignJson(json, filename){
     return labG;
   }
 
+  /* Field B of a field-pair PI-TPMS recipe → lab terms.  A preset's additive
+     constant stays INSIDE field B's terms (zero-factor term) — the shared
+     geometry.offset already holds field A's constant. */
+  function labSurfaceB(sb){
+    if (!sb) return null;
+    if (sb.type === 'raw_preset'){
+      if (!TPMS_RAW_PRESET_TABLE[sb.preset]) throw new Error('Field B preset "' + sb.preset + '" is not in the expansion table');
+      return { type: 'terms', preset: sb.preset, label: TPMS_RAW_PRESET_TABLE[sb.preset].label,
+               terms: tpmsPresetTermsWithConstant(sb.preset) };
+    }
+    if (Array.isArray(sb.terms)) return { type: 'terms', preset: sb.preset || 'custom', terms: sb.terms };
+    throw new Error('Field B (surface_b) has neither terms nor a preset');
+  }
+
   if (typeof KERNELS !== 'undefined' && KERNELS[family]){
     if (family === 'tpms'){
       if (json.surface && json.surface.type === 'terms' && Array.isArray(json.surface.terms)){
@@ -384,6 +415,7 @@ function normalizeDesignJson(json, filename){
           geometry: buildLabGeometry(json.geometry, 'solid'),
           material: json.material || DEFAULT_MATERIAL
         };
+        if (json.surface_b) recipe.surface_b = labSurfaceB(json.surface_b);
         recipeNote = 'TPMS recipe (terms surface) accepted';
       } else if (json.surface && json.surface.type === 'raw_preset'){
         /* Expand named preset to lab terms via the embedded preset table.
@@ -410,6 +442,7 @@ function normalizeDesignJson(json, filename){
             geometry: baseGeom,
             material: json.material || DEFAULT_MATERIAL
           };
+          if (json.surface_b) recipe.surface_b = labSurfaceB(json.surface_b);
           recipeNote = 'TPMS preset "' + (preset.label || presetKey) + '" expanded to terms';
         } else {
           recipeNote = 'TPMS preset "' + (json.surface.label || presetKey) +

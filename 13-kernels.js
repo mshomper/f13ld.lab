@@ -117,7 +117,8 @@ var TpmsKernel = {
     return {
       terms:     terms,
       shellNorm: (g.shell_normalize !== undefined) ? !!g.shell_normalize : false,
-      piNorm:    (g.pi_normalize    !== undefined) ? !!g.pi_normalize    : false
+      piNorm:    (g.pi_normalize    !== undefined) ? !!g.pi_normalize    : false,
+      pair:      tpmsResolvePair(recipe, terms)
     };
   },
 
@@ -125,6 +126,79 @@ var TpmsKernel = {
     return evaluateTpms(params.terms, x, y, z);
   }
 };
+
+
+/* ════════════════════════════════════════════════════════════
+   Field-pair PI-TPMS (v0.13.0 — F13LD.tpms v1.1.0 / F13LD.mesh v0.7.1)
+
+   PI-TPMS pipes trace where field A and field B cross.  Classic PI-TPMS
+   uses B = A shifted by δ.  Field-pair recipes add:
+     surface_b                independent field B (null/absent → B is A)
+     geometry.fieldBFreq      whole-number frequency multiple of A
+       (field_b_freq)         (keeps one A cell periodic)
+     geometry.fieldBScale     amplitude match rms(A)/rms(B)
+       (field_b_scale)        (recomputed on the TPMS/mesh 16³ grid if absent)
+   As used:  φB_eff(p) = amp · φB(k·p + δ).
+
+   pair is null for a plain self-pair (no surface_b, k = 1), so every
+   existing recipe takes exactly the old code path.
+
+   Constants: lab moves a raw preset's additive constant into
+   geometry.offset (solid where F < offset).  In pi-tpms mode that offset
+   therefore holds field A's constant; field B carries its own constant
+   inside its terms (60-add-design.js appends it as a zero-factor term).
+   ════════════════════════════════════════════════════════════ */
+function tpmsFieldRMS(fn) {
+  var M = 16, H = Math.PI, st = 2 * H / M, acc = 0;
+  for (var i = 0; i < M; i++) { var x = -H + (i + 0.5) * st;
+    for (var j = 0; j < M; j++) { var y = -H + (j + 0.5) * st;
+      for (var k = 0; k < M; k++) { var z = -H + (k + 0.5) * st; var v = fn(x, y, z); acc += v * v; } } }
+  return Math.sqrt(acc / (M * M * M));
+}
+
+/* Preset key → terms, with any additive constant appended as a zero-factor
+   term (evaluateTpms returns coef for a term with no factors). */
+function tpmsPresetTermsWithConstant(preset) {
+  if (typeof TPMS_RAW_PRESET_TABLE !== 'undefined' && TPMS_RAW_PRESET_TABLE[preset]) {
+    var e = TPMS_RAW_PRESET_TABLE[preset];
+    var t = JSON.parse(JSON.stringify(e.terms));
+    if (e.constant) t.push({ on: true, coef: e.constant, factors: [] });
+    return t;
+  }
+  return resolveRawPreset(preset);
+}
+
+function tpmsResolvePair(recipe, termsA) {
+  var g = recipe.geometry || {};
+  if ((g.mode || 'solid') !== 'pi-tpms') return null;
+  var sB = recipe.surface_b || null;
+  var kRaw = g.fieldBFreq != null ? g.fieldBFreq : g.field_b_freq;
+  var k = Math.max(1, Math.round(+kRaw || 1));
+  if (!sB && k === 1) return null;                       /* classic self-pair */
+  var offA = g.offset != null ? g.offset : 0;            /* field A's constant (negated) */
+  var termsB, offB;
+  if (!sB) { termsB = termsA; offB = offA; }             /* A at k× frequency */
+  else {
+    termsB = (sB.type === 'raw_preset' || !sB.terms) ? tpmsPresetTermsWithConstant(sB.preset) : sB.terms;
+    if (!termsB) throw new Error('TpmsKernel: field B preset "' + sB.preset + '" could not be resolved');
+    offB = 0;
+  }
+  var scl = g.fieldBScale != null ? g.fieldBScale : g.field_b_scale;
+  var amp = 1;
+  if (typeof scl === 'number' && isFinite(scl) && scl > 0) amp = scl;
+  else if (sB) {
+    var ra = tpmsFieldRMS(function (x, y, z) { return evaluateTpms(termsA, x, y, z) - offA; });
+    var rb = tpmsFieldRMS(function (x, y, z) { return evaluateTpms(termsB, x, y, z) - offB; });
+    if (ra > 1e-9 && rb > 1e-9) amp = ra / rb;
+  }
+  return { terms: termsB, offset: offB, k: k, amp: amp };
+}
+
+/* Field B for a pair at point p, shifted by δ = (dx,dy,dz) radians in B's
+   own coordinates.  Constant (offset) already applied. */
+function tpmsPairB(pair, x, y, z, dx, dy, dz) {
+  return pair.amp * (evaluateTpms(pair.terms, pair.k * x + dx, pair.k * y + dy, pair.k * z + dz) - pair.offset);
+}
 
 
 /* ════════════════════════════════════════════════════════════
@@ -733,6 +807,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     TpmsKernel: TpmsKernel, NoiseKernel: NoiseKernel, GrainKernel: GrainKernel,
     KERNELS: KERNELS, applyMode: applyMode, applyModeRaw: applyModeRaw,
-    resolveRawPreset: resolveRawPreset, evaluateTpms: evaluateTpms
+    resolveRawPreset: resolveRawPreset, evaluateTpms: evaluateTpms,
+    tpmsResolvePair: tpmsResolvePair, tpmsPairB: tpmsPairB, tpmsFieldRMS: tpmsFieldRMS
   };
 }

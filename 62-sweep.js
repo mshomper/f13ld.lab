@@ -282,8 +282,9 @@ function sweepRunsFromCombos(plan, combos) {
     [plan.spec1].concat(plan.spec2 ? [plan.spec2] : []).forEach(function (sp) {
       sp.apply.forEach(function (ap) { applied.push({ p: ap.p, v: sweepGetPath(r, ap.p) }); });
     });
-    var params = [{ key: plan.spec1.key, name: plan.spec1.label, unit: plan.spec1.unit, value: c.v1 }];
-    if (plan.spec2) params.push({ key: plan.spec2.key, name: plan.spec2.label, unit: plan.spec2.unit, value: c.v2 });
+    var iv = function (sp, v) { return sp.integer ? Math.max(1, Math.round(v)) : v; };   /* whole-number params report what was applied */
+    var params = [{ key: plan.spec1.key, name: plan.spec1.label, unit: plan.spec1.unit, value: iv(plan.spec1, c.v1) }];
+    if (plan.spec2) params.push({ key: plan.spec2.key, name: plan.spec2.label, unit: plan.spec2.unit, value: iv(plan.spec2, c.v2) });
     var purpose = params.map(function (p) { return p.name + ' = ' + sweepFmtVal(p.value) + (p.unit ? ' ' + p.unit : ''); }).join(', ');
     if (c.target != null) purpose = 'target ' + (c.target * 100).toFixed(2) + ' % solid → ' + purpose;
     runs.push({
@@ -438,7 +439,7 @@ function sweepNotesFor(run, r) {
 }
 
 /* ── Geometry checks (worker) ─────────────────────────────── */
-var SWEEP_GEOM_VERSION = 'swg-2';
+var SWEEP_GEOM_VERSION = 'swg-3';
 var SWEEP_THIN_VOX = 6;          /* Matt, 2026-10-01: flag under 6 voxels across the thinnest feature */
 var _swWorker = null, _swJobs = {}, _swNext = 1;
 function sweepGeomWorker() {
@@ -741,11 +742,14 @@ function sweepRenderBuilder() {
     b.from1 = byVf ? '5' : sweepFmtVal(s1.hint ? Math.max(s1.hint[0], c1 * 0.5) : c1 * 0.5);
     b.to1 = byVf ? '40' : sweepFmtVal(s1.hint ? Math.min(s1.hint[1], c1 === 0 ? s1.hint[1] / 2 : c1 * 1.5) : (c1 === 0 ? 0.1 : c1 * 1.5));
     b.list1 = ''; b.key1 = key1;
+    /* whole-number parameters (field B frequency): one step per integer across the hint */
+    if (s1.integer && !byVf) { b.from1 = String(s1.hint[0]); b.to1 = String(s1.hint[1]); b.steps1 = String(s1.hint[1] - s1.hint[0] + 1); }
   }
   var key2 = b.design + '|' + (b.p2 || 'none');
   if (s2 && (b.key2 !== key2 || b.from2 == null || b.from2 === '')) {
     var c2 = sweepParamGet(rec, s2);
     b.from2 = sweepFmtVal(c2); b.to2 = sweepFmtVal(c2 === 0 ? (s2.hint ? s2.hint[1] / 2 : 0.5) : c2 * 1.5); b.steps2 = b.steps2 || '3'; b.list2 = '';
+    if (s2.integer) { b.from2 = String(s2.hint[0]); b.to2 = String(s2.hint[1]); b.steps2 = String(s2.hint[1] - s2.hint[0] + 1); }
   }
   b.key2 = key2;
   b.steps1 = b.steps1 || '5'; b.N = String(b.N || 64);

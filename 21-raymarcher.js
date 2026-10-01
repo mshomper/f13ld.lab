@@ -61,6 +61,9 @@ function buildLabRaymarcherFS(stepCount) {
     'uniform float uLipschitz;',
     'uniform float uTexNG;',      /* geometry-texture resolution (for gradF step) */
     'uniform highp sampler3D uField;',
+    /* v0.13.0 — field-pair PI-TPMS: field B baked (with its phase shift) on its own texture */
+    'uniform highp sampler3D uFieldB;',
+    'uniform float uFieldBMin; uniform float uFieldBMax; uniform float uPairMode;',
     'uniform float uFieldMin; uniform float uFieldMax; uniform float uTile;',
     'uniform float uNrmStep;',
     /* A.2 — Deformed-view warp: uViewMode {0=geom,1=deform,2=stress} gates
@@ -125,6 +128,18 @@ function buildLabRaymarcherFS(stepCount) {
     '  return vec3(sampleF(p + vec3(e,0.0,0.0)) - sampleF(p - vec3(e,0.0,0.0)),',
     '              sampleF(p + vec3(0.0,e,0.0)) - sampleF(p - vec3(0.0,e,0.0)),',
     '              sampleF(p + vec3(0.0,0.0,e)) - sampleF(p - vec3(0.0,0.0,e))) / (2.0 * e);',
+    '}',
+    /* v0.13.0 — field B of a field-pair recipe (same tiling / gradient step as A) */
+    'float sampleFB(vec3 p) {',
+    '  vec3 uvw = uTile > 1.0 ? fract(p/(2.0*H)*uTile + 0.5) : fract(p/(2.0*H) + 0.5);',
+    '  float t = texture(uFieldB, uvw).r;',
+    '  return t * (uFieldBMax - uFieldBMin) + uFieldBMin;',
+    '}',
+    'vec3 gradFB(vec3 p) {',
+    '  float e = 0.75 * (2.0 * H) / max(uTexNG, 8.0);',
+    '  return vec3(sampleFB(p + vec3(e,0.0,0.0)) - sampleFB(p - vec3(e,0.0,0.0)),',
+    '              sampleFB(p + vec3(0.0,e,0.0)) - sampleFB(p - vec3(0.0,e,0.0)),',
+    '              sampleFB(p + vec3(0.0,0.0,e)) - sampleFB(p - vec3(0.0,0.0,e))) / (2.0 * e);',
     '}',
 
     /* 4b — Sigg-Hadwiger 8-tap cubic B-spline kernel helpers.
@@ -339,9 +354,9 @@ function buildLabRaymarcherFS(stepCount) {
        the intersection curve of the two surfaces (F13LD.tpms / mesh formula,
        angle-corrected, |grad| floor 0.08, cos clamp 0.95) — round pipes of radius pipeR */
     '    float a = sampleF(p_eval) - isoLevel;',
-    '    float b = sampleF(p_eval + uPipeOffset) - isoLevel;',
+    '    float b = uPairMode > 0.5 ? sampleFB(p_eval) : sampleF(p_eval + uPipeOffset) - isoLevel;',
     '    if (uNormMode > 1.5) {',
-    '      vec3 gA = gradF(p_eval), gB = gradF(p_eval + uPipeOffset);',
+    '      vec3 gA = gradF(p_eval), gB = uPairMode > 0.5 ? gradFB(p_eval) : gradF(p_eval + uPipeOffset);',
     '      float mA = max(length(gA), 0.08), mB = max(length(gB), 0.08);',
     '      float dA = a / mA, dB = b / mB;',
     '      float ca = clamp(dot(gA, gB) / (mA * mB), -0.95, 0.95);',
@@ -661,6 +676,7 @@ function LabRaymarcher() {
   this._u = {
     thickness: 0.3, isoLevel: 0.0, topoMode: 0, halfInvert: 0,
     pipeR: 0.1, pipeOffset: [0, 0, 0], normMode: 0, texNG: 48,
+    pairMode: 0, fieldBMin: -1, fieldBMax: 1,   /* v0.13.0 — field-pair PI-TPMS */
     fieldMin: -1, fieldMax: 1, lipschitz: 1.0, tile: 1.0,
     nrmStep: 0.004, zoom: 20.0,   /* ~15% margin from viewport edges; F13LD.grain default is 16 (closer) */
     /* A.2 — deformed/stress view */
@@ -761,6 +777,8 @@ LabRaymarcher.prototype._compileShader = function() {
   var L = {};
   ['res','rot','zoom','uPan','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset','uNormMode','uTexNG',
    'uLipschitz','uField','uFieldMin','uFieldMax','uTile','uNrmStep',
+   /* v0.13.0 — field-pair PI-TPMS */
+   'uFieldB','uFieldBMin','uFieldBMax','uPairMode',
    /* A.2 — Deformed/Stress view uniforms */
    'uViewMode','uDispUploaded','uDeformAmp','uDisp','uDispOffset','uDispScale',
    /* A.2.1 — macroscopic strain direction */
@@ -915,6 +933,38 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
   gl.bindTexture(gl.TEXTURE_3D, null);
+
+  /* v0.13.0 — field-pair PI-TPMS: bake field B (phase shift included) on a
+     second texture.  Self-pairs keep the single-texture path above. */
+  this._u.pairMode = 0;
+  if (params && params.pair && args.mode === 'pi-tpms') {
+    var fb = buildPairField(params.pair, args.phaseShift, N);
+    var gB = 0;
+    for (var bz = 1; bz < N - 1; bz++) for (var by = 1; by < N - 1; by++) for (var bx = 1; bx < N - 1; bx++) {
+      var bi = bx + by*N + bz*N*N;
+      var bgx = (fb.data[bi + 1]   - fb.data[bi - 1])   / (2*step);
+      var bgy = (fb.data[bi + N]   - fb.data[bi - N])   / (2*step);
+      var bgz = (fb.data[bi + N*N] - fb.data[bi - N*N]) / (2*step);
+      var bg = Math.sqrt(bgx*bgx + bgy*bgy + bgz*bgz);
+      if (bg > gB) gB = bg;
+    }
+    this._u.lipschitz = Math.max(this._u.lipschitz, gB * 1.1);   /* B may vary k× faster than A */
+    var rB = Math.max(fb.fieldMax - fb.fieldMin, 1e-6), bBytes = new Uint8Array(N*N*N);
+    for (var ib = 0; ib < fb.data.length; ib++) bBytes[ib] = Math.round(Math.max(0, Math.min(1, (fb.data[ib] - fb.fieldMin) / rB)) * 255);
+    if (!this._fieldBTex) this._fieldBTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_3D, this._fieldBTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, N, N, 0, gl.RED, gl.UNSIGNED_BYTE, bBytes);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+    gl.bindTexture(gl.TEXTURE_3D, null);
+    this._u.fieldBMin = fb.fieldMin;
+    this._u.fieldBMax = fb.fieldMax;
+    this._u.pairMode  = 1;
+  }
 
   this._fieldUploaded = true;
   this._dirty = true;
@@ -1508,6 +1558,14 @@ LabRaymarcher.prototype._render = function(t) {
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
   gl.uniform1i(u.uField, 0);
+  /* v0.13.0 — field B on TEXTURE3 (field A stands in when there is no pair,
+     so the sampler is always bound; the shader gates on uPairMode) */
+  gl.activeTexture(gl.TEXTURE3);
+  gl.bindTexture(gl.TEXTURE_3D, (S.pairMode && this._fieldBTex) ? this._fieldBTex : this._fieldTex);
+  gl.uniform1i(u.uFieldB, 3);
+  gl.uniform1f(u.uFieldBMin, S.fieldBMin);
+  gl.uniform1f(u.uFieldBMax, S.fieldBMax);
+  gl.uniform1f(u.uPairMode, (S.pairMode && this._fieldBTex) ? 1 : 0);
   /* A.2 — displacement texture on TEXTURE1.  When not uploaded, the
      shader gates on uDispUploaded so sampling is skipped — no need to
      bind a placeholder. */
@@ -1547,6 +1605,7 @@ LabRaymarcher.prototype.destroy = function() {
   this.setActive(false);
   var gl = this.gl;
   if (this._fieldTex)  gl.deleteTexture(this._fieldTex);
+  if (this._fieldBTex) gl.deleteTexture(this._fieldBTex);  /* v0.13.0 — field-pair field B */
   if (this._dispTex)   gl.deleteTexture(this._dispTex);    /* A.2 — displacement texture */
   if (this._stressTex) gl.deleteTexture(this._stressTex);  /* A.3 — stress texture */
   if (this._prog)      gl.deleteProgram(this._prog);
@@ -1557,6 +1616,7 @@ LabRaymarcher.prototype.destroy = function() {
   this.gl = null;
   this._prog = null;
   this._fieldTex = null;
+  this._fieldBTex = null;
   this._dispTex = null;     /* A.2 */
   this._stressTex = null;   /* A.3 */
   this._quadBuf = null;

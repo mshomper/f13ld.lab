@@ -81,6 +81,13 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
     var num = dA*dA - 2*cosA*dA*dB + dB*dB;
     return Math.sqrt(Math.max(num,0)/sin2);
   }
+  /* Field-coord gradient of a field-pair's φB_eff (same NORM_E step). */
+  function gradPairB(pair, x, y, z, dx, dy, dz) {
+    var gx = (tpmsPairB(pair,x+NORM_E,y,z,dx,dy,dz) - tpmsPairB(pair,x-NORM_E,y,z,dx,dy,dz)) * NORM_INV_2E;
+    var gy = (tpmsPairB(pair,x,y+NORM_E,z,dx,dy,dz) - tpmsPairB(pair,x,y-NORM_E,z,dx,dy,dz)) * NORM_INV_2E;
+    var gz = (tpmsPairB(pair,x,y,z+NORM_E,dx,dy,dz) - tpmsPairB(pair,x,y,z-NORM_E,dx,dy,dz)) * NORM_INV_2E;
+    return { gx:gx, gy:gy, gz:gz, mag:Math.sqrt(gx*gx+gy*gy+gz*gz) };
+  }
 
   /* Pass 1 — full field cache. Needed for shell+nWeights gradient stencil
      and reused below for all single-eval-per-point modes. */
@@ -105,18 +112,26 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
     var dy = (phaseShift && phaseShift.y ? phaseShift.y : 0) * TWO_PI;
     var dz = (phaseShift && phaseShift.z ? phaseShift.z : 0) * TWO_PI;
     var pr = pipeR || 0.1;
+    /* v0.13.0 — PI uses φ itself (no offset threshold), so a raw preset's
+       constant that 60-add-design moved into `offset` (split-P −0.3, F-RD +0.3)
+       is subtracted back here.  Matches F13LD.tpms / F13LD.mesh and the lab
+       preview (which already subtracted it).  offset is 0 for every other recipe. */
+    var off = offset || 0;
+    var pair = params && params.pair;          /* field-pair PI-TPMS, null for self-pairs */
     for (var i2 = 0; i2 < N; i2++) {
       var x2 = -L + (i2 + 0.5) * step;
       for (var j2 = 0; j2 < N; j2++) {
         var y2 = -L + (j2 + 0.5) * step;
         for (var k2 = 0; k2 < N; k2++) {
-          var vA = V[i2*N*N + j2*N + k2];
+          var vA = V[i2*N*N + j2*N + k2] - off;
           var zc = -L + (k2 + 0.5)*step;
-          var vB = evalFn(x2 + dx, y2 + dy, zc + dz);
+          var vB = pair ? tpmsPairB(pair, x2, y2, zc, dx, dy, dz)
+                        : evalFn(x2 + dx, y2 + dy, zc + dz) - off;
           var insidePi;
           if (piNorm) {
             var grA = gradFC(x2, y2, zc);
-            var grB = gradFC(x2 + dx, y2 + dy, zc + dz);
+            var grB = pair ? gradPairB(pair, x2, y2, zc, dx, dy, dz)
+                           : gradFC(x2 + dx, y2 + dy, zc + dz);
             var dPi = piDistanceN(vA, vB, grA, grB);
             if (dPi > NORM_CLIP_MULT*pr) dPi = NORM_CLIP_MULT*pr;
             insidePi = dPi < pr;
@@ -245,6 +260,32 @@ function buildRawField(family, params, N) {
       for (var ix = 0; ix < N; ix++) {
         var x = -L + (ix + 0.5) * step;
         var v = kernel.evaluate(params, x, y, z);
+        data[(iz * N + iy) * N + ix] = v;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+    }
+  }
+  return { data: data, fieldMin: minV, fieldMax: maxV };
+}
+
+/* ============================================================
+   buildPairField — field B of a field-pair PI-TPMS recipe, baked for the
+   preview (v0.13.0).  Same storage order as buildRawField.  The phase
+   shift is baked in, so the shader samples B at p with no offset.
+   ============================================================ */
+function buildPairField(pair, phaseShift, N) {
+  var L = Math.PI, step = (2 * L) / N, TWO_PI = 2 * Math.PI;
+  var ps = phaseShift || {};
+  var dx = (ps.x || 0) * TWO_PI, dy = (ps.y || 0) * TWO_PI, dz = (ps.z || 0) * TWO_PI;
+  var data = new Float32Array(N * N * N), minV = Infinity, maxV = -Infinity;
+  for (var iz = 0; iz < N; iz++) {
+    var z = -L + (iz + 0.5) * step;
+    for (var iy = 0; iy < N; iy++) {
+      var y = -L + (iy + 0.5) * step;
+      for (var ix = 0; ix < N; ix++) {
+        var x = -L + (ix + 0.5) * step;
+        var v = tpmsPairB(pair, x, y, z, dx, dy, dz);
         data[(iz * N + iy) * N + ix] = v;
         if (v < minV) minV = v;
         if (v > maxV) maxV = v;
