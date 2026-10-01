@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.8.2 · 2026-09-30 (main = `df2fdb2`)
+**As of:** v0.8.2 · 2026-09-30 (main = `df2fdb2` code; docs updated after) · STL import in progress on `stl-import`
 **Full history of the last session:** [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md)
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -18,11 +18,40 @@
 
 ---
 
-## 1. NEXT SESSION FOCUS — Make buckling faster (Sprint B2)
+## 1. CURRENT FOCUS — STL unit-cell import
+
+Matt redirected the 2026-09-30 evening session from buckling speed to STL import. Full scope, data path and test plan: [`STL_IMPORT_SCOPE.md`](STL_IMPORT_SCOPE.md). Work is on branch `stl-import`.
+
+### 1.1 Decisions (Matt, 2026-09-30)
+
+- **Cell size** defaults to the longest bounding-box side, editable.
+- **Near-cubic is cubic.** CAD export settings leave cubic cells ~1 % off between sides. Sides within 2 % of each other are treated as a cube (longest side wins, mismatch shown in the report). Beyond 2 %, version 1 refuses with a clear message; unequal spacing in the solvers is later work.
+- **Wall offset slider** ships in version 1.
+- **Exports carry the geometry** (compressed grid embedded), so a shared file reloads anywhere.
+- **Face match never blocks a run.** Poor matches warn and tag the card "not periodic."
+- Matt can supply real CAD STLs for the final check; generated STLs (meshed from native recipes) cover the exact comparisons.
+
+### 1.2 Phases
+
+1. **Core** — STL parse, scanline fill with three-axis majority vote, periodic distance transform, `import` kernel, grid store (page cache + IndexedDB), grid attached to buckling worker jobs.
+2. **Interface** — Import STL in Add design, settings, report card, wall offset slider, export with embedded grid.
+3. **Validation** — the scope doc's §4 table, headless, then Matt's click-test on the branch preview.
+
+### 1.3 Must stay true
+
+- Native designs rasterize and solve exactly as in v0.8.2 (no change to `buildVoxels` or the solvers).
+- **Sign convention:** solid is where the field is below the offset. The import field is the signed distance, **negative inside**, in field units (one cell = 2π), so the existing solid-mode `offset` is the wall offset.
+- The grid never rides inside the design record (fingerprint, localStorage, worker messages stay small); the record carries the grid's hash only.
+
+---
+
+## 2. Queued
+
+**Sprint B2 — make buckling faster** (was the planned focus; deferred by Matt for STL import)
 
 Matt's goal: buckling must be **massively** faster at N=32 and N=64, since nothing useful runs at N=16. Start the session with a proposal (measurements, options, expected gains) for approval, then implement.
 
-### 1.1 Where the time goes today (N=32, from the v0.8.0 study)
+### B2.1 Where the time goes today (N=32, from the v0.8.0 study)
 
 | Design | Prestress PCG iterations | LOBPCG iterations | Notes |
 |---|---|---|---|
@@ -34,7 +63,7 @@ Also:
 - Each axis worker repeats the same prestress.
 - One axis per worker leaves most of an 8-core pool idle for a single design.
 
-### 1.2 Work items, in suggested order
+### B2.2 Work items, in suggested order
 
 1. **Profile first.** Re-run `F13LD_buckleBench` on Schwarz P, spinodoid, hyperuniform and the two-network PI gyroid at N=32 and N=64. Split wall time into prestress, eigen-solve and mesh / multigrid setup, so each change below has a before/after.
 2. **Multigrid on grain designs.** Candidates:
@@ -53,27 +82,19 @@ Also:
    - Cap concurrent N=64 tasks by `navigator.deviceMemory`, or store coarse element matrices in f32.
 7. **Grid rule.** Replace the spectral-era PRONE/OK predictor pill with an FE rule: H8I resolves 1-voxel walls; flag when N=32 and N=64 disagree by more than 10 %.
 
-### 1.3 Must stay true
+### B2.3 Must stay true
 
 - `runFEBucklingSelfTest(32)` passes: 3 zero-energy modes; plate within ~1 %.
 - Results within 1 % of the current v0.8.2 values on the benchmark designs, or the difference explained.
 - A fixed seed still gives identical results run to run.
 - Per-network buckling (v0.8.2) is unchanged in meaning.
 
-### 1.4 After B2
+### B2.4 After B2
 
 **B3 — WebGPU voxel FE.**
 - Gather → constant 24×24 multiply → scatter per element, with a per-node gather (no atomics).
 - Multigrid on the GPU.
 - The CPU path stays as the reference.
-
----
-
-## 2. Queued
-
-**Scoped (as time permits)**
-
-- **STL unit-cell import:** see [`STL_IMPORT_SCOPE.md`](STL_IMPORT_SCOPE.md). Import a CAD unit cell as an STL, store it as a signed-distance grid, and add an `import` kernel family so every solver runs on it unchanged. Five open decisions are listed at the end of that doc. It is independent of B2.
 
 **Speed**
 

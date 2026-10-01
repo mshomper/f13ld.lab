@@ -1,6 +1,6 @@
 # F13LD.lab — STL Unit-Cell Import (Scope)
 
-**Status:** Scoped, not started. Work on it as time permits.
+**Status:** Approved 2026-09-30; in progress on branch `stl-import`. Decisions are recorded in §6.
 **Written against:** v0.8.2 (main `a7eb5b4`), 2026-09-30
 **Goal:** Let a user import a unit cell from any CAD program as an STL, and run every lab solver on it (stiffness, crush, buckling) exactly as on a native F13LD recipe.
 **Out of scope:** Whole parts and non-repeating specimens. Those need a different test setup (platens and loaded faces), not an import.
@@ -89,7 +89,7 @@ A side benefit: shifting the signed distance up or down thickens or thins every 
 
 | File | Change |
 |---|---|
-| `13-kernels.js` | New `ImportKernel` in `KERNELS`. `parseRecipe` pulls the grid by hash; `evaluate` does periodic trilinear sampling, positive inside to match the TPMS sign convention |
+| `13-kernels.js` | New `ImportKernel` in `KERNELS`. `parseRecipe` pulls the grid by hash; `evaluate` does periodic trilinear sampling. **Negative inside**: the lab's solid mode keeps voxels where the field is below the offset, so the signed distance is stored negative in solid, in field units (one cell = 2π), and the existing solid-mode `offset` becomes the wall offset |
 | `14-rasterizer.js` | None expected. `buildVoxels` calls the kernel as usual; shell and PI modes do not apply to imports |
 | New `14c-stl-import.js` (+ worker) | STL parsing, scanline voxelizing, distance transform, face-match / spanning / thinnest-wall report |
 | `60-add-design.js` | Import dialog, settings, report card, add-to-lab |
@@ -99,7 +99,7 @@ A side benefit: shifting the signed distance up or down thickens or thins every 
 
 ### 3.4 Limits for version 1
 
-- **Cubic cells only.** Solvers assume equal spacing on all three axes. A cell with unequal sides (say 4 × 4 × 6 mm) has two options, both later work:
+- **Cubic cells only (2 % tolerance).** CAD export settings typically leave a cubic cell ~1 % off between sides, so sides within 2 % of each other are treated as a cube (longest side is the cell size; the mismatch is shown in the report). Beyond that, version 1 refuses with a clear message. Solvers assume equal spacing on all three axes. A cell with unequal sides (say 4 × 4 × 6 mm) has two options, both later work:
   - stretch it to a cube and warn, which changes the geometry and is not recommended;
   - add unequal voxel spacing to the solvers, which the FFT operator and the finite-element code can both support.
 - **Solid/void voxels only.** When partial-volume voxels arrive (queued in NEXT_STEPS), the 2×2×2 sub-samples from the fine grid give each voxel's fill fraction for free.
@@ -133,10 +133,11 @@ This can run in parallel with the buckling speed work (Sprint B2); the two don't
 
 ---
 
-## 6. Decisions to make before starting
+## 6. Decisions (Matt, 2026-09-30)
 
-- Should cell size default to the largest bounding-box side, or should the user always type it in?
-- Is a wall-thickening/thinning slider on imported cells worth having in version 1?
-- Do you expect cells with unequal sides (for example stretched cells for directional stiffness) often enough to plan for them in version 1, or can they wait?
-- Should an exported imported design carry its geometry inside the file, so it can be shared and reloaded anywhere?
-- What face-match threshold should block a run outright, if any, rather than just warn?
+- **Cell size** defaults to the longest bounding-box side and stays editable.
+- **Wall offset slider** is in version 1.
+- **Unequal sides** wait for a later version. Near-cubic cells (within 2 %, typical of CAD export) are accepted as cubes; anything further off is refused with a message rather than stretched.
+- **Exports embed the geometry**, so a shared file reloads anywhere.
+- **Face match only warns**, never blocks. Cells below the green band are tagged "not periodic" on their card.
+- **Test files:** generated STLs meshed from native recipes for the exact comparisons; Matt supplies a few real CAD STLs for the final check.
