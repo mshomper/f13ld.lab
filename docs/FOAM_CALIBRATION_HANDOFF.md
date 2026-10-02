@@ -1,6 +1,6 @@
 # Handoff — F13LD.foam stiffness estimate via F13LD.lab calibration
 
-**Date:** 2026-10-02 · **For:** a fresh session · **Owner direction:** analyze and present proposed changes for approval before writing or modifying code; don't over-deliberate.
+**Date:** 2026-10-02 · **For:** a fresh session · **Status:** steps 1–3 approved with defaults and built in v0.14.0 — see [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) · **Owner direction:** analyze and present proposed changes for approval before writing or modifying code; don't over-deliberate.
 
 ## Where things stand (all merged to main and live)
 

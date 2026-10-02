@@ -79,6 +79,7 @@ var BUCKLE_WORKER_FILES = [
   '13-kernels.js',
   '13b-kernels-new.js',
   '13c-import-kernel.js',     /* STL-imported cells: grid arrives with each job */
+  '13d-foam-kernel.js',       /* v0.14.0 — F13LD.foam */
   '16c-buckling-cpu-ref.js',   /* dense helpers (Jacobi, Cholesky) + legacy spectral path */
   '16h-buckling-fe.js'         /* v0.8.0 production buckling: voxel FE */
 ];
@@ -86,7 +87,7 @@ var BUCKLE_WORKER_FILES = [
 /* Bump on any solver-file change so the worker's importScripts refetches
    instead of serving a stale cached copy (the blob worker has its own cache,
    separate from the main page). */
-var BUCKLE_SOLVER_VERSION = 'fe-h8i-4';
+var BUCKLE_SOLVER_VERSION = 'fe-h8i-5';
 
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes
