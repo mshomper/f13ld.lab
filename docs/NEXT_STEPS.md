@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.12.1 · 2026-10-01 · STL import, parameter sweep, sweep builder, Sweep Atlas all on main
+**As of:** v0.14.0 · 2026-10-02 · F13LD.foam family added; foam calibration study ready to run (§1-foam)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md) (previous: [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -20,6 +20,8 @@
 | **v0.11.0** | Sweep builder for every family, two parameters, review before creating (solves, time, solid-fraction map); Sweep Atlas (geometry, directional modulus, matrix, parameter map, charts, data check). See `SWEEP.md` §1.2, §3b |
 | **v0.12.0** | Atlas: CAD tumble + linked rotation, 3-D stiffness surface, smooth slider. Sweep keeps no-load-axis runs (B6) with a warning, flags negative shear, collapsible notes. Void 1e-6 rerun analysed (`SWEEP.md` §7) |
 | **v0.12.1** | Sweep panel in three sections (define runs: builder / CSV tabs · run settings · runs); ↺ New sweep; ✕ remove CSV; renamable study title; second grid **64 ↔ 128 pair**. Matched-feature A4m (`SWEEP.md` §8) |
+| **v0.13.0** | Field-pair PI-TPMS (F13LD.tpms v1.1.0 / mesh v0.7.1): field B any preset or terms at a whole-number frequency multiple; sweep steps field B frequency |
+| **v0.14.0** | F13LD.foam family: verbatim mesh foam kernel (`13d-foam-kernel.js`), import + `#r=` inline links, periodic-only, foam sweep parameters (thickness exact by solid fraction, seeds regenerated for count / regularity / Lloyd / random seed), `family = foam` CSV rows, `validate-foam.js`. Calibration study ready: `FOAM_CALIBRATION.md` |
 
 ---
 
@@ -43,9 +45,9 @@ Matt's PI-TPMS Paper 1, Section 5: the run matrix is now **42 rows** (A4m added;
 - Matched feature (0.126 T): A4m is 1.77× D7 in-plane, 0.43× along z, ≈ equal on the directional mean, at 1.7× the solid; D7 is 2.4× stiffer along [111] than its axes — report directional mean or E max / E min, not axes only (`SWEEP.md` §8).
 - Fischer–Koch G set: Ez × 8.5 from wall ratio 0.17 → 0.19 (contacts forming; Euler characteristic 25 → 33 → 41 → 57 loops per cell). G1 sits at contact onset and is the most grid-sensitive run.
 
-## 1-foam. Queued: foam stiffness calibration (from the 2026-10-02 foam/mesh session)
+## 1-foam. Foam stiffness calibration — ready for Matt's GPU run
 
-F13LD.foam v0.3.0 and F13LD.mesh v0.9.1 (foam family) are live. Next for foam: add a foam kernel to the lab, run a ~50-run calibration sweep on Matt's GPU, and fit the in-tool stiffness estimate to it. Plan, numbers and open questions: [`FOAM_CALIBRATION_HANDOFF.md`](FOAM_CALIBRATION_HANDOFF.md). Nothing has been built yet; the plan needs Matt's approval first.
+v0.14.0 adds the foam family (F13LD.foam v0.4.0 has ⚗ Open in F13LD.lab and a live solid-fraction readout). **Next action (Matt, on his GPU):** ⟳ Sweep → CSV tab → load `docs/foam-calibration/foam_calibration_runs.csv` (48 runs) → High (1e-5) · void 1e-6 · second grid **64 ↔ 128 pair** · order 2 → Run → Export CSV. Then fit E/Es = C·ρⁿ per topology and build the estimator panel in F13LD.foam. Study design, resolution limits (closed-cell walls are thin — §2) and the CPU spot checks: [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md). Original plan: [`FOAM_CALIBRATION_HANDOFF.md`](FOAM_CALIBRATION_HANDOFF.md).
 
 ## 1a. Next dev cycle — pick up (in suggested order)
 

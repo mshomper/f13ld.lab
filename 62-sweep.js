@@ -187,6 +187,7 @@ function sweepNum(v) { var x = parseFloat(v); return isFinite(x) ? x : null; }
 function sweepRunFromCsvRow(r) {
   var id = r.run_id || r.id;
   if (!id) throw new Error('a row has no run_id');
+  if (String(r.family || '').toLowerCase() === 'foam') return sweepFoamRunFromCsvRow(r, id);
   var surf = sweepSurface(r.surface);
   if (!surf) throw new Error(id + ': unknown surface "' + r.surface + '"');
   var mode = String(r.mode || '').toLowerCase(), g, param;
@@ -219,6 +220,40 @@ function sweepRunFromCsvRow(r) {
     param: param, expectedVf: sweepNum(r.expected_vf_pct),
     ref: { name: 'Vixiv', vf: sweepNum(r.vixiv_vf_pct), Ex: sweepNum(r.vixiv_Ex), Ey: sweepNum(r.vixiv_Ey), Ez: sweepNum(r.vixiv_Ez) },
     recipe: { family: 'tpms', name: id, surface: surf, geometry: g }
+  };
+}
+
+/* v0.14.0 — F13LD.foam rows (family = foam).  Seeds are regenerated from
+   the generator settings with the foam tool's own FoamSeeds code, so a row
+   is the foam F13LD.foam shows for the same settings.  Columns:
+     seed_mode (poisson | lloyd | random | kelvin | weairePhelan), cells,
+     regularity, lloyd_iterations, rng_seed, topology (open | closed |
+     plateau), thickness, plateau_k, organic, stretch_x/y/z, normalize,
+     grid_N, nu_s, expected_vf_pct, set, purpose, note. */
+function sweepFoamRunFromCsvRow(r, id) {
+  var sm = String(r.seed_mode || 'lloyd').trim(), topo = String(r.topology || 'plateau').trim().toLowerCase();
+  if (FoamSeeds.MODES.indexOf(sm) < 0) throw new Error(id + ': unknown seed_mode "' + sm + '"');
+  if (['open', 'closed', 'plateau'].indexOf(topo) < 0) throw new Error(id + ': unknown topology "' + r.topology + '"');
+  var t = sweepNum(r.thickness), cells = sweepNum(r.cells);
+  if (t == null || !(t > 0)) throw new Error(id + ': foam run needs a thickness above 0');
+  if (cells == null || cells < 1) throw new Error(id + ': foam run needs cells');
+  var sx = sweepNum(r.stretch_x), sy = sweepNum(r.stretch_y), sz = sweepNum(r.stretch_z);
+  var N = sweepNum(r.grid_N) || 64;
+  if ([32, 64, 128].indexOf(N) < 0) throw new Error(id + ': grid ' + N + ' not available (32, 64 or 128)');
+  var seeds = { mode: sm, count: Math.round(cells), regularity: sweepNum(r.regularity) != null ? sweepNum(r.regularity) : 0.9,
+                lloyd_iterations: sweepNum(r.lloyd_iterations) != null ? Math.round(sweepNum(r.lloyd_iterations)) : (sm === 'lloyd' ? 4 : 0),
+                rng_seed: sweepNum(r.rng_seed) != null ? Math.round(sweepNum(r.rng_seed)) : 42 };
+  var foam = { mode: topo, thickness: t, plateau_k: topo === 'plateau' ? (sweepNum(r.plateau_k) != null ? sweepNum(r.plateau_k) : 0.05) : null,
+               organic: sweepNum(r.organic) || 0, normalize: !/^(false|0|no|off)$/i.test(String(r.normalize || 'true').trim()) };
+  return {
+    id: id, tier: r.tier || '', set: r.set || '', purpose: r.purpose || '', note: r.note || '',
+    label: 'foam · ' + sm + ' · ' + topo, shift: '',
+    N: N, nu: sweepNum(r.nu_s) != null ? sweepNum(r.nu_s) : 0.3,
+    param: { name: 'thickness', value: t }, expectedVf: sweepNum(r.expected_vf_pct),
+    ref: { name: '', vf: null, Ex: null, Ey: null, Ez: null },
+    recipe: { family: 'foam', name: id, seeds: seeds,
+              anisotropy: { enabled: true, stretch: [sx || 1, sy || 1, sz || 1] }, foam: foam,
+              geometry: { mode: 'solid', cellSizeMm: 5, cellMult: 1.0 } }
   };
 }
 
@@ -439,13 +474,13 @@ function sweepNotesFor(run, r) {
 }
 
 /* ── Geometry checks (worker) ─────────────────────────────── */
-var SWEEP_GEOM_VERSION = 'swg-3';
+var SWEEP_GEOM_VERSION = 'swg-4';
 var SWEEP_THIN_VOX = 6;          /* Matt, 2026-10-01: flag under 6 voxels across the thinnest feature */
 var _swWorker = null, _swJobs = {}, _swNext = 1;
 function sweepGeomWorker() {
   if (_swWorker) return _swWorker;
   var base = (typeof document !== 'undefined' && document.baseURI) ? document.baseURI : location.href;
-  var files = ['14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js', '13c-import-kernel.js', '14c-stl-import.js', '14d-voxel-stats.js'];
+  var files = ['14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js', '13c-import-kernel.js', '13d-foam-kernel.js', '14c-stl-import.js', '14d-voxel-stats.js'];
   var urls = files.map(function (f) { var u = new URL(f, base); u.search = '?v=' + SWEEP_GEOM_VERSION; return JSON.stringify(u.href); });
   var body = 'importScripts(' + urls.join(',') + ');\n' + SWEEP_WORKER_ONMESSAGE;
   _swWorker = new Worker(URL.createObjectURL(new Blob([body], { type: 'application/javascript' })));
@@ -727,7 +762,7 @@ function sweepRenderBuilder() {
   if (!el) return;
   var b = sweepReadBuilder();
   var ds = sweepBuilderDesigns();
-  if (!ds.length) { el.innerHTML = '<div class="imp-note">Load a design first. Every family works: TPMS and PI-TPMS, grain, noise, beam, bundle, wave and imported STL cells.</div>'; return; }
+  if (!ds.length) { el.innerHTML = '<div class="imp-note">Load a design first. Every family works: TPMS and PI-TPMS, grain, noise, beam, bundle, wave, foam and imported STL cells.</div>'; return; }
   if (!ds.some(function (d) { return d.id === b.design; })) b.design = ds[0].id;
   var d = ds.filter(function (x) { return x.id === b.design; })[0], rec = sweepRecipeOf(d);
   var cat = sweepParamCatalog(rec);
@@ -744,12 +779,15 @@ function sweepRenderBuilder() {
     b.list1 = ''; b.key1 = key1;
     /* whole-number parameters (field B frequency): one step per integer across the hint */
     if (s1.integer && !byVf) { b.from1 = String(s1.hint[0]); b.to1 = String(s1.hint[1]); b.steps1 = String(s1.hint[1] - s1.hint[0] + 1); }
+    /* v0.14.0 — a spec may suggest its own starting range (foam cell count, random seed) */
+    if (s1.range && !byVf) { b.from1 = String(s1.range[0]); b.to1 = String(s1.range[1]); b.steps1 = String(s1.range[2]); }
   }
   var key2 = b.design + '|' + (b.p2 || 'none');
   if (s2 && (b.key2 !== key2 || b.from2 == null || b.from2 === '')) {
     var c2 = sweepParamGet(rec, s2);
     b.from2 = sweepFmtVal(c2); b.to2 = sweepFmtVal(c2 === 0 ? (s2.hint ? s2.hint[1] / 2 : 0.5) : c2 * 1.5); b.steps2 = b.steps2 || '3'; b.list2 = '';
     if (s2.integer) { b.from2 = String(s2.hint[0]); b.to2 = String(s2.hint[1]); b.steps2 = String(s2.hint[1] - s2.hint[0] + 1); }
+    if (s2.range) { b.from2 = String(s2.range[0]); b.to2 = String(s2.range[1]); b.steps2 = String(s2.range[2]); }
   }
   b.key2 = key2;
   b.steps1 = b.steps1 || '5'; b.N = String(b.N || 64);

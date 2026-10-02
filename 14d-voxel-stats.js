@@ -187,6 +187,35 @@ function sweepParamCatalog(recipe) {
     if (recipe.surface && recipe.surface.topology === 'sheet')
       add({ key: 'surface.sheet_width', label: 'Sheet width', unit: '', def: 0.025, target: 'monotone', hint: [0.002, 0.3], apply: [{ p: 'surface.sheet_width', k: 1 }] });
     add(offsetSpec);
+  } else if (fam === 'foam') {
+    /* v0.14.0 — F13LD.foam.  Units are the foam tool's own (one tile = 10).
+       Thickness targets solid fraction exactly while organic is 0 (solid ⟺
+       field < thickness); with organic on, the junction growth scales with
+       thickness too, so it falls back to bisection.  Count, regularity,
+       Lloyd iterations and random seed regenerate the seeds (13d header). */
+    var fg = recipe.foam || {}, sd = recipe.seeds || {}, fmode = fg.mode || 'plateau', sm = sd.mode || 'poisson';
+    var orgOn = typeof fg.organic === 'number' && fg.organic > 0;
+    add({ key: 'foam.thickness', label: 'Thickness (wall / strut half-width)', unit: '', def: 0.08,
+          target: orgOn ? 'monotone' : 'threshold', hint: [0.005, 1.0],
+          apply: [{ p: 'foam.thickness', k: 1 }], thresholdPath: 'foam.thickness' });
+    if (fmode === 'plateau')
+      add({ key: 'foam.plateau_k', label: 'Plateau k (junction mass)', unit: '', def: 0.05, target: 'monotone', hint: [0, 0.4],
+            apply: [{ p: 'foam.plateau_k', k: 1 }] });
+    add({ key: 'foam.organic', label: 'Organic', unit: '', def: 0, target: 'monotone', hint: [0, 10], apply: [{ p: 'foam.organic', k: 1 }] });
+    ['x', 'y', 'z'].forEach(function (a, i) {
+      add({ key: 'stretch_' + a, label: 'Stretch ' + a, unit: '×', def: 1, target: null, hint: [0.3, 3],
+            apply: [{ p: 'anisotropy.stretch.' + i, k: 1 }] });
+    });
+    add({ key: 'seeds.count', label: 'Cells per tile', unit: '', def: sd.count || 50, target: null, hint: [8, 400], integer: true, range: [25, 100, 4],
+          apply: [{ p: 'seeds.count', k: 1 }] });
+    if (sm === 'poisson' || sm === 'lloyd')
+      add({ key: 'seeds.regularity', label: 'Regularity', unit: '', def: 0.9, target: null, hint: [0.45, 1], apply: [{ p: 'seeds.regularity', k: 1 }] });
+    if (sm === 'lloyd')
+      add({ key: 'seeds.lloyd_iterations', label: 'Lloyd iterations', unit: '', def: 4, target: null, hint: [1, 12], integer: true, range: [1, 8, 4],
+            apply: [{ p: 'seeds.lloyd_iterations', k: 1 }] });
+    if (sm === 'poisson' || sm === 'lloyd' || sm === 'random')
+      add({ key: 'seeds.rng_seed', label: 'Random seed (realization)', unit: '', def: 42, target: null, hint: [1, 10], integer: true, range: [1, 3, 3],
+            apply: [{ p: 'seeds.rng_seed', k: 1 }] });
   } else if (fam === 'wave') {
     var f = recipe.field || {};
     add({ key: 'field.iso', label: 'Level', unit: '', def: 0, target: null, apply: [{ p: 'field.iso', k: 1 }] });
@@ -285,6 +314,14 @@ function sweepThresholdField(recipe, spec, N) {
         return Math.sqrt(Math.max(dA * dA - 2 * cs * dA * dB + dB * dB, 0) / (1 - cs * cs));
       });
     } else each(function (x, y, z) { return Math.max(Math.abs(evA(x, y, z)), Math.abs(evB(x, y, z))); });
+    toPath = ident;
+  } else if (tp === 'foam.thickness' && family === 'foam') {
+    /* v0.14.0 — foam field at (near) zero thickness, in the tool's units:
+       solid ⟺ field₀ < thickness (exact while organic is 0). */
+    var r0 = JSON.parse(JSON.stringify(recipe));
+    r0.foam = r0.foam || {}; r0.foam.thickness = 1e-9;
+    var p0 = kernel.parseRecipe(r0), outK = 5 / Math.PI;
+    each(function (x, y, z) { return kernel.evaluate(p0, x, y, z) * outK + 1e-9; });
     toPath = ident;
   } else if (/\.(half_width|center)$/.test(tp) && (family === 'grain' || family === 'noise')) {
     var iso = params.isoLevel, inv = !!params.halfInvert;

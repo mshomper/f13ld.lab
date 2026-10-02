@@ -250,7 +250,8 @@ function normalizeDesignJson(json, filename){
     /* New SDF families first — mirror mesh routeRecipe precedence so a
        flag-less legacy export still routes correctly.  wave is probed
        before grain (both use a `field` block) by requiring field.modes[]. */
-    if (json.meta && (json.meta.tool === 'beam' || json.meta.tool === 'beam-builder')) family = 'beam';
+    if (json.meta && json.meta.tool === 'f13ld.foam') family = 'foam';   /* v0.14.0 — pre-v0.3.0 foam exports */
+    else if (json.meta && (json.meta.tool === 'beam' || json.meta.tool === 'beam-builder')) family = 'beam';
     else if (Array.isArray(json.beams) && json.beams.length &&
              Array.isArray(json.beams[0]) && json.beams[0].length >= 6) family = 'beam';
     else if (json.surface && (json.surface.structure || json.surface.type === 'ihb')) family = 'bundle';
@@ -276,6 +277,7 @@ function normalizeDesignJson(json, filename){
     else if (family === 'wave' && json.field && json.field.symmetry) variant = json.field.symmetry;
     else if (family === 'beam') variant = (json.meta && json.meta.preset) || 'lattice';
   }
+  if (family === 'foam') variant = (json.seeds && json.seeds.mode) || 'foam';
 
   /* ── 3. Topology / mode (external uses bare strings) ─────── */
   /* TPMS and Noise put the mode under `geometry.mode`.
@@ -301,6 +303,8 @@ function normalizeDesignJson(json, filename){
         otherwise default to 5 mm.  cell_scale from external recipes is preserved
         in the geometry block but not consumed by lab solvers. */
   var cellSizeMm = (json.geometry && (json.geometry.cellSizeMm || json.geometry.cell_size_mm)) || 5.0;
+  /* v0.14.0 — a foam tile is one lab cell; tile_mm is its edge at the tool's cell size */
+  if (family === 'foam' && json.geometry && json.geometry.tile_mm > 0) cellSizeMm = json.geometry.tile_mm;
 
   /* Nominal density as declared by the source tool — shown labelled
      "nominal" until a solve reports the voxel density.  Sprint A: null (not an
@@ -340,6 +344,14 @@ function normalizeDesignJson(json, filename){
       var _bLbl = _sB ? (_sB.label || (TPMS_RAW_PRESET_TABLE[_sB.preset] && TPMS_RAW_PRESET_TABLE[_sB.preset].label) || _sB.preset || 'custom') : _aLbl;
       title = _aLbl + ' \u00d7 ' + _bLbl + (_kB > 1 ? ' (' + _kB + '\u00d7)' : '') + (rawMode ? ' \u00b7 ' + rawMode : '');
     }
+  }
+
+  /* v0.14.0 — foam: "Foam · Poisson-disk · open · 40 cells" */
+  if (family === 'foam' && !json.title && !json.name){
+    var _fSd = json.seeds || {}, _fG = json.geometry || {};
+    var _fN = Array.isArray(_fSd.positions) && _fSd.positions.length ? _fSd.positions.length / 3 : (_fSd.count_actual || _fSd.count);
+    title = 'Foam \u00b7 ' + ((json.meta && json.meta.preset) || ((_fSd.mode || 'seeds') + ' \u00b7 ' + (_fG.mode || 'plateau'))) +
+            (_fN ? ' \u00b7 ' + _fN + ' cells' : '');
   }
 
   /* ── 6. Build a renderable lab recipe ─────────────────────── */
@@ -513,6 +525,34 @@ function normalizeDesignJson(json, filename){
       } else {
         recipeNote = 'Bundle recipe missing surface block — falling back to SVG mock';
       }
+    } else if (family === 'foam'){
+      /* v0.14.0 — FoamKernel (13d) runs mesh's buildFoamSDF on the foam
+         tool's own blocks.  Its geometry block (mode open|closed|plateau,
+         thickness, plateau_k, organic, normalize) moves to recipe.foam so
+         recipe.geometry.mode can carry the rasterizer's 'solid'. */
+      if (json.domain && json.domain.periodic === false){
+        throw new Error('This foam isn\u2019t periodic, so it isn\u2019t a valid unit cell: opposite faces of the cube ' +
+          'must match for the lab to homogenize it.\n\nIn F13LD.foam, turn periodic on and export again.');
+      }
+      if (json.seeds && (Array.isArray(json.seeds.positions) || json.seeds.mode)){
+        var fSeeds = {}; for (var kS in json.seeds) fSeeds[kS] = json.seeds[kS];
+        if (Array.isArray(fSeeds.positions)) fSeeds.positions_for = foamSeedKey(fSeeds);
+        var fGeo = {}; for (var kF in (json.geometry || {})) fGeo[kF] = json.geometry[kF];
+        var an = json.anisotropy || {};
+        /* stretch off ≡ stretch 1,1,1 (identical field), so a sweep can turn it on by value alone */
+        var fAniso = (an.enabled && Array.isArray(an.stretch) && an.stretch.length === 3)
+          ? { enabled: true, stretch: an.stretch.slice() } : { enabled: true, stretch: [1, 1, 1] };
+        recipe = {
+          family: 'foam', name: title,
+          seeds: fSeeds, anisotropy: fAniso, foam: fGeo,
+          geometry: { mode: 'solid', cellSizeMm: cellSizeMm, cellMult: 1.0 },
+          material: json.material || DEFAULT_MATERIAL
+        };
+        recipeNote = 'Foam recipe accepted (' + (fGeo.mode || 'plateau') + ', ' +
+                     (Array.isArray(fSeeds.positions) ? (fSeeds.positions.length / 3) + ' stored seeds' : 'seeds regenerated') + ')';
+      } else {
+        recipeNote = 'Foam recipe missing its seeds block — falling back to SVG mock';
+      }
     } else if (family === 'wave'){
       /* WaveKernel.parseRecipe reads recipe.field (modes[], symmetry, iso,
          mode='sheet'|'solid', thickness, signFlip).  No geometry needed
@@ -579,6 +619,20 @@ function uniqueDesignId(base, designs){
    for backward compatibility with the existing handoff scheme.
    ---------------------------------------------------------- */
 function ingestUrlParam(){
+  /* v0.14.0 — #r=<recipe JSON> (inline, the scheme F13LD.foam's
+     "Open in F13LD.lab" and F13LD.mesh use).  Nothing to fetch. */
+  var h = window.location.hash || '';
+  if (h.indexOf('#r=') === 0){
+    var json = null;
+    try { json = JSON.parse(decodeURIComponent(h.slice(3))); }
+    catch (err){ alert('Could not read the design in this link.\n\n' + err.message); return; }
+    try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e){}
+    var name = (json && json.meta && json.meta.tool ? json.meta.tool : 'link') + '.json';
+    try { ingestHandoffJson(json, name); }
+    catch (err){ alert('Could not load this design.\n\n' + err.message); }
+    return;
+  }
+
   var params = new URLSearchParams(window.location.search);
   var r = params.get('r');
   if (!r) return;
@@ -594,43 +648,50 @@ function ingestUrlParam(){
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   }).then(function(json){
-    /* Sprint A — the old "3 already loaded → bail" guard ran BEFORE the
-       replace, so with the 3-design demo seed the handoff never took effect.
-       Now: demo-only set → replace it (the documented intent); a restored
-       user comparison with room → append; full user set → replace (the
-       explicit handoff wins).  Only a run in flight blocks it. */
-    if (typeof RUN_STATE !== 'undefined' && RUN_STATE.running){
-      console.warn('[add-design] ?r= ignored — a run is in progress');
-      return;
-    }
-    var old = LAB_STATE.designs, design = null;
-    var demoOnly = old.every(function(od){ return !od.raw_json && /^demo-/.test(String(od.id)); });
-    var append = !demoOnly && old.length < 3;
-    if (!append) LAB_STATE.designs = [];   /* id uniqueness is checked against the set being built */
-    try { design = normalizeDesignJson(json, r.split('/').pop() || 'remote.json'); }
-    finally { if (!design) LAB_STATE.designs = old; }   /* parse threw → keep the current set */
-    if (append){
-      LAB_STATE.designs.push(design);
-      old = [];
-    }
-    for (var oi = 0; oi < old.length; oi++){
-      if (typeof disposeRaymarcher === 'function') disposeRaymarcher(old[oi].id);
-      if (typeof disposeStiffnessViz === 'function') disposeStiffnessViz(old[oi].id);
-      if (typeof BUCKLE_BY_DESIGN !== 'undefined') delete BUCKLE_BY_DESIGN[old[oi].id];
-      if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[old[oi].id];
-    }
-    if (!append) LAB_STATE.designs = [design];   // replace demo set with the imported one
-    if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();
-    LAB_STATE.runHasCompleted = false;
-    LAB_STATE.winningId = null;
-    if (!append) LAB_STATE.baselineId = design.id;
-    updateLoadedPill();
-    updateActionButtons();
-    recomputeEstimate();
-    renderDesignGrid();
+    ingestHandoffJson(json, r.split('/').pop() || 'remote.json');
   }).catch(function(err){
     console.warn('[add-design] ?r= fetch failed:', err);
+    if (err && /periodic/.test(err.message || '')) alert('Could not load this design.\n\n' + err.message);
   });
+}
+
+/* A design handed over by link (?r= URL or #r= inline JSON). */
+function ingestHandoffJson(json, name){
+  /* Sprint A — the old "3 already loaded → bail" guard ran BEFORE the
+     replace, so with the 3-design demo seed the handoff never took effect.
+     Now: demo-only set → replace it (the documented intent); a restored
+     user comparison with room → append; full user set → replace (the
+     explicit handoff wins).  Only a run in flight blocks it. */
+  if (typeof RUN_STATE !== 'undefined' && RUN_STATE.running){
+    console.warn('[add-design] handoff ignored — a run is in progress');
+    alert('A run is in progress — the linked design was not loaded. Reload the link when the run finishes.');
+    return;
+  }
+  var old = LAB_STATE.designs, design = null;
+  var demoOnly = old.every(function(od){ return !od.raw_json && /^demo-/.test(String(od.id)); });
+  var append = !demoOnly && old.length < 3;
+  if (!append) LAB_STATE.designs = [];   /* id uniqueness is checked against the set being built */
+  try { design = normalizeDesignJson(json, name); }
+  finally { if (!design) LAB_STATE.designs = old; }   /* parse threw → keep the current set */
+  if (append){
+    LAB_STATE.designs.push(design);
+    old = [];
+  }
+  for (var oi = 0; oi < old.length; oi++){
+    if (typeof disposeRaymarcher === 'function') disposeRaymarcher(old[oi].id);
+    if (typeof disposeStiffnessViz === 'function') disposeStiffnessViz(old[oi].id);
+    if (typeof BUCKLE_BY_DESIGN !== 'undefined') delete BUCKLE_BY_DESIGN[old[oi].id];
+    if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[old[oi].id];
+  }
+  if (!append) LAB_STATE.designs = [design];   // replace demo set with the imported one
+  if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();
+  LAB_STATE.runHasCompleted = false;
+  LAB_STATE.winningId = null;
+  if (!append) LAB_STATE.baselineId = design.id;
+  updateLoadedPill();
+  updateActionButtons();
+  recomputeEstimate();
+  renderDesignGrid();
 }
 
 /* ============================================================
@@ -660,7 +721,8 @@ function onMeshHandoffClick(){
     // Encode the design JSON so mesh can pick it up via ?r=
     try {
       var encoded = encodeURIComponent(JSON.stringify(winner.raw_json));
-      meshUrl += '?r=data:application/json,' + encoded;
+      /* v0.14.0 — mesh reads foam recipes inline from #r= (its foam loader) */
+      meshUrl += (winner.family === 'foam') ? '#r=' + encoded : '?r=data:application/json,' + encoded;
     } catch (err){
       // Too large or other issue — fall back to plain open
     }
