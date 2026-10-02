@@ -378,8 +378,11 @@ var DOT_REDUCE_PAIR_WGSL =
    vec4-packed 6-component buffers and the 4-pass applyA pipeline.
    ════════════════════════════════════════════════════════════ */
 
-function ElasticSolverFull(N, fftPlan) {
+function ElasticSolverFull(N, fftPlan, opts) {
   this.N = N;
+  /* v0.15.0 — lean: only the buffers the fast path (16i) uses (no Γ planes,
+     no complex scratch, no tau pair) */
+  this.lean = !!(opts && opts.lean);
   this.N3 = N * N * N;
   this.v4Size = 16 * this.N3;        /* vec4<f32> per voxel */
   this.realSize = 4 * this.N3;        /* scalar f32 per voxel (Γ buffers) */
@@ -493,6 +496,11 @@ ElasticSolverFull.prototype._allocateBuffers = function() {
 
   /* applyA scratch */
   this.sig    = { n: v4buf(), s: v4buf() };
+  if (this.lean) {
+    this.tau = { n: null, s: null };
+    this.tauCmplx = []; this.tauHat = []; this.depsHat = []; this.depsC = [];
+    this.gamma = [[], [], [], [], [], []];
+  } else {
   this.tau    = { n: v4buf(), s: v4buf() };
 
   /* Spectral scratch — 6 complex buffers per slot (one per Voigt component) */
@@ -506,6 +514,7 @@ ElasticSolverFull.prototype._allocateBuffers = function() {
   for (var P = 0; P < 6; P++) {
     this.gamma[P] = [rbuf(), rbuf(), rbuf(), rbuf(), rbuf(), rbuf()];
   }
+  }   /* end !lean */
 
   /* Reduction partials + readback staging */
   this.partialsBuf = d.createBuffer({
@@ -617,8 +626,8 @@ ElasticSolverFull.prototype.uploadDesign = function(solid_f32, gammaArr, C_s, C_
   /* Solid mask */
   d.queue.writeBuffer(this.solidBuf, 0, solid_f32);
 
-  /* Γ: 36 buffers from Float64 → Float32 */
-  for (var P = 0; P < 6; P++) {
+  /* Γ: 36 buffers from Float64 → Float32 (none on a lean solver: 16i binds its cached packed Γ) */
+  for (var P = 0; gammaArr && P < 6; P++) {
     for (var Q = 0; Q < 6; Q++) {
       var src = gammaArr[P][Q];
       var f32 = new Float32Array(src.length);
@@ -1613,9 +1622,20 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var C_v = isoC(Es * voidRatio, nu);
   var C_0 = isoC(Es, nu);
 
+  /* v0.15.0 — sweeps (no per-voxel fields) take the fast path (16i):
+     GPU-resident CG, packed operator, Γ cached per grid.  Same operator,
+     same CG, same stopping test; window.LAB_FAST_ELASTIC = false → legacy. */
+  var hom = null, tGamma = 0, tCG = 0, solverPath = 'legacy';
+  if (captureLCs_solver.length === 0 && typeof elasticFastHomogenize === 'function') {
+    var gInfo = {}, tF0 = performance.now();
+    hom = await elasticFastHomogenize(N, solid, C_s, C_v, C_0, opts, gInfo);
+    if (hom) { tGamma = gInfo.tGamma_ms || 0; tCG = performance.now() - tF0 - tGamma; solverPath = 'fast'; }
+  }
+
+  if (!hom) {
   var t1 = performance.now();
   var Gamma = buildGammaFull(N, C_0[21], C_0[1]);
-  var tGamma = performance.now() - t1;
+  tGamma = performance.now() - t1;
 
   /* Batched FFT plan (batch = 6 Voigt components) — cached separately
      from the single-transform __sharedFFT that the buckling / Stokes
@@ -1634,9 +1654,10 @@ async function solveDesignElasticFull(recipe, N, opts) {
   solver.uploadDesign(solid, Gamma, C_s, C_v, C_0);
 
   var t2 = performance.now();
-  var hom = await solver.homogenizeFull({ captureFieldsLCs: captureLCs_solver });
-  var tCG = performance.now() - t2;
+  hom = await solver.homogenizeFull({ captureFieldsLCs: captureLCs_solver });
+  tCG = performance.now() - t2;
   solver.destroy();   /* FFT plan stays alive (cached) */
+  }
 
   if (!hom.valid) {
     return {
@@ -1645,7 +1666,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
       connectivity: connectivity,
       Es_MPa: Es, nu: nu,
       perLC: hom.perLC, iters: hom.totalIters, converged: hom.allConverged,
-      tRast_ms: tRast, tGamma_ms: tGamma, tCG_ms: tCG
+      tRast_ms: tRast, tGamma_ms: tGamma, tCG_ms: tCG, solverPath: solverPath
     };
   }
 
@@ -1691,7 +1712,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
          unloaded axis reads ~0 or slightly negative instead of discarding it */
       Gxy_MPa: Gxy, Gxz_MPa: Gxz, Gyz_MPa: Gyz, nu_xy: nu_xy, nu_xz: nu_xz, nu_yz: nu_yz,
       rho_raw: insideRaw / solid.length, cgTol: opts.cgTol || CG_TOL_FULL, voidRatio: voidRatio,
-      C_eff: Array.from(C_phys), S: Array.from(S_phys), iters: hom.totalIters
+      C_eff: Array.from(C_phys), S: Array.from(S_phys), iters: hom.totalIters, solverPath: solverPath
     };
   }
 
@@ -1755,7 +1776,8 @@ async function solveDesignElasticFull(recipe, N, opts) {
     connectivity: connectivity,    /* Push 6.1 — { numComponents, sizes, largest, smallest, totalSolid, largestFraction, orphans } or null if helper not loaded */
     tRast_ms: tRast,
     tGamma_ms: tGamma,
-    tCG_ms:   tCG
+    tCG_ms:   tCG,
+    solverPath: solverPath   /* v0.15.0 — 'fast' (16i) or 'legacy' */
   };
 }
 

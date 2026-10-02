@@ -46,7 +46,7 @@
     }, 150);
   });
 
-  console.log('%c F13LD.lab · v0.14.0 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
+  console.log('%c F13LD.lab · v0.15.0 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
   console.log('Phase 6 · nonlinear J2 plasticity + adaptive crush live · real σ_y retires the buckling seam · σ–ε comparison tab');
   console.log('Loaded demo recipes: ' + Object.keys(DEMO_RECIPES).join(', '));
 })();
