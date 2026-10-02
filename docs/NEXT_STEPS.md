@@ -43,6 +43,10 @@ Matt's PI-TPMS Paper 1, Section 5: the run matrix is now **42 rows** (A4m added;
 - Matched feature (0.126 T): A4m is 1.77× D7 in-plane, 0.43× along z, ≈ equal on the directional mean, at 1.7× the solid; D7 is 2.4× stiffer along [111] than its axes — report directional mean or E max / E min, not axes only (`SWEEP.md` §8).
 - Fischer–Koch G set: Ez × 8.5 from wall ratio 0.17 → 0.19 (contacts forming; Euler characteristic 25 → 33 → 41 → 57 loops per cell). G1 sits at contact onset and is the most grid-sensitive run.
 
+## 1-foam. Queued: foam stiffness calibration (from the 2026-10-02 foam/mesh session)
+
+F13LD.foam v0.3.0 and F13LD.mesh v0.9.1 (foam family) are live. Next for foam: add a foam kernel to the lab, run a ~50-run calibration sweep on Matt's GPU, and fit the in-tool stiffness estimate to it. Plan, numbers and open questions: [`FOAM_CALIBRATION_HANDOFF.md`](FOAM_CALIBRATION_HANDOFF.md). Nothing has been built yet; the plan needs Matt's approval first.
+
 ## 1a. Next dev cycle — pick up (in suggested order)
 
 1. **Production pass done and checked (`SWEEP.md` §9).** Next: build Figure 6, the verification table and the Section 5 text from it with Matt — Figure 6 data, verification table vs Vixiv, fitted density exponents, directional-mean columns. Check B7's shear and B6's no-load axes at 1e-5.
