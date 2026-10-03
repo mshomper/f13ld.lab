@@ -94,13 +94,29 @@ Every run's 64³ → 128³ change was fitted to E_h = E∞(1 − a·w^−p), w =
 
 Set A's plateau rows are identical to the open rows from 12 % up (0 voxels differ at 18 %). The plateau swell `k·(1 − smoothstep(0, 0.35, d₃ − d₁))` only reaches 0.35 tile units in d₃ − d₁ from a strut's axis, and at 27 cells and 12 %+ the struts are thicker than that, so the swell sits inside solid. In the tool's typical foams (200 cells, thickness 0.08) the same k = 0.05 raises the solid from 4.0 % to 6.6 %. Plateau needs thin struts — §7.
 
-## 7. Plateau pass (set P, 19 runs) — ready to run
+## 7. Plateau pass (set P + N, 19 runs, Matt's GPU, 2026-10-03)
 
-[`foam-calibration/foam_plateau_runs.csv`](foam-calibration/foam_plateau_runs.csv), built by `make_plateau_runs.js`. Same settings as §1 (Standard, void 1e-6, 64 ↔ 128, order 2).
+Run set [`foam-calibration/foam_plateau_runs.csv`](foam-calibration/foam_plateau_runs.csv) (`make_plateau_runs.js`); fit record [`fit_2026-10-03.json`](foam-calibration/fit_2026-10-03.json), [`fit_summary_2026-10-03.md`](foam-calibration/fit_summary_2026-10-03.md) (exported from the fit page, 67 runs).
 
-- **P:** plateau k against an open foam with the same cells, density and seeds: 27 cells at 5 % (k 0.1 / 0.2 / 0.3), 50 cells at 5 % (k 0.05 / 0.1 / 0.2) and at 8 % (k 0.05 / 0.1 / 0.2 / 0.3), plus a second realization of four of the 50-cell runs. In these foams plateau adds 5–57 % of the solid at the same thickness (64³ probe).
-- **N:** open foam at 12 % with 16 and 50 cells (set A has 27), to check that the law doesn't depend on cell count.
-- Struts here are 1.2–2.4 voxels across at 64³, so read the plateau result as the **ratio to its paired open run at 128³**, where most of the resolution error cancels. The fit page's plateau chart does this.
+**Plateau borders, read as each plateau foam ÷ its paired open foam (same cells, density, seeds) at 128³** — struts here are 1.2–2.4 voxels at 64³, so absolute values are loose but the resolution error cancels in the pair:
 
-Decision on record (Matt, 2026-10-03): Kelvin and Weaire–Phelan foams get the estimate with a "not calibrated" note.
+| k | 27 cells, 5 % | 50 cells, 5 % | 50 cells, 8 % |
+|---|---|---|---|
+| 0.05 | — | 1.05 | 1.04 |
+| 0.1 | 1.06 | 1.08 | 1.07 |
+| 0.2 | 1.08 | 1.10 (repeat 1.12) | 1.10 (repeat 1.10) |
+| 0.3 | 1.10 | — | 1.12 |
 
+**Plateau factor at equal measured ρ: f = 1 + 0.118 (1 − e^(−k/0.111))**, rms 1.1 % over 12 pairs. It applies while the swell adds mass (set A, where it is buried inside thick struts, gives exactly 1); F13LD.foam scales it in over the first 5 % of added solid.
+
+**Open law at 5 %:** the paired open foams sit 0.88–1.05 × the law — consistent within their (looser, thin-strut) uncertainty, so the open law is used from 5 %.
+
+**Cell count (open, 12 %, one run each):** 0.96 × the law at 16 cells, 1.00 at 27 (two runs), 1.07 at 50. Not resolved by one run each, and the 50-cell open pairs at 5–8 % differ by 13–17 % between seeds (thin struts) — so §8.
+
+## 8. Cell-count pass (set N, 6 runs) — ready to run
+
+[`foam-calibration/foam_cellcount_runs.csv`](foam-calibration/foam_cellcount_runs.csv) (`make_cellcount_runs.js`), same settings as §1. Open foam, Lloyd seeds, all at ≥ 3 voxels across at 64³ so the order-2 extrapolation holds: 16 cells at 12 % (second seed), 50 cells at 12 % (seeds 2, 3), 100 cells at 18 % (seeds 1, 2) and 25 % (seed 1). Drop the results into the fit page with the earlier two files; its cell-count card groups every open run by cell count (mean E ÷ law). If the law drifts with cell count, the fix is a cell-count term in the open law; if not, F13LD.foam's extra ±7 % "cell count" band comes out.
+
+## 9. F13LD.foam estimator (v0.5.0)
+
+Uses §6–7: ρ measured by point-sampling the exact field at 64³ (worker threads, ~0.5–2 s); mean E from the open / closed law × Poisson-seed factor × plateau factor; ν(ρ); G = E/2(1+ν); stretch split s^m with the mean kept; shear split (E_i E_j)^(r/2). Likely range per axis combines the fit rms, seed-to-seed scatter scaled to the foam's cell count, the ±7 % cell-count band, and extra width for anything outside the calibration (density range, Kelvin / Weaire–Phelan, uniform-random seeds, organic > 0, normalize off, stretch beyond 2:1), each named in a "not calibrated" note. Exports a `homogenization` block with F13LD.tpms's field names (F13LD.mesh's foam summary shows it). Constants live in one `FOAM_CAL` block; refit = paste from the fit page's JSON.
