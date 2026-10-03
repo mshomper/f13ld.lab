@@ -40,6 +40,12 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.16.0
+
+**Crush on all three axes.** The Crush axis selector has **All (XX·YY·ZZ)**: each design is crushed along X, Y and Z in turn (about 3× the crush time; the estimate accounts for it). Axes already solved with the same grid, strain cap and design are reused, so running X, Y and Z one at a time builds the same set. The stress–strain plot draws every crushed axis on one chart — colour is the design, line style is the axis (X solid, Y dashed, Z dotted). An **X / Y / Z switch** next to the scrubber picks the preview axis: its cubes, metric cards (with the other axes' modulus and yield listed), and its curves drawn bold with the 0.2% offset line, yield label and buckling line. Design cards use the **weakest axis** for Yield Strength and Load Capacity, and the buckling-to-yield ratio is the lowest of the per-axis ratios (each axis's buckling over that axis's yield).
+
+**Elastic iteration cap 300 → 1000.** The normal (non-sweep) elastic solve allowed 300 iterations per load case; disordered designs (foams, spinodoids) often stopped there, and because the solve starts from a uniform strain a stopped solve reads stiff. The cap is now 1000, and a card shows **not converged · N it** on its modulus rows when a load case still stops at the cap.
+
 ## What's new in v0.15.1
 
 **Sweep export (v0.15.1)** adds the second grid's own solid fraction (`grid2_vf_voxel_pct`, `grid2_vf_measured_pct`), its convergence and per-load-case iterations. **Foam fit page:** `docs/foam-calibration/foam-fit.html` — drop in sweep exports to fit and chart F13LD.foam's stiffness laws (see `docs/FOAM_CALIBRATION.md`).
