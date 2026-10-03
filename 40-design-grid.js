@@ -1533,7 +1533,8 @@ function renderNonlinearViz(){
     for (var aj = 0; aj < avl.length; aj++) if (!axSeen[avl[aj]]){ axSeen[avl[aj]] = 1; axCount++; }
   }
   var axSw = '';
-  if (axCount > 1){
+  var plotHasFocus = (typeof CURVE_PLOTLY !== 'undefined') && !CURVE_PLOTLY.failed;   /* v0.17.0 — the plot header's Focus switch drives the cubes */
+  if (axCount > 1 && !plotHasFocus){
     var curView = entries[0].axisKey;
     axSw = '<span class="nl-axis-sw" title="Crush axis shown in the preview and metric cards (bold on the plot)">';
     for (var ak = 0; ak < 3; ak++){
@@ -1551,29 +1552,45 @@ function renderNonlinearViz(){
     '</div>' +
     '<span class="nl-readout" id="nlReadout">crush \u03b5 0.00%</span>';
 
-  /* Per-design crush metrics: Crush Modulus (E0 from the curve), Yield Strength,
-     and per-cell Load Capacity (governing yield/buckling). */
+  /* v0.17.0 — per-design crush KPIs: modulus and yield on the preview axis,
+     the weakest crushed axis, buckling-to-yield on the preview axis, and the
+     per-cell Load Capacity; warnings underneath. */
   if (metrics){
     var mh = '';
     for (var mi = 0; mi < entries.length; mi++){
-      var em = entries[mi], nlm = em.nl;
-      var crushMod = isFinite(nlm.E0) ? fmtEngMPa(nlm.E0) : '\u2014';
+      var em = entries[mi], nlm = em.nl, axU = em.axisKey.charAt(0).toUpperCase();
+      var crushMod = isFinite(nlm.E0) ? fmtEngMPa(nlm.E0) : '—';
       var yStr = (nlm.yielded && isFinite(nlm.sigma_y_eff)) ? fmtEngMPa(nlm.sigma_y_eff)
                  : (isFinite(nlm.sigmaCap) ? ('> ' + fmtEngMPa(nlm.sigmaCap)) : 'no yield');
       var lc = loadCapacity(em.design);
-      var loadStr = lc ? fmtForceN(lc.N) : '\u2014';
-      mh += '<div class="nl-metric-card" style="border-left-color:' + em.design.color + '">' +
-              '<div class="nl-mc-head"><span class="dot" style="background:' + em.design.color + '"></span>' +
-                nlCubeLabel(em.design) + ' \u00b7 ' + em.axisKey.charAt(0).toUpperCase() + ' crush</div>' +
-              '<div class="nl-mc-row"><span>Crush Modulus</span><b>' + crushMod + '</b></div>' +
-              ((typeof voidLimited === 'function' && voidLimited(nlm.E0, nlm.Es_MPa, nlm.voidContrast))
-                ? '<div class="nl-mc-row nl-mc-warn"><span>void-limited</span><b>void ' + nlm.voidContrast.toExponential(0) + ' of solid</b></div>' : '') +
-              ((nlm.voidScaled === false) ? '<div class="nl-mc-row nl-mc-warn"><span>void not scaled</span><b>run Elastic too</b></div>' : '') +
-              ((nlm.lateralFloor > (typeof NL_LATERAL_FLAG !== 'undefined' ? NL_LATERAL_FLAG : 0.05))
-                ? '<div class="nl-mc-row nl-mc-warn" title="This design is so compliant that its average stress is a tiny fraction of the stresses in its struts; at the GPU\'s single precision the side stress of the crush could only be resolved to about ' + Math.round(nlm.lateralFloor * 100) + '% of the axial stress. The elastic slope and the yield onset hold; the curve past yield is approximate."><span>post-yield approximate</span><b>side stress \u00b1' + Math.round(nlm.lateralFloor * 100) + '%</b></div>' : '') +
-              '<div class="nl-mc-row"><span>Yield Strength</span><b>' + yStr + '</b></div>' +
-              nlOtherAxesRow(em.design.id, em.axisKey) +
-              '<div class="nl-mc-row"><span>Load Capacity</span><b>' + loadStr + '</b></div>' +
+      var loadStr = lc ? fmtForceN(lc.N) : '—';
+      var wk = null, wkAx = '';
+      var avAx = (typeof nlAvailableAxes === 'function') ? nlAvailableAxes(em.id) : [];
+      for (var wa = 0; wa < avAx.length; wa++){
+        var we = nlAxisEntry(em.id, avAx[wa]);
+        if (we && we.yielded && isFinite(we.sigma_y_eff) && (wk == null || we.sigma_y_eff < wk)){ wk = we.sigma_y_eff; wkAx = avAx[wa].charAt(0).toUpperCase(); }
+      }
+      var bkm = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[em.id] : null;
+      var pcrAx = (typeof _mpAxisPcr === 'function') ? _mpAxisPcr(bkm, em.axisKey) : null;
+      var bRat = (pcrAx != null && nlm.yielded && nlm.sigma_y_eff > 0) ? pcrAx / nlm.sigma_y_eff : null;
+      var kpi = function(v, k, warn){ return '<div class="nl-kpi' + (warn ? ' warn' : '') + '"><div class="v">' + v + '</div><div class="k">' + k + '</div></div>'; };
+      var warns = '';
+      if (typeof voidLimited === 'function' && voidLimited(nlm.E0, nlm.Es_MPa, nlm.voidContrast))
+        warns += '<div class="nl-mc-warn">⚠ void-limited · void ' + nlm.voidContrast.toExponential(0) + ' of solid</div>';
+      if (nlm.voidScaled === false) warns += '<div class="nl-mc-warn">⚠ void not scaled · run Elastic too</div>';
+      if (nlm.lateralFloor > (typeof NL_LATERAL_FLAG !== 'undefined' ? NL_LATERAL_FLAG : 0.05))
+        warns += '<div class="nl-mc-warn" title="The side stress of this crush could only be resolved to about ' + Math.round(nlm.lateralFloor * 100) + '% of the axial stress at the solver\'s tolerance. The elastic slope and the yield onset hold; the curve past yield is approximate.">⚠ post-yield approximate · side stress ±' + Math.round(nlm.lateralFloor * 100) + '%</div>';
+      if (nlm.truncated) warns += '<div class="nl-mc-warn">⚠ partial curve' + (nlm.truncReason ? ' (' + nlm.truncReason + ')' : '') + '</div>';
+      mh += '<div class="nl-metric-card nl-kpi-card" style="--c:' + em.design.color + '">' +
+              '<div class="nl-mc-head"><span class="dot"></span><b>' + nlCubeLabel(em.design) + '</b>' +
+                '<span class="t">' + (em.design.title || '') + '</span><span class="ax">' + axU + ' crush</span></div>' +
+              '<div class="nl-kpis">' +
+                kpi(crushMod, 'E · ' + axU) +
+                kpi(yStr, 'σ<sub>y</sub> · ' + axU) +
+                (avAx.length > 1 ? kpi(wk != null ? fmtEngMPa(wk) : '—', 'weakest · ' + (wkAx || '—')) : '') +
+                kpi(bRat != null ? (bRat >= 10 ? bRat.toFixed(0) : bRat.toFixed(1)) + '×' : '—', 'σ<sub>cr</sub> / σ<sub>y</sub> · ' + axU, bRat != null && bRat < 1) +
+                kpi(loadStr, 'load capacity') +
+              '</div>' + warns +
             '</div>';
     }
     metrics.innerHTML = mh;
@@ -1589,7 +1606,7 @@ function renderNonlinearViz(){
     var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[et.id] : null;
     var pcr = (bk && !bk.error && isFinite(bk.pcr)) ? bk.pcr : null;
     var E0 = et.nl.E0;
-    var epsMax = et.nl.alphaSteps[et.n - 1].eps;
+    var epsMax = nlvizEpsMax();   /* v0.17.0 — one strain timeline for every cube */
     if (pcr != null && isFinite(E0) && E0 > 0 && epsMax > 0){
       var ecr = pcr / E0;
       var frac = Math.max(0, Math.min(1, ecr / epsMax));
@@ -1645,6 +1662,7 @@ function renderNonlinearViz(){
   }
   if (playBtn){
     playBtn.addEventListener('click', function(){
+      NLVIZ.pinned = false;
       NLVIZ.playing = !NLVIZ.playing;
       this.innerHTML = NLVIZ.playing ? '\u275a\u275a' : '\u25b6';
       if (NLVIZ.playing){
@@ -1668,15 +1686,46 @@ function renderNonlinearViz(){
 /* Apply a timeline fraction to every cube: pick each design's step, swap the α
    texture only when the integer step changes, scale the deformation with the
    step, and update the readouts. */
+/* v0.17.0 — the scrubber is a STRAIN timeline shared by every cube (0 ..
+   the largest crushed strain), so it lines up with the stress–strain plot:
+   each cube shows its last solved step at or below the scrubber strain. */
+function nlvizEpsMax(){
+  var m = 0, en = NLVIZ.entries || [];
+  for (var i = 0; i < en.length; i++){ var s = en[i].nl.alphaSteps; if (s && s.length && s[s.length - 1].eps > m) m = s[s.length - 1].eps; }
+  return m;
+}
+function nlvizScrubToEps(eps, kind){
+  var m = nlvizEpsMax(); if (!(m > 0)) return;
+  if (kind === 'hover' && !NLVIZ.hovering){ NLVIZ.hovering = true; NLVIZ.resumePlay = NLVIZ.playing && !NLVIZ.pinned; }
+  if (kind === 'pin'){ NLVIZ.pinned = true; NLVIZ.resumePlay = false; }
+  NLVIZ.playing = false;
+  NLVIZ.manual = true;
+  var pb = document.getElementById('nlPlayBtn'); if (pb) pb.innerHTML = '▶';
+  NLVIZ.frac = Math.max(0, Math.min(1, eps / m));
+  var sl = document.getElementById('nlScrub'); if (sl) sl.value = Math.round(NLVIZ.frac * 1000);
+  nlvizApply(NLVIZ.frac);
+}
+function nlvizScrubRelease(){
+  if (!NLVIZ.hovering) return;
+  NLVIZ.hovering = false;
+  if (NLVIZ.resumePlay && !NLVIZ.pinned){
+    NLVIZ.playing = true; NLVIZ.manual = false;
+    var pb = document.getElementById('nlPlayBtn'); if (pb) pb.innerHTML = '❚❚';
+    NLVIZ.t0 = performance.now() - NLVIZ.frac * NLVIZ.periodMs;
+    if (!NLVIZ.raf) NLVIZ.raf = requestAnimationFrame(nlvizTick);
+  }
+}
+
 function nlvizApply(frac){
   var entries = NLVIZ.entries || [];
-  var leadEps = 0;
+  var leadEps = 0, target = frac * nlvizEpsMax();
   for (var i = 0; i < entries.length; i++){
     var e = entries[i], n = e.n;
     if (n < 1) continue;
     var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[e.id] : null;
     if (!rm) continue;
-    var si = Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1))));
+    var si = 0;
+    for (var sk = 0; sk < n; sk++) if (e.nl.alphaSteps[sk].eps <= target + 1e-12) si = sk;
     if (si !== NLVIZ.lastInt[e.id]){
       var Nd = e._Nd || ((e.elastic && e.elastic.N) ? e.elastic.N : e.nl.N);
       var aUp = upsampleScalarTrilinear(e.nl.alphaSteps[si].alpha, e.nl.N, Nd);
@@ -1700,7 +1749,8 @@ function nlvizApply(frac){
   var slider = document.getElementById('nlScrub');
   if (slider && !NLVIZ.manual) slider.value = Math.round(frac * 1000);
   var ro = document.getElementById('nlReadout');
-  if (ro) ro.textContent = 'crush \u03b5 ' + leadEps.toFixed(2) + '%';
+  if (ro) ro.textContent = 'crush \u03b5 ' + (target * 100).toFixed(2) + '%';
+  if (typeof curvePlotCursor === 'function') curvePlotCursor(target * 100);   /* v0.17.0 — strain cursor on the plot */
 }
 
 function nlvizTick(ts){

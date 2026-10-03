@@ -332,6 +332,49 @@ html, body {
   letter-spacing:0.08em; text-transform:uppercase;
 }
 
+/* ============ v0.17.0 — Plotly stress–strain (20b-curve-plotly.js) ============ */
+.merged-plot[data-mode="plotly"] {
+  padding:14px 18px 10px;
+  background:
+    radial-gradient(1100px 480px at 15% -12%, rgba(124,111,247,0.10), transparent 60%),
+    radial-gradient(800px 420px at 100% 115%, rgba(232,121,201,0.07), transparent 55%),
+    linear-gradient(180deg, #12121b 0%, #0b0c14 100%);
+}
+.cp-head { display:flex; align-items:flex-end; justify-content:space-between; gap:14px; flex-wrap:wrap; flex-shrink:0; }
+.cp-title { font-size:16px; font-weight:600; color:var(--ink); letter-spacing:.01em; }
+.cp-title small { display:block; margin-top:4px; font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:400; color:var(--ink-dim); letter-spacing:.06em; }
+.cp-controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.cp-seg { display:inline-flex; background:rgba(10,12,20,0.75); border:0.5px solid var(--line); border-radius:9px; padding:3px; gap:2px; }
+.cp-seg .lbl { font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--ink-dim); letter-spacing:.12em; text-transform:uppercase; padding:0 7px 0 5px; align-self:center; }
+.cp-seg button { font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-2); background:transparent; border:0; border-radius:6px; padding:5px 10px; cursor:pointer; transition:background .18s,color .18s; }
+.cp-seg button:hover:not(:disabled) { color:var(--ink); background:rgba(255,255,255,0.04); }
+.cp-seg button.on { background:var(--lab); color:#120d02; font-weight:600; box-shadow:0 0 18px -4px var(--lab-glow); }
+.cp-seg button:disabled { opacity:.3; cursor:default; }
+.cp-chip { font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--ink-dim); border:0.5px solid var(--line); background:rgba(10,12,20,0.75); border-radius:999px; padding:5px 10px; cursor:pointer; user-select:none; transition:all .18s; }
+.cp-chip.on { border-color:rgba(251,191,36,.6); color:var(--lab); }
+.cp-legend { display:flex; flex-wrap:wrap; gap:8px 20px; padding:10px 0 0; flex-shrink:0; }
+.cp-lg { display:flex; align-items:center; gap:9px; font-size:12px; }
+.cp-lg .dn { display:flex; align-items:center; gap:7px; cursor:pointer; user-select:none; }
+.cp-lg .dn i { width:9px; height:9px; border-radius:50%; background:var(--c); box-shadow:0 0 12px var(--c); }
+.cp-lg .dn b { color:var(--c); font-weight:600; }
+.cp-lg .dn span { color:var(--ink-dim); max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cp-lg .ax { display:inline-flex; gap:4px; }
+.cp-lg .ax button { display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--ink-2); background:rgba(10,12,20,0.7); border:0.5px solid var(--line); border-radius:6px; padding:3px 7px; cursor:pointer; transition:opacity .15s; }
+.cp-lg .ax button.off { opacity:.3; }
+.cp-lg.off .dn { opacity:.35; }
+.cp-flag { color:var(--warn); font-size:12px; cursor:help; }
+.cp-note { font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--ink-dim); padding-top:4px; flex-shrink:0; min-height:4px; }
+.cp-plot { flex:1; min-height:0; position:relative; }
+.cp-gd { position:absolute; inset:0; }
+/* zoom box: dim what is cut away, keep the selection clear (Plotly's default on a dark plot greys the outside) */
+.cp-plot .zoombox { fill:rgba(3,4,10,0.62) !important; }
+.cp-plot .zoombox-corners { fill:var(--lab) !important; stroke:var(--lab) !important; }
+.cp-plot .modebar { background:transparent !important; }
+.cp-plot .modebar-btn path { fill:var(--ink-dim) !important; }
+.cp-plot .modebar-btn:hover path, .cp-plot .modebar-btn.active path { fill:var(--lab) !important; }
+.cp-cursor { position:absolute; width:0; border-left:1px solid rgba(251,191,36,0.85); box-shadow:0 0 10px rgba(251,191,36,0.55); pointer-events:none; display:none; z-index:2; }
+.cp-cursor span { position:absolute; top:-2px; left:5px; font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--lab); white-space:nowrap; text-shadow:0 0 6px #000; }
+
 /* ============ CONTROLS PANEL ============ */
 .controls {
   background:var(--panel); border-top:0.5px solid var(--line);
@@ -602,6 +645,20 @@ html, body {
 .merged-scrubber .nl-axis-btn:disabled { opacity:0.35; cursor:default; }
 .nl-metric-card .nl-mc-other b { font-weight:400; color:var(--ink-2); text-align:right; }
 .nl-metric-card .nl-mc-warn, .nl-metric-card .nl-mc-warn b { color:var(--warn, #f59e0b); font-weight:400; }
+/* v0.17.0 — KPI-style crush cards */
+.merged-metrics .nl-kpi-card { position:relative; overflow:hidden; border-left:0.5px solid var(--line); border-radius:12px; padding:10px 14px 10px 16px;
+  background:linear-gradient(180deg, rgba(18,18,27,0.95), rgba(10,12,20,0.95)); }
+.nl-kpi-card::before { content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--c); box-shadow:0 0 14px var(--c); }
+.nl-kpi-card .nl-mc-head { margin-bottom:8px; font-family:'Exo 2',system-ui,sans-serif; font-size:12px; letter-spacing:0; }
+.nl-kpi-card .nl-mc-head .dot { width:9px; height:9px; background:var(--c); box-shadow:0 0 10px var(--c); }
+.nl-kpi-card .nl-mc-head b { color:var(--ink); font-weight:600; }
+.nl-kpi-card .nl-mc-head .t { color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1; }
+.nl-kpi-card .nl-mc-head .ax { font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--c); border:0.5px solid var(--c); border-radius:999px; padding:1px 7px; flex-shrink:0; }
+.nl-kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(78px, 1fr)); gap:6px 12px; }
+.nl-kpi .v { font-family:'JetBrains Mono',monospace; font-size:14px; color:var(--ink); font-weight:500; white-space:nowrap; }
+.nl-kpi .k { font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--ink-dim); letter-spacing:.05em; margin-top:2px; white-space:nowrap; }
+.nl-kpi.warn .v { color:var(--warn); }
+.nl-kpi-card .nl-mc-warn { font-family:'JetBrains Mono',monospace; font-size:9.5px; margin-top:7px; }
 
 @media (max-width: 880px){
   .compare.merged.has-cubes {
