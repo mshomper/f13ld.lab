@@ -31,8 +31,10 @@ var BUCKLE_STATE = {
 var BUCKLE_BY_DESIGN = {};
 
 /* Nonlinear crush resolution + load axis (GPU J2 plasticity, 16g).
-   Nonlin pill cycles 16 -> 32 -> 64 (radix-2 FFT); axis xx/yy/zz -> crush() physical 0/1/2. */
-var NONLIN_STATE = { N: 32, axis: 'zz', cap: 0.05 };
+   Nonlin pill cycles 16 -> 32 -> 64 (radix-2 FFT); axis xx/yy/zz -> crush() physical 0/1/2,
+   'all' crushes every axis in turn (v0.16.0).  view = the axis the Nonlinear-tab
+   preview (cubes, scrubber, metric cards) shows. */
+var NONLIN_STATE = { N: 32, axis: 'zz', cap: 0.05, view: 'zz' };
 
 /* v0.7.2 — Material pill.  One material applied to every design in the
    comparison ('recipe' keeps each design's own).  The choice is a per-viewer
@@ -45,6 +47,53 @@ var MATERIAL_STORE_KEY = 'f13ld.lab.material.v1';
    axis, N, truncated } | { error }).  Feeds the sigma-epsilon curve tab, the
    sigma_y(z) metric, and the P_cr/P_y seam (replaces provisional SIGMA_Y_TI64_MPA). */
 var NONLIN_BY_DESIGN = {};
+
+/* v0.16.0 — per-axis crush results (id -> { base, xx, yy, zz }).  base is the
+   N|cap|prune|recipe part of the cache signature: a run with a different base
+   clears the design's axes, so every stored axis belongs to the same settings.
+   NONLIN_BY_DESIGN[id] is the GOVERNING axis (weakest yield) of these, which
+   the cards, Load Capacity and the buckling seam read. */
+var NONLIN_AXES = {};
+var NL_AXIS_KEYS = ['xx', 'yy', 'zz'];
+
+function nlAxesToRun(){ return NONLIN_STATE.axis === 'all' ? NL_AXIS_KEYS.slice() : [NONLIN_STATE.axis]; }
+function nlAxisEntry(id, ax){ var s = NONLIN_AXES[id]; return (s && s[ax]) || null; }
+/* Axes with a usable (non-error) crush result for this design. */
+function nlAvailableAxes(id){
+  var out = [];
+  for (var i = 0; i < NL_AXIS_KEYS.length; i++){
+    var e = nlAxisEntry(id, NL_AXIS_KEYS[i]);
+    if (e && !e.error) out.push(NL_AXIS_KEYS[i]);
+  }
+  return out;
+}
+/* Weakest axis: lowest 0.2%-offset yield among the axes that yielded; when
+   none yielded, the lowest stress reached at the cap (a lower bound on yield). */
+function nlGoverning(id){
+  var best = null, bestKey = Infinity, anyYield = false, firstErr = null, i, e;
+  for (i = 0; i < NL_AXIS_KEYS.length; i++){
+    e = nlAxisEntry(id, NL_AXIS_KEYS[i]);
+    if (e && !e.error && e.yielded && isFinite(e.sigma_y_eff)) anyYield = true;
+  }
+  for (i = 0; i < NL_AXIS_KEYS.length; i++){
+    e = nlAxisEntry(id, NL_AXIS_KEYS[i]);
+    if (!e) continue;
+    if (e.error){ if (!firstErr) firstErr = e; continue; }
+    var key = anyYield ? ((e.yielded && isFinite(e.sigma_y_eff)) ? e.sigma_y_eff : Infinity)
+                       : (isFinite(e.sigmaCap) ? e.sigmaCap : Infinity);
+    if (!best || key < bestKey){ best = e; bestKey = key; }
+  }
+  return best || firstErr;
+}
+function nlRefreshGoverning(id){
+  var g = nlGoverning(id);
+  if (g) NONLIN_BY_DESIGN[id] = g; else delete NONLIN_BY_DESIGN[id];
+}
+/* Result the Nonlinear-tab preview shows: the viewed axis, else the governing one. */
+function nlForView(id){
+  return nlAxisEntry(id, NONLIN_STATE.view) || ((typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[id] : null);
+}
+function nlForget(id){ delete NONLIN_BY_DESIGN[id]; delete NONLIN_AXES[id]; }
 
 /* Provisional yield stress for P_cr/P_y until the nonlinear solver supplies
    a real macroscopic sigma_y.  Solid Ti-6Al-4V, MPa.  Derived from the crush
@@ -172,7 +221,19 @@ function paintNonlinPill(){
 }
 
 function onNonlinAxisChange(axis){
-  if (axis === 'xx' || axis === 'yy' || axis === 'zz') NONLIN_STATE.axis = axis;
+  if (axis === 'xx' || axis === 'yy' || axis === 'zz' || axis === 'all') NONLIN_STATE.axis = axis;
+  if (axis !== 'all' && NONLIN_STATE.axis === axis) NONLIN_STATE.view = axis;
+  recomputeEstimate();   /* All = three crushes per design */
+}
+
+/* Nonlinear-tab axis switch (preview cubes, scrubber, metric cards; the
+   matching curves are drawn bold on the merged plot). */
+function onNonlinViewAxis(axis){
+  if (NL_AXIS_KEYS.indexOf(axis) < 0) return;
+  NONLIN_STATE.view = axis;
+  var mPlot = document.getElementById('mergedPlot');
+  if (mPlot && typeof renderMergedCurvePlot === 'function') renderMergedCurvePlot(mPlot);
+  if (typeof renderNonlinearViz === 'function') renderNonlinearViz();
 }
 
 /* CRUSH-STRAIN CAP pill — cycles the adaptive crush ceiling 2% -> 5% -> 10%. */
@@ -257,7 +318,7 @@ function estimateSeconds(){
   if (n === 0) return 0;
   var total = 0;
   if (PHYS_STATE.elastic) total += modePerDesignSec('elastic')   * n;
-  if (PHYS_STATE.nonlin)  total += modePerDesignSec('nonlinear') * n;
+  if (PHYS_STATE.nonlin)  total += modePerDesignSec('nonlinear') * n * nlAxesToRun().length;   /* per crush; All = 3 */
   if (PHYS_STATE.buckle)  total += modePerDesignSec('buckling')  * n;
   if (PHYS_STATE.thermal) total += modePerDesignSec('thermal')   * n;
   return total;
@@ -435,9 +496,10 @@ async function runRealSweep(N, runToken){
   if (doBuckle){ for (var bi = 0; bi < nDesigns; bi++){ if (recipes[bi]) nBuckleDesigns++; } }
   var nNonlinDesigns = 0;
   if (doNonlin){ for (var npi = 0; npi < nDesigns; npi++){ if (recipes[npi]) nNonlinDesigns++; } }
+  var nlRunAxes = nlAxesToRun();
 
   /* Progress in work-units: 1 per elastic design + 3 per buckled design. */
-  var totalUnits = (doElastic ? nDesigns : 0) + (doNonlin ? nNonlinDesigns * 4 : 0) + (doBuckle ? nBuckleDesigns * 3 : 0);
+  var totalUnits = (doElastic ? nDesigns : 0) + (doNonlin ? nNonlinDesigns * 4 * nlRunAxes.length : 0) + (doBuckle ? nBuckleDesigns * 3 : 0);
   if (totalUnits < 1) totalUnits = 1;
   var doneUnits = 0;
   function bumpProgress(){ RUN_STATE.progress = doneUnits / totalUnits; paintRunProgress(RUN_STATE.progress); }
@@ -461,7 +523,7 @@ async function runRealSweep(N, runToken){
       /* Skip recompute when nothing this mode depends on changed: grid N,
          prune flag, solver path (full 6-LC Voigt) and the recipe/material
          fingerprint (Sprint A — ids alone are not unique across imports). */
-      var elSig = 'N' + N + '|p' + GEOM_STATE.connectivity + '|full6|r' + recipeFp[i];
+      var elSig = 'N' + N + '|p' + GEOM_STATE.connectivity + '|full6|cg' + CG_MAXITER_FULL + '|r' + recipeFp[i];
       if (d.results && !d.results._error && d.results._elasticSig === elSig){
         paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · cached');
         doneUnits++; bumpProgress();
@@ -512,7 +574,7 @@ async function runRealSweep(N, runToken){
   if (doNonlin && nNonlinDesigns > 0){
     var nlN = NONLIN_STATE.N;
     var axisMap = { xx: 0, yy: 1, zz: 2 };
-    var nlAxis = (axisMap[NONLIN_STATE.axis] != null) ? axisMap[NONLIN_STATE.axis] : 2;
+    if (nlRunAxes.length === 1) NONLIN_STATE.view = nlRunAxes[0];
     var nlfft;
     if (window.__sharedFFT && window.__sharedFFT.N === nlN && window.__sharedFFT.device === WGPU.device){ nlfft = window.__sharedFFT; }
     else { if (window.__sharedFFT) window.__sharedFFT.destroy(); nlfft = new FFTPlan(nlN); window.__sharedFFT = nlfft; }
@@ -523,68 +585,80 @@ async function runRealSweep(N, runToken){
       var dn = designs[ni];
       var rcpN = recipes[ni];
       if (!rcpN) continue;
-      paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · N=' + nlN +
-                     ' · ' + NONLIN_STATE.axis.toUpperCase() + ' · crushing…');
-      renderDesignGrid();
 
-      var baseUnits = doneUnits;
+      /* v0.16.0 — one crush per requested axis.  Axes solved earlier with the
+         same grid/cap/prune/recipe are kept (and reused), so X/Y/Z run one at a
+         time still build up the full three-axis set. */
+      var nlBase = 'N' + nlN + '|c' + NONLIN_STATE.cap + '|p' + GEOM_STATE.connectivity + '|r' + recipeFp[ni];
+      if (!NONLIN_AXES[dn.id] || NONLIN_AXES[dn.id].base !== nlBase) NONLIN_AXES[dn.id] = { base: nlBase };
+      var axStore = NONLIN_AXES[dn.id];
 
-      /* Skip recompute when grid/axis/cap/prune are unchanged and a valid
-         result (with captured α) is already cached. */
-      var nlSig = 'N' + nlN + '|a' + NONLIN_STATE.axis + '|c' + NONLIN_STATE.cap + '|p' + GEOM_STATE.connectivity + '|r' + recipeFp[ni];
-      var nlExist = NONLIN_BY_DESIGN[dn.id];
-      if (nlExist && !nlExist.error && nlExist._sig === nlSig && nlExist.alphaSteps){
-        paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · cached');
-        doneUnits = baseUnits + 4; bumpProgress();
-        continue;
-      }
-      /* v0.7.2 — materials without yield data, or where J2 does not apply
-         (NiTi, most polymers), get an honest skip instead of the Ti fallback. */
-      if (rcpN.material && rcpN.material.crushSupported === false){
-        NONLIN_BY_DESIGN[dn.id] = { error: 'crush not available for ' + (rcpN.material.name || 'this material') + ' (no yield data or J2 plasticity does not apply)', skip: true, N: nlN, _sig: nlSig };
-        doneUnits = baseUnits + 4; bumpProgress();
-        continue;
-      }
-      var nlEstSteps = Math.max(8, Math.round(NONLIN_STATE.cap / 0.003125));
-      var onNlStep = function(stepIdx, eps, sig){
-        /* Sprint A — throwing here aborts crush() at the next load step (16g
-           calls onStep outside any try), so Cancel / a new Run no longer waits
-           out a whole crush curve. */
-        if (stale()) throw new Error('run superseded');
-        doneUnits = baseUnits + 4 * Math.min(stepIdx / nlEstSteps, 0.95);
-        bumpProgress();
+      for (var nai = 0; nai < nlRunAxes.length; nai++){
+        if (stale()) return;
+        var axKey = nlRunAxes[nai];
+        var axLbl = axKey.toUpperCase() + (nlRunAxes.length > 1 ? ' (' + (nai + 1) + '/' + nlRunAxes.length + ')' : '');
         paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · N=' + nlN +
-                       ' · ' + NONLIN_STATE.axis.toUpperCase() + ' · step ' + stepIdx +
-                       ' · ε=' + (eps * 100).toFixed(2) + '% · σ=' + sig.toFixed(1) + ' MPa');
-      };
-      var nlSolver = null, nlErr = null, nlOut = null;
-      nFresh.nonlinear++;
-      try {
-        nlSolver = new NonlinearSolverFull(nlN, nlfft);
-        nlSolver.upload(rcpN, connOpts());
-        nlOut = await nlSolver.crush(nlAxis, { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: onNlStep, captureAlpha: true /* tie-up #5 — per-step plastic-strain field for the Nonlinear-tab scrubber */ });
-      } catch (e){ nlErr = e; if (!stale()) console.error('[run] nonlinear solve failed for ' + dn.id + ':', e); }
-      if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
-      if (stale()) return;
+                       ' · ' + axLbl + ' · crushing…');
+        renderDesignGrid();
 
-      if (nlErr || !nlOut || nlOut.error || !isFinite(nlOut.sigma_y_eff)){
-        NONLIN_BY_DESIGN[dn.id] = { error: (nlErr && nlErr.message) || (nlOut && nlOut.error) || 'failed', N: nlN };
-      } else {
-        NONLIN_BY_DESIGN[dn.id] = {
-          sigma_y_eff: nlOut.sigma_y_eff, yielded: !!nlOut.yielded, E0: nlOut.E0, curve: nlOut.curve,
-          axis: NONLIN_STATE.axis, N: nlN, truncated: !!nlOut.truncated,
-          truncReason: nlOut.truncReason || null,   /* 'step-budget' | 'diverged' | null */
-          eAxisMax: (nlOut.eAxisMax != null ? nlOut.eAxisMax : null),
-          lateralResMax: (nlOut.lateralResMax != null ? nlOut.lateralResMax : null),
-          epsCap: (nlOut.epsCap != null ? nlOut.epsCap : NONLIN_STATE.cap),
-          sigmaCap: (nlOut.curve && nlOut.curve.length ? nlOut.curve[nlOut.curve.length - 1].sigma : null),
-          /* tie-up #1/#5 — α progression for the Nonlinear field tab (transient; never localStorage'd) */
-          alphaSteps: nlOut.alphaSteps || null,
-          alphaMax: nlOut.alphaMax || 0,
-          _sig: nlSig
-        };
+        var baseUnits = doneUnits;
+        var nlSig = nlBase + '|a' + axKey;
+        var nlExist = axStore[axKey];
+        if (nlExist && !nlExist.error && nlExist._sig === nlSig && nlExist.alphaSteps){
+          paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · ' + axLbl + ' · cached');
+          doneUnits = baseUnits + 4; bumpProgress();
+          continue;
+        }
+        /* v0.7.2 — materials without yield data, or where J2 does not apply
+           (NiTi, most polymers), get an honest skip instead of the Ti fallback. */
+        if (rcpN.material && rcpN.material.crushSupported === false){
+          axStore[axKey] = { error: 'crush not available for ' + (rcpN.material.name || 'this material') + ' (no yield data or J2 plasticity does not apply)', skip: true, N: nlN, axis: axKey, _sig: nlSig };
+          doneUnits = baseUnits + 4; bumpProgress();
+          continue;
+        }
+        var nlEstSteps = Math.max(8, Math.round(NONLIN_STATE.cap / 0.003125));
+        var onNlStep = (function(baseU, lbl){ return function(stepIdx, eps, sig){
+          /* Sprint A — throwing here aborts crush() at the next load step (16g
+             calls onStep outside any try), so Cancel / a new Run no longer waits
+             out a whole crush curve. */
+          if (stale()) throw new Error('run superseded');
+          doneUnits = baseU + 4 * Math.min(stepIdx / nlEstSteps, 0.95);
+          bumpProgress();
+          paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · N=' + nlN +
+                         ' · ' + lbl + ' · step ' + stepIdx +
+                         ' · ε=' + (eps * 100).toFixed(2) + '% · σ=' + sig.toFixed(1) + ' MPa');
+        }; })(baseUnits, axLbl);
+        var nlSolver = null, nlErr = null, nlOut = null;
+        nFresh.nonlinear++;
+        try {
+          nlSolver = new NonlinearSolverFull(nlN, nlfft);
+          nlSolver.upload(rcpN, connOpts());
+          nlOut = await nlSolver.crush(axisMap[axKey], { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: onNlStep, captureAlpha: true /* tie-up #5 — per-step plastic-strain field for the Nonlinear-tab scrubber */ });
+        } catch (e){ nlErr = e; if (!stale()) console.error('[run] nonlinear solve failed for ' + dn.id + ' (' + axKey + '):', e); }
+        if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
+        if (stale()) return;
+
+        if (nlErr || !nlOut || nlOut.error || !isFinite(nlOut.sigma_y_eff)){
+          axStore[axKey] = { error: (nlErr && nlErr.message) || (nlOut && nlOut.error) || 'failed', N: nlN, axis: axKey };
+        } else {
+          axStore[axKey] = {
+            sigma_y_eff: nlOut.sigma_y_eff, yielded: !!nlOut.yielded, E0: nlOut.E0, curve: nlOut.curve,
+            axis: axKey, N: nlN, truncated: !!nlOut.truncated,
+            truncReason: nlOut.truncReason || null,   /* 'step-budget' | 'diverged' | null */
+            eAxisMax: (nlOut.eAxisMax != null ? nlOut.eAxisMax : null),
+            lateralResMax: (nlOut.lateralResMax != null ? nlOut.lateralResMax : null),
+            epsCap: (nlOut.epsCap != null ? nlOut.epsCap : NONLIN_STATE.cap),
+            sigmaCap: (nlOut.curve && nlOut.curve.length ? nlOut.curve[nlOut.curve.length - 1].sigma : null),
+            /* tie-up #1/#5 — α progression for the Nonlinear field tab (transient; never localStorage'd) */
+            alphaSteps: nlOut.alphaSteps || null,
+            alphaMax: nlOut.alphaMax || 0,
+            _sig: nlSig
+          };
+        }
+        nlRefreshGoverning(dn.id);
+        doneUnits = baseUnits + 4; bumpProgress();
       }
-      doneUnits = baseUnits + 4; bumpProgress();
+      nlRefreshGoverning(dn.id);
     }
     renderDesignGrid();
   }
@@ -742,6 +816,25 @@ function applyBuckleYield(res, designId){
       if (q && q.axis === nl.axis && isFinite(q.lambda) && isFinite(q.sBar)){ pcrRef = q.lambda * Math.abs(q.sBar); ratioAxis = q.axis; }
     }
   }
+  /* v0.16.0 — with more than one crushed axis, the ratio is the LOWEST of the
+     per-axis ratios (each axis's buckling over that axis's own yield), so a
+     design that buckles first on any crushed axis is flagged. */
+  var crushed = (typeof nlAvailableAxes === 'function') ? nlAvailableAxes(designId) : [];
+  if (crushed.length > 1 && res.perAxis){
+    var bestR = Infinity;
+    for (var ca = 0; ca < crushed.length; ca++){
+      var ne = nlAxisEntry(designId, crushed[ca]);
+      var neY = !!(ne.yielded && isFinite(ne.sigma_y_eff));
+      var neS = neY ? ne.sigma_y_eff : (isFinite(ne.sigmaCap) ? ne.sigmaCap : null);
+      if (neS == null) continue;
+      for (var pb = 0; pb < res.perAxis.length; pb++){
+        var qb = res.perAxis[pb];
+        if (!qb || qb.axis !== crushed[ca] || !isFinite(qb.lambda) || !isFinite(qb.sBar)) continue;
+        var pb_ = qb.lambda * Math.abs(qb.sBar), rr = pb_ / neS;
+        if (rr < bestR){ bestR = rr; pcrRef = pb_; ratioAxis = qb.axis; haveY = neY; sigY = neS; boundBasis = neY ? null : neS; }
+      }
+    }
+  }
   res.pcr_ratio_ref = pcrRef;
   res.ratioAxis = ratioAxis;
   res.pcr_py = isFinite(pcrRef) ? pcrRef / sigY : Infinity;
@@ -835,6 +928,10 @@ function mapElasticToResults(R){
     rho:          R.rho,
     iters:        R.iters,
     converged:    R.converged,
+    /* v0.16.0 — per-load-case CG record ({axis, iters, converged}); the cards
+       flag the moduli when any load case stopped at the iteration cap. */
+    perLC:        R.perLC || null,
+    cgMaxiter:    (typeof CG_MAXITER_FULL !== 'undefined') ? CG_MAXITER_FULL : null,
     /* Push 5 — full Voigt 6×6 effective compliance (S) and stiffness (C_eff)
        tensors in PHYSICAL-axis coordinates, units MPa.  S is consumed by the
        Stiffness ⊕ tab (22-stiffness-viz.js) to render the directional
