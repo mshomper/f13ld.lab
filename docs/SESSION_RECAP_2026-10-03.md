@@ -3,7 +3,7 @@
 **Session:** 2026-10-02 → 2026-10-03
 **Repos:** `github.com/mshomper/f13ld.lab` · `github.com/mshomper/f13ld.foam`
 **Starting point:** lab `664242b` (code at **v0.13.0**; the foam calibration handoff doc had just landed) · foam **v0.3.0**
-**Now live on main:** lab `6e35e85` (**v0.17.1**) · foam `c80b382` (**v0.5.0**)
+**Now live on main:** lab (**v0.17.2**) · foam `c80b382` (**v0.5.0**)
 **Handoff:** [`NEXT_STEPS.md`](NEXT_STEPS.md) §1 (pick up here) and §1a (next dev cycle)
 
 ---
@@ -21,6 +21,7 @@
 | **lab v0.16.1–0.16.3** | Crush side-stress (lateral) loop rebuilt | Compliant designs read stiff after yield; one Z crush stalled |
 | **lab v0.17.0** | Interactive Plotly stress–strain plot, scrubber linked to it | Matt wanted a far better plot |
 | **lab v0.17.1** | Tighter crush solve when a design needs it; elastic setup shared across axes | Disordered compliant foams could not resolve side stress at the default tolerance |
+| **lab v0.17.2** | Tight solve = tighter steps only, setup reused; cubes pause during runs | v0.17.1's tight setup took 85.5 s on Matt's GPU |
 
 ---
 
@@ -72,6 +73,11 @@
 - Crush void now from the design's softest axis, so all axes share one void and the elastic macro stiffness is computed once per design (`axStore._macro`).
 - Messages say "side stress not resolved at the solver's tolerance".
 
+### 2.10 lab v0.17.2 — cheaper tight solve (after the first GPU check of v0.17.1)
+- Matt's GPU, foam X: floor 27.5 % → restart → tight setup **85.5 s**, floor 0.1 %. His follow-up test with only `NL_NEWTON_TOL = 1e-5`: setup 9.5 s, floor 0.3 %, crush 35 s.
+- So the tight mode now tightens only the Newton tolerance, and the re-run reuses the first attempt's elastic setup. Expected foam All ≈ 2 min.
+- Nonlinear-tab cubes pause while a run is solving (they were rendering every frame next to the solver; the normal setup took 19.7 s with the tab open vs 9.5 s without).
+
 ---
 
 ## 3. Findings (carry forward)
@@ -117,7 +123,7 @@ The calibration ran on the sweep's Standard preset, then capped at 300 iteration
 
 ## 5. Not verified yet on the RTX machine
 
-1. v0.17.1 foam three-axis crush (expect X: short probe then tight; Y, Z start tight; no "post-yield approximate"; ~2½–3 min total).
+1. v0.17.2 foam three-axis crush (expect X: short probe, then tight with the setup reused; Y, Z start tight; no "post-yield approximate"; ~2 min total). v0.17.1's X axis was checked: floor 27.5 % → 0.1 % after the restart.
 2. The Plotly plot with real runs (scales, focus, hover-scrub, zoom, PNG).
 3. pi-TPMS three-axis crush after v0.16.3 / v0.17.1 (expected: floor 0.4 %, ~1.2 s per axis).
 4. The 16f CPU oracle changes (Broyden / floor / one retry) — syntax-checked only; too slow on the VM.
@@ -140,7 +146,7 @@ The calibration ran on the sweep's Standard preset, then capped at 300 iteration
 |---|---|
 | `await runElasticFastTest(64)` | Fast elastic path vs 16b on demo recipes |
 | `NL_LATERAL_ACCEPT`, `NL_LATERAL_FLOOR_MULT`, `NL_LATERAL_RETRIES`, `NL_LATERAL_FLAG` | Crush side-stress limits (2 %, 1.5×, 1, 5 %) |
-| `NL_TIGHT_NEWTON_TOL`, `NL_TIGHT_CG_TOL` | Tolerances of the tighter crush solve (1e-5) |
+| `NL_TIGHT_NEWTON_TOL`, `NL_TIGHT_CG_TOL` | Tighter crush solve: Newton 1e-5; CG unchanged (`null`) since v0.17.2 |
 | `NL_NEWTON_TOL = 3e-6` | Tighten every crush step for a test (reload to undo); avoid `NL_CG_TOL = 1e-6` — the elastic setup grinds at the CG cap |
 | `for (const k in NONLIN_BY_DESIGN) delete NONLIN_BY_DESIGN[k]; for (const k in NONLIN_AXES) delete NONLIN_AXES[k];` | Clear cached crush results (they are keyed by grid, cap, void and design, not by solver settings) |
 | `VOID_FLOOR`, `VOID_SCALE_FRAC` | Void rule (1e-6 floor, 1 % of the design) |

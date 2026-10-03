@@ -1509,6 +1509,8 @@ function renderNonlinearViz(){
 
   view.classList.add('has-cubes');
   cubes.style.display = '';
+  var nlRunPaused = !!(typeof RUN_STATE !== 'undefined' && RUN_STATE.running);
+  cubes.classList.toggle('is-paused', nlRunPaused);
   scrub.style.display = '';
   if (metrics) metrics.style.display = '';
 
@@ -1644,6 +1646,8 @@ function renderNonlinearViz(){
     if (rm.setMacroAmp)    rm.setMacroAmp(0);      /* #6 fix — bounded axial stretch (decoupled from uPrimeMaxNorm) */
     if (rm.setDeformAmp)   rm.setDeformAmp(0);
     if (rm.setActive)      rm.setActive(true);   /* render now; IO will manage it thereafter */
+    rm._nlPaused = nlRunPaused;   /* v0.17.2 — cubes hold still while a run is solving (GPU to the solver) */
+    if (!nlRunPaused) rm._nlDrawOnce = false;   /* a pending one-frame pause from a mid-run render must not re-pause after the run */
     eq._Nd = Nd;
     NLVIZ.lastInt[eq.id] = -1;
   }
@@ -1673,14 +1677,23 @@ function renderNonlinearViz(){
     });
   }
 
-  /* Start the auto-loop. */
+  /* Start the auto-loop — or, while a run is solving, hold the cubes still
+     (v0.17.2: the animated cubes shared the GPU with the crush solver). */
   NLVIZ.manual = false;
-  NLVIZ.playing = true;
+  NLVIZ.playing = !nlRunPaused;
   NLVIZ.frac = 0;
   NLVIZ.t0 = performance.now();
-  nlvizApply(0);
   if (NLVIZ.raf) cancelAnimationFrame(NLVIZ.raf);
-  NLVIZ.raf = requestAnimationFrame(nlvizTick);
+  NLVIZ.raf = null;
+  if (nlRunPaused){
+    if (playBtn) playBtn.innerHTML = '\u25b6';
+    for (var pz = 0; pz < entries.length; pz++){
+      var pr = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[entries[pz].id] : null;
+      if (pr){ pr._nlPaused = false; pr._nlDrawOnce = true; }   /* one frame so the cube is not blank */
+    }
+  }
+  nlvizApply(0);
+  if (!nlRunPaused) NLVIZ.raf = requestAnimationFrame(nlvizTick);
 }
 
 /* Apply a timeline fraction to every cube: pick each design's step, swap the α
@@ -1778,6 +1791,8 @@ function nlvizStop(){
   if (cubes) cubes.innerHTML = '';
   if (scrub) scrub.innerHTML = '';
   if (metrics){ metrics.innerHTML = ''; metrics.style.display = 'none'; }
+  /* v0.17.2 — release the run-time pause: these raymarchers are shared with the grid tiles */
+  if (typeof LAB_RM_REGISTRY !== 'undefined') for (var rk in LAB_RM_REGISTRY){ if (LAB_RM_REGISTRY[rk]) LAB_RM_REGISTRY[rk]._nlPaused = false; }
   if (view)  view.classList.remove('has-cubes');
   NLVIZ.entries = [];
   NLVIZ.lastInt = {};

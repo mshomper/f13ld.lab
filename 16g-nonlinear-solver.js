@@ -498,9 +498,13 @@ var NL_CG_TOL        = 1e-4;   /* inner ~10x tighter than newtonTol(1e-3); requi
 var NL_CG_MAX        = 1000;
 /* v0.17.1 — tighter field solve for designs whose step-1 side-stress floor is
    above NL_LATERAL_FLAG (disordered compliant foams: 23-28 % at the default
-   tolerance, 0.0 % at 1e-5 / 1e-5, ~3x the crush time; 1e-6 hit the CG cap). */
+   tolerance, 0.0 % at 1e-5 / 1e-5, ~3x the crush time; 1e-6 hit the CG cap).
+   v0.17.2 — only the Newton tolerance is tightened: newtonTol 1e-5 with the
+   default cgTol gave a 0.3 % floor with the normal elastic setup (9.5 s vs
+   85.5 s for a 1e-5 setup), so the retry reuses the first attempt's setup.
+   NL_TIGHT_CG_TOL = null keeps cgTol (and so the elastic setup) unchanged. */
 var NL_TIGHT_NEWTON_TOL = 1e-5;
-var NL_TIGHT_CG_TOL     = 1e-5;
+var NL_TIGHT_CG_TOL     = null;
 
 function NonlinearSolverFull(N, fftPlan) {
   this.N = N;
