@@ -40,6 +40,10 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.15.1
+
+**Sweep export (v0.15.1)** adds the second grid's own solid fraction (`grid2_vf_voxel_pct`, `grid2_vf_measured_pct`), its convergence and per-load-case iterations. **Foam fit page:** `docs/foam-calibration/foam-fit.html` — drop in sweep exports to fit and chart F13LD.foam's stiffness laws (see `docs/FOAM_CALIBRATION.md`).
+
 ## What's new in v0.15.0
 
 **Faster sweeps (v0.15.0).** Sweep solves (no per-voxel fields) run on a new elastic path, `16i-elastic-fast.js`: the CG loop stays on the GPU (one small readback per block of iterations instead of two blocking readbacks every iteration), the spectral operator packs two real fields per complex FFT (one batch-3 transform pair per iteration instead of twelve transforms), Γ is built once per grid and kept on the GPU instead of rebuilt in double precision for every solve, and the solver allocates only the buffers it uses. Same operator, same conjugate gradient and the same stopping test, so results match the previous path to float precision. The sweep CSV gains `solver` (fast / legacy) and `gamma_build_s`. `window.LAB_FAST_ELASTIC = false` switches back; `await runElasticFastTest(64)` in the console compares the two paths.

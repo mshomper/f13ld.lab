@@ -65,6 +65,42 @@ What this does and doesn't show:
 3. Compare against the literature fits as a sanity check (open-cell Voronoi 0.93·ρ^2.04, closed-cell 0.563·ρ^1.19, Roberts & Garboczi).
 4. F13LD.foam estimator panel, laid out like F13LD.tpms, using the measured ρ the tool now shows live (v0.4.0, 48³ sample of the same field). Banner: "calibrated against F13LD.lab (n runs, date)". Results and the fit go in §6 here.
 
-## 6. Results
+## 6. Results — first pass (Matt's GPU, 2026-10-03)
 
-*(pending Matt's GPU run)*
+48 runs at Standard (1e-4), void 1e-6, 64 ↔ 128 pair, order 2, fast solver path (v0.15.0), 15–40 s per run. Results: [`foam-calibration/results_2026-10-03.csv`](foam-calibration/results_2026-10-03.csv). Analysis: open [`foam-calibration/foam-fit.html`](foam-calibration/foam-fit.html) and drop in the results CSV (charts, per-run table, fit JSON and Markdown export); `fit_foam.py` is the same fit in Python.
+
+### 6.1 Laws (set A, Lloyd seeds, two realizations)
+
+| | Law (E ÷ E_s, directional mean) | Range | Fit rms | ν |
+|---|---|---|---|---|
+| **Open** (and plateau, §6.3) | **0.724 · ρ^1.93** | 8–35 % | 3.3 % | 0.433 − 0.468 ρ |
+| **Closed** | **0.304 · ρ + 0.456 · ρ²** | 12–35 % | 0.9 % | ≈ 0.29 |
+
+- **Shear:** G = E / 2(1 + ν) to within 1–2 % on every run (median ratio 0.995), so only E and ν need laws.
+- **Against the literature** (Roberts & Garboczi Voronoi fits): open within 3 % at 8–12 %, then progressively softer (−6 % at 18 %, −9 % at 25 %, −13 % at 35 %), consistent with this field putting extra mass at the nodes where it adds little bending stiffness; closed within 5 % across 12–35 %.
+- **Scatter:** two seed realizations differ by ±3.2 % (open, 27 cells) and ±0.8 % (closed, 16 cells). Inside one tile the three axes spread ±7 % (open) and ±2 % (closed). Both shrink as the cell count rises; the tool's foams have 50–800 cells.
+- **Seed mode:** Poisson-disk seeds are 0.956 × the Lloyd law (open) and 0.985 × (closed). Kelvin and Weaire–Phelan are **not calibrated**: their walls lie on voxel planes, so solid fraction and stiffness jump between 64³ and 128³ (Kelvin closed 12 % builds at 13.5 %; Kelvin open 12 % changes 1.8× between grids).
+- **Stretch** (z, 18 %, against the same seeds unstretched): E_z / E_xy = s^2.49 (open), s^1.63 (closed); mean E stays within about 7 %. Shear splits as roughly (E_i E_j)^(r/2), r ≈ 0.57 open, ≈ 0.85 closed.
+
+### 6.2 Resolution
+
+Every run's 64³ → 128³ change was fitted to E_h = E∞(1 − a·w^−p), w = wall / strut width in voxels at 64³:
+
+- **Open:** p ≈ 2.0–2.1 over all ten densities, so the lab's order-2 extrapolation matches the model within 1 % on every run and is used as is. The 64³ → 128³ change is 38 % at 8 % (2.9 voxels) and 3 % at 35 % (7 voxels).
+- **Closed:** p ≈ 1.9–2.0 from the 25–35 % runs (walls converge faster than struts). At 12–18 % the 64³ walls are under 2 voxels and the 64³ solve is off that curve (one 12 % solve read E ≈ 0), so those points are the 128³ value ÷ (1 − a·w₁₂₈^−p): +13 % at 12 %, +5 % at 18 %. **Closed below 18 % is lower confidence.**
+- Iterations: closed solves at 64³ hit the 300-iteration cap at 12–18 % (broken geometry); at 128³ they converge in 40–160 per load case. Open runs at 18 %+ stop at the cap with residuals 1.1–3 × 10⁻⁴; earlier Standard vs High comparisons agreed to 3 significant figures, so the stiffness is settled.
+
+### 6.3 Plateau was not tested by set A
+
+Set A's plateau rows are identical to the open rows from 12 % up (0 voxels differ at 18 %). The plateau swell `k·(1 − smoothstep(0, 0.35, d₃ − d₁))` only reaches 0.35 tile units in d₃ − d₁ from a strut's axis, and at 27 cells and 12 %+ the struts are thicker than that, so the swell sits inside solid. In the tool's typical foams (200 cells, thickness 0.08) the same k = 0.05 raises the solid from 4.0 % to 6.6 %. Plateau needs thin struts — §7.
+
+## 7. Plateau pass (set P, 19 runs) — ready to run
+
+[`foam-calibration/foam_plateau_runs.csv`](foam-calibration/foam_plateau_runs.csv), built by `make_plateau_runs.js`. Same settings as §1 (Standard, void 1e-6, 64 ↔ 128, order 2).
+
+- **P:** plateau k against an open foam with the same cells, density and seeds: 27 cells at 5 % (k 0.1 / 0.2 / 0.3), 50 cells at 5 % (k 0.05 / 0.1 / 0.2) and at 8 % (k 0.05 / 0.1 / 0.2 / 0.3), plus a second realization of four of the 50-cell runs. In these foams plateau adds 5–57 % of the solid at the same thickness (64³ probe).
+- **N:** open foam at 12 % with 16 and 50 cells (set A has 27), to check that the law doesn't depend on cell count.
+- Struts here are 1.2–2.4 voxels across at 64³, so read the plateau result as the **ratio to its paired open run at 128³**, where most of the resolution error cancels. The fit page's plateau chart does this.
+
+Decision on record (Matt, 2026-10-03): Kelvin and Weaire–Phelan foams get the estimate with a "not calibrated" note.
+

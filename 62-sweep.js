@@ -430,7 +430,8 @@ async function sweepRunOne(run) {
     var B = await sweepSolveAt(recipe, N2, prec, conn);
     var c = sweepConstants(B.Cfull) || {};
     res.companion = { N: N2, C: sweepVoigtUpper(B.R.C_eff), Ex: c.Ex, Ey: c.Ey, Ez: c.Ez, Gyz: c.Gyz, Gxz: c.Gxz, Gxy: c.Gxy,
-                      vf_solved: B.R.rho * 100, iters: B.iters, residual: B.residual, converged: B.converged, wall_s: B.wall };
+                      vf_solved: B.R.rho * 100, iters: B.iters, residual: B.residual, converged: B.converged, wall_s: B.wall,
+                      vf_voxel: (B.R.rho_raw != null ? B.R.rho_raw : B.R.rho) * 100, itersBy: B.itersBy };   /* v0.15.1 */
     res.wall_s += B.wall;
     if (!B.converged) res.converged = false;
     var fine = N2 > run.N ? B : A, coarse = N2 > run.N ? A : B, k = 1 / (Math.pow(2, SWEEP_STATE.order) - 1);
@@ -611,6 +612,8 @@ function sweepExportCsv() {
     'ref_Ex', 'ref_Ey', 'ref_Ez', 'ratio_Ex', 'ratio_Ey', 'ratio_Ez',
     'thinnest_feature_vox', 'median_feature_vox', 'spans', 'checks',
     'grid2_N', 'grid2_Ex', 'grid2_Ey', 'grid2_Ez', 'grid2_Gyz', 'grid2_Gxz', 'grid2_Gxy', 'grid2_iters', 'grid2_residual', 'grid2_wall_time_s',
+    'grid2_vf_voxel_pct', 'grid2_vf_measured_pct', 'grid2_converged',
+    'grid2_iters_xx', 'grid2_iters_yy', 'grid2_iters_zz', 'grid2_iters_yz', 'grid2_iters_xz', 'grid2_iters_xy',
     'ext_order', 'ext_from_grids']);
   for (var ie = 1; ie <= 6; ie++) for (var je = ie; je <= 6; je++) cols.push('ext_C' + ie + je);
   cols = cols.concat(['ext_Ex', 'ext_Ey', 'ext_Ez', 'ext_Gyz', 'ext_Gxz', 'ext_Gxy', 'ext_nu_xy', 'ext_nu_xz', 'ext_nu_yz',
@@ -631,6 +634,9 @@ function sweepExportCsv() {
       if (r.companion) {
         var cp = r.companion;
         row.grid2_N = cp.N; row.grid2_iters = cp.iters; row.grid2_residual = cp.residual; row.grid2_wall_time_s = cp.wall_s;
+        /* v0.15.1 — the second grid's own solid fraction and per-load-case iterations */
+        row.grid2_vf_voxel_pct = cp.vf_voxel; row.grid2_vf_measured_pct = cp.vf_solved; row.grid2_converged = cp.converged == null ? '' : (cp.converged ? 'yes' : 'no');
+        for (var ib2 in (cp.itersBy || {})) row['grid2_' + ib2] = cp.itersBy[ib2];
         ['Ex', 'Ey', 'Ez', 'Gyz', 'Gxz', 'Gxy'].forEach(function (q) { row['grid2_' + q] = cp[q]; });
       }
       if (r.ext) {
