@@ -425,6 +425,7 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
   var Cbar_e = null;
   var macroState = {};          /* v0.16.1 — secant (Broyden) lateral compliance carried across steps */
   var latAccept = opts.lateralAccept != null ? opts.lateralAccept : NL_LATERAL_ACCEPT, lateralCutbacks = 0;
+  var latFloor = null, latCuts = 0;   /* v0.16.3 — precision floor (first step) + per-step lateral retries */
   if (control === 'stress') {
     var Ce = new Float64Array(36);
     for (var lc = 0; lc < 6; lc++) {
@@ -472,6 +473,7 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
 
     var res;
     var cut = 0, ok = false;
+    latCuts = 0;
     while (cut <= cutbackMax) {
       /* snapshot history so a failed step can roll back */
       var snapEp = [], snapAl = ws.alpha.slice(), snapEps = [];
@@ -493,7 +495,6 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
           var esc = trialAxis / eAxisPrev;
           for (var ex = 0; ex < nf0; ex++) epsBarFull[freeIdx[ex]] = ebFreePrev[ex] * esc;
         }
-        macroState.cap = Math.abs(trialAxis - eAxis);   /* v0.16.2 — per-correction lateral move limit */
         res = nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts,
                                 { epTen: snapEp, alpha: snapAl }, macroState);
       }
@@ -501,9 +502,11 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
       /* v0.16.1 — a step whose lateral stress stays above NL_LATERAL_ACCEPT
          (after macroMax secant-updated corrections) is cut back like a field
          divergence; on the last allowed attempt it is accepted and recorded. */
-      var latBad = (control === 'stress') && res.converged && res.lateralRel > latAccept;
+      var latLimit = (latFloor != null) ? Math.max(latAccept, NL_LATERAL_FLOOR_MULT * latFloor) : Infinity;   /* step 1 measures the floor */
+      macroState.limit = isFinite(latLimit) ? latLimit : 0;
+      var latBad = (control === 'stress') && res.converged && res.lateralRel > latLimit && latCuts < NL_LATERAL_RETRIES;
       if (res.converged && (!latBad || cut >= cutbackMax)) { ok = true; break; }
-      if (latBad) lateralCutbacks++;
+      if (latBad){ lateralCutbacks++; latCuts++; }
       macroState.H = null;   /* v0.16.2 — retry from the elastic lateral compliance */
       /* cutback: restore history, halve the increment */
       for (var rs=0;rs<6;rs++){ ws.epTen[rs].set(snapEp[rs]); ws.eps[rs].set(snapEps[rs]); }
@@ -519,6 +522,7 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
       ebFreePrev = freeIdx.map(function (fi) { return epsBarFull[fi]; });
       eAxisPrev = eAxis;
       if (res.lateralRel > lateralResMax) lateralResMax = res.lateralRel;
+      if (latFloor === null) latFloor = res.lateralRel || 0;
     }
     if (E0 === null && eAxis > 0) E0 = sAxis / eAxis;  /* first-step secant ~ effective modulus */
     if (Eknee === null) Eknee = E0;
@@ -551,7 +555,8 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
     epsCap: capEps, eAxisMax: eAxis,
     truncated: budgetHit, truncReason: budgetHit ? 'step-budget' : null,
     lateralResMax: (control === 'stress') ? lateralResMax : null,
-    lateralCutbacks: lateralCutbacks
+    lateralCutbacks: lateralCutbacks,
+    lateralFloor: latFloor
   };
 }
 
@@ -567,7 +572,16 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
    Shared by the 16f oracle and 16g crushStress. */
 var NL_MACRO_MAX = 8;
 var NL_LATERAL_ACCEPT = 0.02;
-var NL_LATERAL_BACKTRACK = 2.0;   /* v0.16.2 — take half a correction back when it at least doubles the lateral stress (smaller rises are f32 noise) */
+/* v0.16.3 — precision floor.  On a very compliant design (E/Es ~3e-4) the
+   cell's mean stress is ~1/3000 of the stresses in its struts, and an f32
+   field solve (relRes ~1e-5..1e-4) leaves ~(relRes x Es/E) noise in it: a
+   foam's first, purely elastic step kept 22.6 % lateral stress after 8
+   corrections.  The first step's final lateral residual is taken as the
+   design's floor; later steps use max(NL_LATERAL_ACCEPT, NL_LATERAL_FLOOR_MULT
+   x floor) and at most NL_LATERAL_RETRIES cutback(s) for lateral stress. */
+var NL_LATERAL_FLOOR_MULT = 1.5;
+var NL_LATERAL_RETRIES = 1;
+var NL_LATERAL_FLAG = 0.05;   /* UI: floor above this -> post-yield curve shape approximate */
 function nlBroydenUpdate(H, x, xPrev, f, fPrev, n) {
   var dx = new Float64Array(n), df = new Float64Array(n), Hdf = new Float64Array(n), dxH = new Float64Array(n);
   var dxdx = 0, i, j;
@@ -584,29 +598,18 @@ function nlBroydenUpdate(H, x, xPrev, f, fPrev, n) {
   return true;
 }
 
-/* v0.16.2 — one guarded lateral correction (shared by 16f and 16g).
-   st: { xPrev, fPrev, latPrev, lastDx, best, cap, H, broyden, n } — the anchor
-   is the last iterate that did not make the lateral stress worse.
-   - clearly worse than the anchor (> NL_LATERAL_BACKTRACK x): take back half of the last move (offset from the
-     anchor halves), no Broyden update (it would learn f32 noise);
-   - otherwise: Broyden update from the anchor, new anchor, dx = -H f, scaled
-     so no component exceeds st.cap (this step's axial strain increment).
-   Records the best (lowest lateral) iterate.  Returns the change to add to
-   the free strains. */
+/* One lateral correction (shared by 16f and 16g).  st: { xPrev, fPrev, best,
+   H, broyden, n }.  Broyden update from the previous iterate, then
+   dx = -H f.  Records the best (lowest lateral) iterate.  Returns the change
+   to add to the free strains.  (v0.16.3 removed v0.16.2's per-correction cap
+   and overshoot backtrack: on a compliant foam they stalled every step.) */
 function nlLateralStep(st, xCur, fCur, latRel) {
-  var n = st.n, dx = new Array(n), i, j;
+  var n = st.n, dx = new Array(n), i, j, ok = true;
   if (!st.best || latRel < st.best.lat) st.best = { lat: latRel, x: xCur.slice() };
-  if (st.lastDx && latRel > NL_LATERAL_BACKTRACK * st.latPrev) {   /* clear overshoot only: small rises are f32 noise */
-    for (i = 0; i < n; i++) { dx[i] = -0.5 * st.lastDx[i]; st.lastDx[i] *= 0.5; }
-    return dx;
-  }
   if (st.broyden && st.xPrev) nlBroydenUpdate(st.H, xCur, st.xPrev, fCur, st.fPrev, n);
-  st.xPrev = xCur.slice(); st.fPrev = fCur.slice(); st.latPrev = latRel;
-  var mx = 0;
-  for (i = 0; i < n; i++) { var s = 0; for (j = 0; j < n; j++) s += st.H[i * n + j] * fCur[j]; dx[i] = -s; if (Math.abs(dx[i]) > mx) mx = Math.abs(dx[i]); }
-  if (!(mx <= st.cap) && mx > 0) { var k = st.cap / mx; for (i = 0; i < n; i++) dx[i] *= k; }
-  if (!isFinite(mx)) for (i = 0; i < n; i++) dx[i] = 0;
-  st.lastDx = dx.slice();
+  st.xPrev = xCur.slice(); st.fPrev = fCur.slice();
+  for (i = 0; i < n; i++) { var s = 0; for (j = 0; j < n; j++) s += st.H[i * n + j] * fCur[j]; dx[i] = -s; if (!isFinite(s)) ok = false; }
+  if (!ok) for (i = 0; i < n; i++) dx[i] = 0;
   return dx;
 }
 
@@ -633,8 +636,8 @@ function nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, f
     macroState.H = invertSmall(Kff, nf);
   }
   var latAccept = opts.lateralAccept != null ? opts.lateralAccept : NL_LATERAL_ACCEPT;
-  var st = { xPrev: null, fPrev: null, latPrev: Infinity, lastDx: null, best: null,
-             cap: macroState.cap > 0 ? macroState.cap : Infinity, H: macroState.H, broyden: broyden, n: nf };
+  if (macroState.limit > 0) latAccept = macroState.limit;   /* v0.16.3 — per-design precision-floor limit */
+  var st = { xPrev: null, fPrev: null, best: null, H: macroState.H, broyden: broyden, n: nf };
   var solveAt = function () {
     /* hold committed history at the previous load step through the macro loop */
     for (var hr=0; hr<6; hr++) ws.epTen[hr].set(histBase.epTen[hr]);
@@ -661,8 +664,8 @@ function nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, f
     var dxL = nlLateralStep(st, xCur, sFree, res.lateralRel);
     for (var r=0;r<nf;r++) epsBarFull[freeIdx[r]] += dxL[r];
   }
-  /* keep the best attempt when the last one is over the limit (v0.16.2) */
-  if (last && last.converged && last.lateralRel > latAccept && st.best && st.best.lat <= latAccept) {
+  /* keep the best attempt when the last one is over the limit and clearly worse (v0.16.2/3) */
+  if (last && last.converged && last.lateralRel > latAccept && st.best && st.best.lat < 0.9 * last.lateralRel) {
     for (var rb=0; rb<nf; rb++) epsBarFull[freeIdx[rb]] = st.best.x[rb];
     var rB = solveAt(); rB.macroIters = macroMax + 1;
     if (rB.converged || !last) last = rB; else return rB;
