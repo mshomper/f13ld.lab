@@ -496,6 +496,11 @@ var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-f
 var NL_NEWTON_MAX    = 12;   /* cap failed-attempt cost; successful solves use ~3 */
 var NL_CG_TOL        = 1e-4;   /* inner ~10x tighter than newtonTol(1e-3); required for Newton to converge (matches 16f) */
 var NL_CG_MAX        = 1000;
+/* v0.17.1 — tighter field solve for designs whose step-1 side-stress floor is
+   above NL_LATERAL_FLAG (disordered compliant foams: 23-28 % at the default
+   tolerance, 0.0 % at 1e-5 / 1e-5, ~3x the crush time; 1e-6 hit the CG cap). */
+var NL_TIGHT_NEWTON_TOL = 1e-5;
+var NL_TIGHT_CG_TOL     = 1e-5;
 
 function NonlinearSolverFull(N, fftPlan) {
   this.N = N;
@@ -1082,7 +1087,10 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       latFloor = latRel;
       latLimit = Math.max(latAccept, NL_LATERAL_FLOOR_MULT * latFloor);
       console.log('[crush] lateral precision floor ' + (latFloor * 100).toFixed(1) + '% of axial (step 1) -> lateral limit ' + (latLimit * 100).toFixed(1) + '%' +
-                  (latFloor > NL_LATERAL_FLAG ? ' — compliant design at single precision: post-yield curve shape is approximate' : ''));
+                  (latFloor > NL_LATERAL_FLAG ? ' — side stress not resolved at the solver\'s tolerance' + (opts.tightOnFloor ? '; restarting at the tighter tolerance' : ': post-yield curve shape is approximate') : '') +
+                  '  (newtonTol ' + this.newtonTol + ', cgTol ' + this.cgTol + ')');
+      /* v0.17.1 — caller restarts this crush at NL_TIGHT_* (50-controls) */
+      if (opts.tightOnFloor && latFloor > NL_LATERAL_FLAG) return { retryTight: true, lateralFloor: latFloor, axis: axis };
     }
     ebFreePrev = freeIdx.map(function (fi) { return eb[fi]; });
     eAxisPrev = eAxis;

@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.17.0 · 2026-10-03 · foam laws fitted (incl. plateau); F13LD.foam v0.5.0 estimator; cell-count pass ready (§1-foam)
+**As of:** v0.17.1 · 2026-10-03 · foam laws fitted (incl. plateau); F13LD.foam v0.5.0 estimator; cell-count pass ready (§1-foam)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md) (previous: [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -29,6 +29,7 @@
 | **v0.16.2** | Guarded lateral loop (`nlLateralStep`): elastic compliance restored on every cutback, half-step back on a ≥2× rise (no Broyden update), per-correction cap = axial increment, best attempt kept within 2 %. Fixes a pi-TPMS Z crush stalled in five field divergences |
 | **v0.16.3** | Lateral limit = max(2 %, 1.5 × precision floor measured on step 1), one lateral retry per step, best attempt kept; v0.16.2 cap/backtrack removed (stalled a compliant foam at ~40 solves/step); "post-yield approximate" flag when floor > 5 %. Open: tighter f32 field tolerance for compliant designs (floor ∝ relRes × Es/E) |
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
+| **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
 
 ---
 

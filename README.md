@@ -40,6 +40,10 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.17.1
+
+**Crush: tighter solve when a design needs it.** If a crush's first step cannot resolve the side stress (floor above 5 %, typical of disordered compliant foams), the crush restarts at a tighter field tolerance (1e-5): a 50-cell Poisson-disk foam went from a 23–28 % floor to 0.0 % at about 3× the crush time, so its curve past yield is resolved instead of flagged. Once one axis of a design needs it, the design's other axes start there. Designs that resolve at the default tolerance (pi-TPMS: 0.4 %) are unchanged. **Elastic setup shared across axes:** the crush void now comes from the design's softest axis, so X, Y and Z share one void and one elastic setup (the macro stiffness is computed once per design instead of per axis). Messages now say "side stress not resolved at the solver's tolerance".
+
 ## What's new in v0.17.0
 
 **Interactive stress–strain plot.** The Nonlinear tab's comparison plot is now drawn with Plotly (basic bundle vendored in `vendor/`, MIT, loaded only when the tab first shows a curve; the previous SVG plot stays as the fallback). Hover reads every curve at that strain (σ and × own yield); drag to zoom, range slider underneath, double-click to reset, PNG export at 3×. **Stress** switch: MPa / log / ÷ own yield (opens on ÷ own yield when strengths differ more than 20×). **Focus** switch: X / Y / Z drive the preview cubes too, All shows every axis bold with each design's weakest yield and lowest buckling ratio labelled. Legend chips hide a design or one axis. Curves are spline-smoothed through the solver points. Off-scale buckling lines become tags above the plot.
