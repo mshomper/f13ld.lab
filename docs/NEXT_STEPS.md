@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.16.0 · 2026-10-03 · foam laws fitted (incl. plateau); F13LD.foam v0.5.0 estimator; cell-count pass ready (§1-foam)
+**As of:** v0.16.1 · 2026-10-03 · foam laws fitted (incl. plateau); F13LD.foam v0.5.0 estimator; cell-count pass ready (§1-foam)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md) (previous: [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -25,6 +25,7 @@
 | **v0.15.0** | Fast elastic path for sweeps (`16i-elastic-fast.js`): GPU-resident CG, packed operator, cached Γ, lean buffers; sweep CSV records `solver` and `gamma_build_s`; foam study moved to Standard (1e-4) |
 | **v0.15.1** | Sweep export adds the second grid's solid fraction, convergence and per-load-case iterations. Foam fit page (`docs/foam-calibration/foam-fit.html`); first-pass foam laws (`FOAM_CALIBRATION.md` §6); plateau pass ready (§7) |
 | **v0.16.0** | Three-axis crush (Crush axis = All; per-axis cache; all axes on one stress–strain plot; preview axis switch; cards use the weakest axis; buckling ratio = lowest per-axis ratio). Elastic CG cap 300 → 1000 with a "not converged" flag on card moduli. Void scaled to the design (1 % of its own stiffness, floor 1e-6) for linear runs (one re-solve when compliant) and per crush axis; "void-limited" flags. Sweep Standard cap 1000 + `cg_maxiter` column; foam re-run list (`FOAM_CALIBRATION.md` §10) |
+| **v0.16.1** | Crush lateral (uniaxial-stress) loop: Broyden secant lateral compliance carried across steps, up to 8 corrections, cut back when lateral stress > 2 % of axial (was: elastic compliance, 4 tries, always accepted). Same in the 16f oracle |
 
 ---
 

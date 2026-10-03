@@ -417,12 +417,14 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
   var m   = nlMakeMaterial(matSpec);
   var Es  = m.E, nu = m.nu;
   var C_s = isoC(Es, nu);
-  var C_v = isoC(Es * 1e-3, nu);   /* void contrast 1e-3 (matches 16g NL_VOID_CONTRAST) */
+  var C_v = isoC(Es * (opts.voidContrast > 0 ? opts.voidContrast : 1e-3), nu);   /* void contrast: 1e-3 default (16g NL_VOID_CONTRAST); v0.16.0 per-design opts.voidContrast */
   var C0  = isoC(Es, nu);
   var Gamma = buildGammaFull(N, C0[21], C0[1]);
 
   /* elastic macro stiffness at step 0 (for stress-control macro-Newton + E0) */
   var Cbar_e = null;
+  var macroState = {};          /* v0.16.1 — secant (Broyden) lateral compliance carried across steps */
+  var latAccept = opts.lateralAccept != null ? opts.lateralAccept : NL_LATERAL_ACCEPT, lateralCutbacks = 0;
   if (control === 'stress') {
     var Ce = new Float64Array(36);
     for (var lc = 0; lc < 6; lc++) {
@@ -492,10 +494,15 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
           for (var ex = 0; ex < nf0; ex++) epsBarFull[freeIdx[ex]] = ebFreePrev[ex] * esc;
         }
         res = nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts,
-                                { epTen: snapEp, alpha: snapAl });
+                                { epTen: snapEp, alpha: snapAl }, macroState);
       }
 
-      if (res.converged) { ok = true; break; }
+      /* v0.16.1 — a step whose lateral stress stays above NL_LATERAL_ACCEPT
+         (after macroMax secant-updated corrections) is cut back like a field
+         divergence; on the last allowed attempt it is accepted and recorded. */
+      var latBad = (control === 'stress') && res.converged && res.lateralRel > latAccept;
+      if (res.converged && (!latBad || cut >= cutbackMax)) { ok = true; break; }
+      if (latBad) lateralCutbacks++;
       /* cutback: restore history, halve the increment */
       for (var rs=0;rs<6;rs++){ ws.epTen[rs].set(snapEp[rs]); ws.eps[rs].set(snapEps[rs]); }
       ws.alpha.set(snapAl);
@@ -541,45 +548,81 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
     sigma_y_provisional: false,
     epsCap: capEps, eAxisMax: eAxis,
     truncated: budgetHit, truncReason: budgetHit ? 'step-budget' : null,
-    lateralResMax: (control === 'stress') ? lateralResMax : null
+    lateralResMax: (control === 'stress') ? lateralResMax : null,
+    lateralCutbacks: lateralCutbacks
   };
 }
 
-/* Uniaxial-stress macro step (modified Newton). Solves the free macro
-   strain components so their averaged stress is ~0, holding eps_bar[axis].
-   Mirrors 16g crushStress: committed plastic history is restored to the
-   previous LOAD STEP (histBase) before every field solve, so rejected macro
-   iterates never accumulate plastic strain; only the last (accepted) solve's
-   commit survives. Same caps as 16g (macroTol 5e-3, macroMax 4), and a
-   macro-tolerance miss is accepted when the field Newton converged.
+/* v0.16.1 — lateral (uniaxial-stress) macro loop.
+   Was modified Newton with the ELASTIC free-free compliance and 4 tries.  Once
+   a compliant design yields, its lateral tangent falls far below elastic, the
+   elastic step under-corrects, and the loop ran out of tries with up to 19 %
+   lateral stress left (pi-TPMS, void 2e-6; the old stiff void had masked it).
+   Now: "good" Broyden secant update of the lateral compliance H after every
+   correction (H starts at the elastic compliance and is carried across load
+   steps through macroState), up to NL_MACRO_MAX corrections, and the caller
+   cuts the step back when the residual stays above NL_LATERAL_ACCEPT.
+   Shared by the 16f oracle and 16g crushStress. */
+var NL_MACRO_MAX = 8;
+var NL_LATERAL_ACCEPT = 0.02;
+function nlBroydenUpdate(H, x, xPrev, f, fPrev, n) {
+  var dx = new Float64Array(n), df = new Float64Array(n), Hdf = new Float64Array(n), dxH = new Float64Array(n);
+  var dxdx = 0, i, j;
+  for (i = 0; i < n; i++) { dx[i] = x[i] - xPrev[i]; df[i] = f[i] - fPrev[i]; dxdx += dx[i] * dx[i]; }
+  for (i = 0; i < n; i++) { var s = 0, t = 0; for (j = 0; j < n; j++) { s += H[i * n + j] * df[j]; t += dx[j] * H[j * n + i]; } Hdf[i] = s; dxH[i] = t; }
+  var den = 0; for (i = 0; i < n; i++) den += dxH[i] * df[i];
+  if (!(Math.abs(den) > 1e-12 * dxdx) || !(dxdx > 0)) return false;
+  var Hn = new Float64Array(n * n);
+  for (i = 0; i < n; i++) for (j = 0; j < n; j++) {
+    Hn[i * n + j] = H[i * n + j] + (dx[i] - Hdf[i]) * dxH[j] / den;
+    if (!isFinite(Hn[i * n + j])) return false;
+  }
+  H.set(Hn);
+  return true;
+}
+
+/* Uniaxial-stress macro step. Solves the free macro strain components so
+   their averaged stress is ~0, holding eps_bar[axis]. Mirrors 16g
+   crushStress: committed plastic history is restored to the previous LOAD
+   STEP (histBase) before every field solve, so rejected macro iterates never
+   accumulate plastic strain; only the last (accepted) solve's commit survives.
+   macroTol 5e-3, up to NL_MACRO_MAX secant-updated corrections (see above).
    Returns the field result plus lateralRel = |sigma_free| / |sigma_axis|. */
-function nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts, histBase) {
+function nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts, histBase, macroState) {
   var macroTol = opts.macroTol != null ? opts.macroTol : 5e-3;
-  var macroMax = opts.macroMax != null ? opts.macroMax : 4;
+  var macroMax = opts.macroMax != null ? opts.macroMax : NL_MACRO_MAX;
+  var broyden = opts.macroBroyden !== false;
   if (!histBase) {   /* standalone call: baseline = current committed history */
     histBase = { epTen: [], alpha: ws.alpha.slice() };
     for (var hb = 0; hb < 6; hb++) histBase.epTen.push(ws.epTen[hb].slice());
   }
-  /* free-free compliance from elastic Cbar_e (modified-Newton Jacobian) */
   var nf = freeIdx.length;
-  var Kff = new Float64Array(nf*nf);
-  for (var a=0;a<nf;a++) for (var b=0;b<nf;b++) Kff[a*nf+b] = Cbar_e[freeIdx[a]*6 + freeIdx[b]];
-  var Sff = invertSmall(Kff, nf);
+  macroState = macroState || {};
+  if (!macroState.H || !broyden) {   /* elastic free-free compliance to start */
+    var Kff = new Float64Array(nf*nf);
+    for (var a=0;a<nf;a++) for (var b=0;b<nf;b++) Kff[a*nf+b] = Cbar_e[freeIdx[a]*6 + freeIdx[b]];
+    macroState.H = invertSmall(Kff, nf);
+  }
+  var H = macroState.H;
 
-  var last = null;
+  var last = null, xPrev = null, fPrev = null;
   for (var mit=0; mit<macroMax; mit++) {
     /* hold committed history at the previous load step through the macro loop */
     for (var hr=0; hr<6; hr++) ws.epTen[hr].set(histBase.epTen[hr]);
     ws.alpha.set(histBase.alpha);
     var res = nlNewtonSolveCPU(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, opts);
     last = res;
+    res.macroIters = mit + 1;
     if (!res.converged) return res;
-    var sFree = []; var snorm = 0, sref = Math.max(Math.abs(res.sigma_bar[axisV]), 1e-6);
-    for (var f=0; f<nf; f++){ var sv = res.sigma_bar[freeIdx[f]]; sFree.push(sv); snorm += sv*sv; }
+    var sFree = [], xCur = []; var snorm = 0, sref = Math.max(Math.abs(res.sigma_bar[axisV]), 1e-6);
+    for (var f=0; f<nf; f++){ var sv = res.sigma_bar[freeIdx[f]]; sFree.push(sv); xCur.push(epsBarFull[freeIdx[f]]); snorm += sv*sv; }
     res.lateralRel = Math.sqrt(snorm)/sref;
     if (res.lateralRel < macroTol) return res;
-    /* delta eps_free = -Sff * sFree */
-    for (var r=0;r<nf;r++){ var dd=0; for (var c=0;c<nf;c++) dd += Sff[r*nf+c]*sFree[c]; epsBarFull[freeIdx[r]] -= dd; }
+    if (broyden && xPrev) nlBroydenUpdate(H, xCur, xPrev, sFree, fPrev, nf);
+    xPrev = xCur; fPrev = sFree;
+    if (mit === macroMax - 1) break;   /* no un-solved correction after the last solve */
+    /* delta eps_free = -H * sFree */
+    for (var r=0;r<nf;r++){ var dd=0; for (var c=0;c<nf;c++) dd += H[r*nf+c]*sFree[c]; epsBarFull[freeIdx[r]] -= dd; }
   }
   return last;
 }
