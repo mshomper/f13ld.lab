@@ -1469,6 +1469,10 @@ LabRaymarcher.prototype._render = function(t) {
 
   var gl = this.gl;
   if (!this._fieldUploaded || !this._prog) return;
+  /* v0.17.2 — Nonlinear-tab cubes hold still while a run is solving; one
+     frame is drawn after the cube is primed so it is not blank. */
+  if (this._nlPaused) return;
+  if (this._nlDrawOnce){ this._nlDrawOnce = false; this._nlPaused = true; }
 
   /* Auto-rotate only in geom mode; deform/stress are user-controlled. */
   if (this._lastFrame === 0) this._lastFrame = t;

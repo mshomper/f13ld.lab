@@ -683,9 +683,11 @@ async function runRealSweep(N, runToken){
         var runCrush = async function(tight, axisKey, store, voidC, stepCb){
           var s = new NonlinearSolverFull(nlN, nlfft);
           try {
-            if (tight){ s.newtonTol = NL_TIGHT_NEWTON_TOL; s.cgTol = NL_TIGHT_CG_TOL; }
+            if (tight){ s.newtonTol = NL_TIGHT_NEWTON_TOL; if (NL_TIGHT_CG_TOL) s.cgTol = NL_TIGHT_CG_TOL; }
             s.upload(rcpN, Object.assign({}, connOpts(), { voidContrast: voidC }));
-            var mk = 'v' + voidC + '|t' + (tight ? 1 : 0);
+            /* the elastic setup depends on void and cgTol only (it solves at newtonTol = cgTol),
+               so a tight retry reuses the first attempt's setup (v0.17.2) */
+            var mk = 'v' + voidC + '|cg' + s.cgTol;
             if (store._macro && store._macro[mk]) s._Cmacro = new Float64Array(store._macro[mk]);
             var o = await s.crush(axisMap[axisKey], { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: stepCb, captureAlpha: true /* tie-up #5 — per-step plastic-strain field for the Nonlinear-tab scrubber */,
                                                       tightOnFloor: !tight });
@@ -698,7 +700,7 @@ async function runRealSweep(N, runToken){
           nlOut = await runCrush(nlTight, axKey, axStore, nlVoid, onNlStep);
           if (nlOut && nlOut.retryTight && !stale()){
             axStore._tight = nlTight = true;
-            console.log('[run] ' + dn.id + ' ' + axKey + ': side-stress floor ' + (nlOut.lateralFloor * 100).toFixed(1) + '% — re-running the crush at the tighter solve tolerance (' + NL_TIGHT_NEWTON_TOL + ')');
+            console.log('[run] ' + dn.id + ' ' + axKey + ': side-stress floor ' + (nlOut.lateralFloor * 100).toFixed(1) + '% — re-running the crush at the tighter step tolerance (newtonTol ' + NL_TIGHT_NEWTON_TOL + '), reusing the elastic setup');
             paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · ' + axLbl + ' · tighter solve…');
             nlOut = await runCrush(true, axKey, axStore, nlVoid, onNlStep);
           }

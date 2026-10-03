@@ -373,6 +373,7 @@ html, body {
 .cp-plot .modebar-btn path { fill:var(--ink-dim) !important; }
 .cp-plot .modebar-btn:hover path, .cp-plot .modebar-btn.active path { fill:var(--lab) !important; }
 .cp-cursor { position:absolute; width:0; border-left:1px solid rgba(251,191,36,0.85); box-shadow:0 0 10px rgba(251,191,36,0.55); pointer-events:none; display:none; z-index:2; }
+.merged-cubes.is-paused .nl-cube-readout::after { content:' · paused while solving'; color:var(--ink-dim); }
 .cp-cursor span { position:absolute; top:-2px; left:5px; font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--lab); white-space:nowrap; text-shadow:0 0 6px #000; }
 
 /* ============ CONTROLS PANEL ============ */

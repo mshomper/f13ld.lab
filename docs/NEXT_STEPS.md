@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.17.1 · 2026-10-03 · three-axis crush, design-scaled void, rebuilt crush side-stress loop, Plotly stress–strain plot; foam laws provisional (27 calibration runs to re-run at the 1000-iteration cap)
+**As of:** v0.17.2 · 2026-10-03 · three-axis crush, design-scaled void, rebuilt crush side-stress loop, Plotly stress–strain plot; foam laws provisional (27 calibration runs to re-run at the 1000-iteration cap)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-03.md`](SESSION_RECAP_2026-10-03.md) (previous: [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md), [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -30,6 +30,7 @@
 | **v0.16.3** | Lateral limit = max(2 %, 1.5 × precision floor measured on step 1), one lateral retry per step, best attempt kept; v0.16.2 cap/backtrack removed (stalled a compliant foam at ~40 solves/step); "post-yield approximate" flag when floor > 5 %. Open: tighter f32 field tolerance for compliant designs (floor ∝ relRes × Es/E) |
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
 | **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
+| **v0.17.2** | Tight crush = Newton tolerance only (NL_TIGHT_CG_TOL = null), retry reuses the first attempt's elastic setup (cache keyed by void + cgTol); foam: floor 0.3 %, ~45 s per axis (was setup 85.5 s). Nonlinear-tab cubes pause while a run is solving |
 
 ---
 
@@ -37,8 +38,8 @@
 
 Do these in order; 1–3 are on Matt's GPU, the rest are dev work to propose first.
 
-1. **Verify v0.17.1 on the RTX machine** (nothing below has run on real hardware yet — recap §5). Reload, check the header says v0.17.1, clear cached crushes (`for (const k in NONLIN_BY_DESIGN) delete NONLIN_BY_DESIGN[k]; for (const k in NONLIN_AXES) delete NONLIN_AXES[k];`), then:
-   - **Poisson-disk foam, Crush axis = All.** Expect X: `[crush] lateral precision floor …% … restarting at the tighter tolerance`, then a tight run; Y and Z start tight; no "post-yield approximate"; ~2½–3 min total. Report the floor lines and the total time.
+1. **Verify v0.17.2 on the RTX machine** (nothing below has run on real hardware yet — recap §5). Reload, check the header says v0.17.2, clear cached crushes (`for (const k in NONLIN_BY_DESIGN) delete NONLIN_BY_DESIGN[k]; for (const k in NONLIN_AXES) delete NONLIN_AXES[k];`), then:
+   - **Poisson-disk foam, Crush axis = All.** Expect X: `[crush] lateral precision floor ~27 % … restarting at the tighter tolerance`, then `[run] … reusing the elastic setup` and a tight run (floor ~0.3 %); Y and Z start tight with `elastic-macro setup` near 0 ms; no "post-yield approximate"; ~2 min total (X ~47 s, Y and Z ~35 s each). The cubes should hold still while it solves. Report the floor lines and the total time.
    - **pi-TPMS (gyroid × Fischer-Koch S), All.** Expect floor ~0.4 %, ~1.2 s per axis, curves bending below the elastic slope after yield, card E ≈ crush E0 (~30–32 MPa).
    - **The new plot**: scales, Focus X/Y/Z/All, legend chips, hover-scrub of the cubes, click-to-pin, zoom box, PNG export. Note anything to push further or pull back.
 2. **Foam calibration re-run at the 1000-iteration cap** ([`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §10). Sweep → CSV → `docs/foam-calibration/foam_rerun_1000_runs.csv` (27 runs) with the §1 settings (Standard, void 1e-6, 64 ↔ 128 pair, order 2). Also run `foam_cellcount_runs.csv` (6) and, if time allows, re-run `foam_plateau_runs.csv` (19). Load results into `foam-fit.html` **old file first, re-runs after** (later run ids replace earlier ones) and export the fit JSON + summary.
