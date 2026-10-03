@@ -546,6 +546,7 @@ function impCommit() {
       if (IMPORT_STATE.spans) d.import_spans = IMPORT_STATE.spans;
       if (typeof BUCKLE_BY_DESIGN !== 'undefined') delete BUCKLE_BY_DESIGN[d.id];
       if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[d.id];
+      if (typeof NONLIN_AXES !== 'undefined') delete NONLIN_AXES[d.id];
       if (typeof disposeRaymarcher === 'function') disposeRaymarcher(d.id);
       LAB_STATE.runHasCompleted = false; LAB_STATE.winningId = null;
     }

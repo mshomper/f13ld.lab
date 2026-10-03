@@ -280,20 +280,60 @@ function _mpPlaceLabels(labels, dots, B){
   return out;
 }
 
+/* v0.16.0 — one curve per (design, crushed axis).  Colour = design, line
+   style = axis (X solid · Y dashed · Z dotted); the preview axis
+   (NONLIN_STATE.view) is drawn bold with its 0.2% offset line, yield label and
+   buckling line, the other axes thin and quieter so up to nine curves stay
+   readable. */
+var MP_AXIS_DASH = { xx: '', yy: '9,5', zz: '1,4.5' };
+function _mpAxisCurves(d){
+  var out = [];
+  var axes = (typeof nlAvailableAxes === 'function') ? nlAvailableAxes(d.id) : [];
+  for (var i = 0; i < axes.length; i++){
+    var e = nlAxisEntry(d.id, axes[i]);
+    if (e && e.curve && e.curve.length > 1) out.push(e);
+  }
+  if (!out.length){
+    var nl = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
+    if (nl && !nl.error && nl.curve && nl.curve.length > 1) out.push(nl);
+  }
+  return out;
+}
+function _mpAxisPcr(bk, axis){
+  if (!bk || bk.error || bk.skip_reason || !bk.perAxis) return null;
+  for (var i = 0; i < bk.perAxis.length; i++){
+    var q = bk.perAxis[i];
+    if (q && q.axis === axis && isFinite(q.lambda) && isFinite(q.sBar)) return q.lambda * Math.abs(q.sBar);
+  }
+  return null;
+}
+
 function buildMergedCurvePlot(size){
-  var entries = [];
+  var entries = [], perDesign = [], multi = false, axesSeen = {};
+  var viewAx = (typeof NONLIN_STATE !== 'undefined' && NONLIN_STATE.view) ? NONLIN_STATE.view : 'zz';
   for (var i = 0; i < LAB_STATE.designs.length && i < 3; i++){
     var d = LAB_STATE.designs[i];
-    var nl = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
-    if (nl && !nl.error && nl.curve && nl.curve.length > 1){
-      var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
-      /* buckling on the crush axis when available (same axis as the curve) */
-      var pcr = null;
-      if (bk && !bk.error && !bk.skip_reason){
+    var curves = _mpAxisCurves(d);
+    if (!curves.length) continue;
+    if (curves.length > 1) multi = true;
+    var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
+    /* the bold (preview) curve: the viewed axis, else the governing one */
+    var gov = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null, vIdx = -1;
+    for (var c = 0; c < curves.length; c++) if (curves[c].axis === viewAx) vIdx = c;
+    if (vIdx < 0) for (var c2 = 0; c2 < curves.length; c2++) if (curves[c2] === gov) vIdx = c2;
+    if (vIdx < 0) vIdx = 0;
+    var group = [];
+    for (var c3 = 0; c3 < curves.length; c3++){
+      var nl = curves[c3], ax = nl.axis || 'zz';
+      axesSeen[ax] = 1;
+      /* buckling on the curve's own axis when available */
+      var pcr = _mpAxisPcr(bk, ax);
+      if (pcr == null && curves.length === 1 && bk && !bk.error && !bk.skip_reason)
         pcr = isFinite(bk.pcr_ratio_ref) ? bk.pcr_ratio_ref : (isFinite(bk.pcr) ? bk.pcr : null);
-      }
-      entries.push({ design: d, nl: nl, pcr: pcr, pcrAxis: bk && bk.ratioAxis });
+      var en = { design: d, nl: nl, axis: ax, isView: c3 === vIdx, pcr: pcr };
+      entries.push(en); group.push(en);
     }
+    perDesign.push({ design: d, view: group[vIdx], all: group });
   }
   if (!entries.length){
     var msg = LAB_STATE.runHasCompleted
@@ -303,15 +343,16 @@ function buildMergedCurvePlot(size){
   }
 
   var norm = CURVE_STATE.scale === 'norm';
-  /* per-design scale: MPa, or divide by own yield (by the curve's top when it never yields) */
+  /* per-curve scale: MPa, or divide by own yield (by the curve's top when it never yields) */
   for (var e0 = 0; e0 < entries.length; e0++){
-    var en = entries[e0], cv0 = en.nl.curve, top = 0;
+    var en0 = entries[e0], cv0 = en0.nl.curve, top = 0;
     for (var t0 = 0; t0 < cv0.length; t0++) if (cv0[t0].sigma > top) top = cv0[t0].sigma;
-    en.div = !norm ? 1 : ((en.nl.yielded && isFinite(en.nl.sigma_y_eff) && en.nl.sigma_y_eff > 0) ? en.nl.sigma_y_eff : (top || 1));
+    en0.div = !norm ? 1 : ((en0.nl.yielded && isFinite(en0.nl.sigma_y_eff) && en0.nl.sigma_y_eff > 0) ? en0.nl.sigma_y_eff : (top || 1));
   }
 
-  /* axes fit the curves; a buckling line is kept on-scale only if it sits
-     within 1.6× the highest curve, otherwise it becomes an off-scale tag */
+  /* axes fit the curves; a buckling line (preview curves only) is kept on-scale
+     only if it sits within 1.6× its own curve's top, otherwise it becomes an
+     off-scale tag — so it never floats over another design's curve */
   var epsMax = 0, curveMax = 0;
   for (var e = 0; e < entries.length; e++){
     var cv = entries[e].nl.curve;
@@ -320,15 +361,12 @@ function buildMergedCurvePlot(size){
       if (cv[k].sigma / entries[e].div > curveMax) curveMax = cv[k].sigma / entries[e].div;
     }
   }
-  /* a design's buckling line is drawn only when it sits near its OWN curve
-     (≤ 1.6× that curve's top) — otherwise it would float over another
-     design's curve and read as belonging to it; it becomes a tag instead */
   var yTop = curveMax * 1.12;
   for (var e2 = 0; e2 < entries.length; e2++){
     var own = 0, cvo = entries[e2].nl.curve;
     for (var o2 = 0; o2 < cvo.length; o2++) if (cvo[o2].sigma > own) own = cvo[o2].sigma;
     entries[e2].ownTop = own / entries[e2].div;
-    var pv = entries[e2].pcr != null ? entries[e2].pcr / entries[e2].div : null;
+    var pv = (entries[e2].isView && entries[e2].pcr != null) ? entries[e2].pcr / entries[e2].div : null;
     entries[e2].pcrPlot = pv;
     entries[e2].pcrOnScale = (pv != null && pv <= entries[e2].ownTop * 1.6);
     if (entries[e2].pcrOnScale && pv * 1.08 > yTop) yTop = pv * 1.08;
@@ -352,12 +390,18 @@ function buildMergedCurvePlot(size){
   function py(sv){ return Y1 - (Y1 - Y0) * (sv / yCap); }
   var MONO = 'JetBrains Mono,monospace';
 
-  var axisLabel = (entries[0].nl.axis || 'zz').toUpperCase();
+  var axList = [];
+  for (var ak = 0; ak < 3; ak++){ var akk = ['xx', 'yy', 'zz'][ak]; if (axesSeen[akk]) axList.push(akk.charAt(0).toUpperCase()); }
+  var axisLabel = axList.join(' · ');
   var capPct = Math.round((entries[0].nl.epsCap || 0.05) * 100);
+  /* v0.16.0 — void used (scaled per design and axis) */
+  var vMin = Infinity, vMax = 0;
+  for (var vi = 0; vi < entries.length; vi++){ var vc = entries[vi].nl.voidContrast; if (vc > 0){ if (vc < vMin) vMin = vc; if (vc > vMax) vMax = vc; } }
+  var voidTxt = (vMax > 0) ? (' · void ' + vMin.toExponential(0) + (vMax > vMin * 1.0001 ? '–' + vMax.toExponential(0) : '')) : '';
   var html = '<div class="mp-head">' +
     '<div class="mp-title">Stress–Strain · Comparison</div>' +
     '<div class="mp-head-right">' +
-      '<span class="mp-sub">UNIAXIAL · ' + axisLabel + ' · J2 plasticity (small strain) · N=' + entries[0].nl.N + ' · ε≤' + capPct + '%</span>' +
+      '<span class="mp-sub">UNIAXIAL · ' + axisLabel + ' · J2 plasticity (small strain) · N=' + entries[0].nl.N + ' · ε≤' + capPct + '%' + voidTxt + '</span>' +
       '<span class="mp-scale">' +
         '<button class="mp-scale-btn' + (!norm ? ' active' : '') + '" onclick="onCurveScaleToggle(\'abs\')" title="Stress in MPa">MPa</button>' +
         '<button class="mp-scale-btn' + (norm ? ' active' : '') + '" onclick="onCurveScaleToggle(\'norm\')" title="Each curve divided by its own yield strength — compares curve shape across designs of very different strength">÷ own yield</button>' +
@@ -383,20 +427,31 @@ function buildMergedCurvePlot(size){
   function lab(x, y, txt, o){ o = o || {}; labels.push({ x: x, y: y, t: txt, anchor: o.anchor || 'start', size: o.size || 10.5, col: o.col || '#b8b8d0', w8: o.bold ? 600 : 400, pri: o.pri || 50, drop: !!o.drop, fixed: !!o.fixed }); }
   if (norm) lab(X0 + 6, py(1) - 5, 'yield = 1', { size: 10, col: '#7a7a92', pri: 40, drop: true });
 
-  var offTags = [], anyBuckLimited = false, squashedList = [];
-  for (var ci = 0; ci < entries.length; ci++){
-    var en2 = entries[ci], dd = en2.design, nlc = en2.nl, cvv = nlc.curve, dv = en2.div, col = dd.color;
-    var yielded = !!(nlc.yielded && isFinite(nlc.sigma_y_eff));
+  /* quiet (non-preview) curves first so the bold ones sit on top */
+  var order = [];
+  for (var oq = 0; oq < entries.length; oq++) if (!entries[oq].isView) order.push(entries[oq]);
+  for (var oq2 = 0; oq2 < entries.length; oq2++) if (entries[oq2].isView) order.push(entries[oq2]);
 
-    /* 0.2 %-offset construction line (textbook), up to the yield point */
-    if (yielded && isFinite(nlc.E0) && nlc.E0 > 0){
+  var offTags = [], anyBuckLimited = false, squashedList = [];
+  for (var ci = 0; ci < order.length; ci++){
+    var en2 = order[ci], dd = en2.design, nlc = en2.nl, cvv = nlc.curve, dv = en2.div, col = dd.color, bold = en2.isView;
+    var yielded = !!(nlc.yielded && isFinite(nlc.sigma_y_eff));
+    var letter = dd.label.split('·').pop().trim();
+    var axU = en2.axis.charAt(0).toUpperCase();
+    var tag = multi ? (letter + '·' + axU) : letter;
+    var dash = multi ? MP_AXIS_DASH[en2.axis] : '';
+
+    /* 0.2 %-offset construction line (textbook), up to the yield point — preview curve only */
+    if (bold && yielded && isFinite(nlc.E0) && nlc.E0 > 0){
       var epsY = nlc.sigma_y_eff / nlc.E0 + 0.002;
       html += '<line x1="' + px(0.2).toFixed(1) + '" y1="' + py(0).toFixed(1) + '" x2="' + px(epsY * 100).toFixed(1) + '" y2="' + py(nlc.sigma_y_eff / dv).toFixed(1) + '" stroke="' + col + '" stroke-width="1" stroke-dasharray="3,4" opacity="0.45"/>';
     }
     /* curve from the origin */
     var path = 'M' + px(0).toFixed(1) + ',' + py(0).toFixed(1);
     for (var pi = 0; pi < cvv.length; pi++) path += ' L' + px(cvv[pi].eps * 100).toFixed(1) + ',' + py(cvv[pi].sigma / dv).toFixed(1);
-    html += '<path d="' + path + '" fill="none" stroke="' + col + '" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>';
+    html += '<path d="' + path + '" fill="none" stroke="' + col + '" stroke-width="' + (bold ? 2.4 : 1.5) + '"' +
+            (dash ? ' stroke-dasharray="' + dash + '"' : '') + (bold ? '' : ' opacity="0.6"') +
+            ' stroke-linejoin="round" stroke-linecap="round"/>';
     /* the curve is an obstacle for labels: sample it every ~6 px */
     var pxPrev = px(0), pyPrev = py(0);
     for (var ob = 0; ob < cvv.length; ob++){
@@ -406,34 +461,33 @@ function buildMergedCurvePlot(size){
     }
     /* direct label at the curve end; flag curves squashed by a stronger design */
     var lastP = cvv[cvv.length - 1], lx2 = px(lastP.eps * 100), ly2 = py(lastP.sigma / dv);
-    if (!norm && en2.ownTop < 0.12 * yCap) squashedList.push(dd.label.split('·').pop().trim());
-    lab(lx2 + 8, ly2 + 4, dd.label.split('·').pop().trim(), { size: 11, col: col, bold: true, pri: 80 });
+    if (bold && !norm && en2.ownTop < 0.12 * yCap) squashedList.push(letter);
+    lab(lx2 + 8, ly2 + 4, tag, bold ? { size: 11, col: col, bold: true, pri: 80 } : { size: 10, col: col, pri: 55, drop: true });
     /* hover targets on every solved point */
-    var letter = dd.label.split('·').pop().trim();
     html += '<g fill="transparent">';
     for (var hi = 0; hi < cvv.length; hi++){
-      html += '<circle cx="' + px(cvv[hi].eps * 100).toFixed(1) + '" cy="' + py(cvv[hi].sigma / dv).toFixed(1) + '" r="7"><title>Design ' + letter + ' · ε = ' + (cvv[hi].eps * 100).toFixed(2) + ' % · σ = ' + cvv[hi].sigma.toFixed(1) + ' MPa' + (norm ? ' (' + (cvv[hi].sigma / dv).toFixed(2) + '× yield)' : '') + '</title></circle>';
+      html += '<circle cx="' + px(cvv[hi].eps * 100).toFixed(1) + '" cy="' + py(cvv[hi].sigma / dv).toFixed(1) + '" r="7"><title>Design ' + letter + ' · ' + axU + ' crush · ε = ' + (cvv[hi].eps * 100).toFixed(2) + ' % · σ = ' + cvv[hi].sigma.toFixed(1) + ' MPa' + (norm ? ' (' + (cvv[hi].sigma / dv).toFixed(2) + '× yield)' : '') + '</title></circle>';
     }
     html += '</g>';
-    /* yield dot + label */
+    /* yield dot (+ label on the preview curve) */
     if (yielded){
       var ex = isFinite(nlc.E0) && nlc.E0 > 0 ? (nlc.sigma_y_eff / nlc.E0 + 0.002) * 100 : null;
       if (ex == null){ for (var qi = 0; qi < cvv.length; qi++) if (cvv[qi].sigma >= nlc.sigma_y_eff){ ex = cvv[qi].eps * 100; break; } }
       if (ex != null){
-        var cxv = px(ex), cyv = py(nlc.sigma_y_eff / dv);
-        html += '<circle cx="' + cxv.toFixed(1) + '" cy="' + cyv.toFixed(1) + '" r="4.5" fill="' + col + '" stroke="#0a0a12" stroke-width="1.5"><title>Design ' + letter + ' 0.2% offset yield: ' + nlc.sigma_y_eff.toFixed(1) + ' MPa at ε = ' + ex.toFixed(2) + ' %</title></circle>';
-        dots.push({ x0: cxv - 5, x1: cxv + 5, y0: cyv - 5, y1: cyv + 5 });
-        lab(cxv + 9, cyv + 16, letter + ' σ_y ' + nlc.sigma_y_eff.toFixed(nlc.sigma_y_eff >= 100 ? 0 : 1) + ' MPa', { col: col, pri: 70 });
+        var cxv = px(ex), cyv = py(nlc.sigma_y_eff / dv), rD = bold ? 4.5 : 3;
+        html += '<circle cx="' + cxv.toFixed(1) + '" cy="' + cyv.toFixed(1) + '" r="' + rD + '" fill="' + col + '" stroke="#0a0a12" stroke-width="1.5"' + (bold ? '' : ' opacity="0.75"') + '><title>Design ' + letter + ' · ' + axU + ' crush · 0.2% offset yield: ' + nlc.sigma_y_eff.toFixed(1) + ' MPa at ε = ' + ex.toFixed(2) + ' %</title></circle>';
+        dots.push({ x0: cxv - rD - 1, x1: cxv + rD + 1, y0: cyv - rD - 1, y1: cyv + rD + 1 });
+        if (bold) lab(cxv + 9, cyv + 16, tag + ' σ_y ' + nlc.sigma_y_eff.toFixed(nlc.sigma_y_eff >= 100 ? 0 : 1) + ' MPa', { col: col, pri: 70 });
       }
     }
-    /* buckling reference */
+    /* buckling reference (preview curve, same axis) */
     if (en2.pcrPlot != null){
       var ratio = yielded ? en2.pcr / nlc.sigma_y_eff : null;
-      if (!yielded || (isFinite(nlc.sigma_y_eff) && en2.pcr < nlc.sigma_y_eff)) anyBuckLimited = anyBuckLimited || (yielded && en2.pcr < nlc.sigma_y_eff);
-      var bTxt = 'σ_cr ' + (en2.pcr >= 100 ? en2.pcr.toFixed(0) : en2.pcr.toFixed(1)) + ' MPa' + (ratio != null ? ' · ' + (ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(1)) + '× yield' : '');
+      anyBuckLimited = anyBuckLimited || (yielded && en2.pcr < nlc.sigma_y_eff);
+      var bTxt = (multi ? axU + ' ' : '') + 'σ_cr ' + (en2.pcr >= 100 ? en2.pcr.toFixed(0) : en2.pcr.toFixed(1)) + ' MPa' + (ratio != null ? ' · ' + (ratio >= 10 ? ratio.toFixed(0) : ratio.toFixed(1)) + '× yield' : '');
       if (en2.pcrOnScale && en2.pcrPlot <= yCap){
         var yb = py(en2.pcrPlot).toFixed(1);
-        html += '<line x1="' + X0 + '" y1="' + yb + '" x2="' + X1 + '" y2="' + yb + '" stroke="' + col + '" stroke-width="1.4" stroke-dasharray="7,5" opacity="0.7"/>';
+        html += '<line x1="' + X0 + '" y1="' + yb + '" x2="' + X1 + '" y2="' + yb + '" stroke="' + col + '" stroke-width="1.4" stroke-dasharray="14,4,2,4" opacity="0.7"/>';
         dots.push({ x0: X0, x1: X1, y0: parseFloat(yb) - 1.5, y1: parseFloat(yb) + 1.5 });
         lab(X1 - 4, parseFloat(yb) - 6, 'buckles · ' + bTxt, { anchor: 'end', col: col, pri: 60, drop: true });   /* value also in the legend */
       } else offTags.push({ col: col, txt: bTxt, letter: letter });
@@ -449,17 +503,17 @@ function buildMergedCurvePlot(size){
   html += _mpPlaceLabels(labels, dots, { X0: X0, X1: X1, Y0: Y0, Y1: Y1, W: W, font: MONO });
   html += '</svg></div>';
 
-  /* legend */
+  /* legend — one row per design, numbers for its preview axis */
   html += '<div class="mp-legend">';
-  for (var li = 0; li < entries.length; li++){
-    var ld = entries[li].design, lnl = entries[li].nl;
+  for (var li = 0; li < perDesign.length; li++){
+    var ld = perDesign[li].design, lv = perDesign[li].view, lnl = lv.nl;
     var lletter = ld.label.split('·').pop().trim();
     var yieldTxt = (lnl.yielded && isFinite(lnl.sigma_y_eff))
       ? ('σ_y ' + lnl.sigma_y_eff.toFixed(1) + ' MPa' + (isFinite(lnl.E0) ? ' · E ' + (lnl.E0 >= 1000 ? (lnl.E0 / 1000).toFixed(2) + ' GPa' : lnl.E0.toFixed(0) + ' MPa') : '') + (lnl.truncated ? ' (partial)' : ''))
       : (lnl.truncReason === 'step-budget' && isFinite(lnl.eAxisMax))
         ? ('stopped at ε=' + (lnl.eAxisMax * 100).toFixed(2) + '% (step budget) — no yield in range reached')
         : ('no yield ≤ ' + Math.round((lnl.epsCap || 0.05) * 100) + '%' + (isFinite(lnl.sigmaCap) ? (' (σ_y > ' + lnl.sigmaCap.toFixed(0) + ' MPa)') : ''));
-    var lpcr = entries[li].pcr, lbTxt = '';
+    var lpcr = lv.pcr, lbTxt = '';
     if (lpcr != null){
       var lrat = (lnl.yielded && isFinite(lnl.sigma_y_eff)) ? lpcr / lnl.sigma_y_eff : null;
       lbTxt = ' · σ_cr ' + (lpcr >= 100 ? lpcr.toFixed(0) : lpcr.toFixed(1)) + ' MPa' + (lrat != null ? ' (' + (lrat >= 10 ? lrat.toFixed(0) : lrat.toFixed(1)) + '× yield)' : '');
@@ -467,12 +521,22 @@ function buildMergedCurvePlot(size){
     html += '<div class="mp-legend-item">' +
       '<div class="swatch" style="background:' + ld.color + '"></div>' +
       '<strong style="color:' + ld.color + '">Design ' + lletter + '</strong> ' + ld.title +
-      '<span class="marker">' + yieldTxt + lbTxt + '</span>' +
+      '<span class="marker">' + (multi ? lv.axis.charAt(0).toUpperCase() + ': ' : '') + yieldTxt + lbTxt + '</span>' +
       '</div>';
   }
   if (squashedList.length) html += '<div class="mp-legend-item mp-legend-hint">Design' + (squashedList.length > 1 ? 's ' : ' ') + squashedList.join(', ') + (squashedList.length > 1 ? ' are' : ' is') + ' small at this scale — switch to <button class="mp-scale-btn" onclick="onCurveScaleToggle(\'norm\')">÷ own yield</button> to compare curve shapes</div>';
   if (anyBuckLimited) html += '<div class="mp-legend-item mp-legend-warn">⚠ buckling-limited — collapses at σ_cr before it yields; the curve above that line is not reached</div>';
-  html += '<div class="mp-legend-item mp-legend-key"><svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="#8a8aa2" stroke-width="1" stroke-dasharray="3,4"/></svg>0.2% offset · <svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="#8a8aa2" stroke-width="1.4" stroke-dasharray="7,5"/></svg>buckling strength</div>';
+  var axKey = '';
+  if (multi){
+    axKey = 'axis: ';
+    for (var ka = 0; ka < 3; ka++){
+      var kk = ['xx', 'yy', 'zz'][ka];
+      if (!axesSeen[kk]) continue;
+      axKey += '<svg width="26" height="6"><line x1="1" y1="3" x2="25" y2="3" stroke="#b8b8d0" stroke-width="2" stroke-linecap="round"' + (MP_AXIS_DASH[kk] ? ' stroke-dasharray="' + MP_AXIS_DASH[kk] + '"' : '') + '/></svg>' + kk.charAt(0).toUpperCase() + ' ';
+    }
+    axKey += '· bold = preview axis (' + viewAx.charAt(0).toUpperCase() + ') · ';
+  }
+  html += '<div class="mp-legend-item mp-legend-key">' + axKey + '<svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="#8a8aa2" stroke-width="1" stroke-dasharray="3,4"/></svg>0.2% offset · <svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="#8a8aa2" stroke-width="1.4" stroke-dasharray="14,4,2,4"/></svg>buckling strength</div>';
   html += '</div>';
   return html;
 }

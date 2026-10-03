@@ -20,11 +20,13 @@ That σ_y_eff is the number that **retires the provisional 880 MPa seam** in `P_
 
 ### Material defaults (Ti-6Al-4V, LPBF)
 
-`Es = 110000 MPa`, `nu = 0.34`; Voce `σ_Y0 = 950`, `σ_sat = 1150`, `δ = 60`, `H_lin = 300 MPa`. Void contrast `1e-3`.
+`Es = 110000 MPa`, `nu = 0.34`; Voce `σ_Y0 = 950`, `σ_sat = 1150`, `δ = 60`, `H_lin = 300 MPa`. Void contrast `1e-3` by default; **v0.16.0:** the lab passes `upload(recipe, { voidContrast })` = 1 % of the crushed axis's linear modulus ÷ Es, rounded down to one figure, clamped to [1e-6, 1e-3] (1e-4 without a linear result). At a fixed 1e-3 a pi-TPMS at E/Es ≈ 3e-4 read E0 = 166 MPa vs 31.6 MPa at 1e-5.
 
 ### Why uniaxial-stress, one normal axis
 
 Compression-loaded scaffolds yield under uniaxial stress with free lateral faces — that is the physiological load case for orthopedic lattices. Shear-yield is not the governing path and isn't run. The physical axis maps to the solver frame via `SWAP = [2,1,0,5,4,3]` (so `crush(2)` = physical ZZ).
+
+**Three axes (v0.16.0).** Crush axis = All runs `crush(0)`, `crush(1)`, `crush(2)` in turn — three independent uniaxial crushes, one per normal axis. Results are kept per axis in `NONLIN_AXES[id] = { base, xx, yy, zz }` (`base` = grid | cap | prune | recipe; a different base clears the set). `NONLIN_BY_DESIGN[id]` is the governing axis (lowest 0.2%-offset yield; if no axis yielded, lowest stress at the cap), which the cards, Load Capacity and the buckling seam read. With several axes the buckling-to-yield ratio is min over axes of (that axis's buckling strength / that axis's yield).
 
 ## Solver — `16f-nonlinear-cpu-ref.js` (oracle), `16g-nonlinear-solver.js` (GPU)
 

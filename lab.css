@@ -591,6 +591,17 @@ html, body {
 .merged-scrubber .nl-ticks { position:absolute; left:0; right:0; top:-7px; height:11px; pointer-events:none; }
 .merged-scrubber .nl-tick  { position:absolute; top:0; width:2px; height:11px; border-radius:1px; transform:translateX(-1px); opacity:0.85; }
 .merged-scrubber .nl-readout { flex-shrink:0; min-width:118px; text-align:right; color:var(--ink-2); }
+/* v0.16.0 — preview axis switch (X/Y/Z) */
+.merged-scrubber .nl-axis-sw { display:inline-flex; flex-shrink:0; border:0.5px solid var(--line); border-radius:6px; overflow:hidden; }
+.merged-scrubber .nl-axis-btn {
+  cursor:pointer; background:transparent; border:0; border-left:0.5px solid var(--line);
+  color:var(--ink-dim); font-family:inherit; font-size:10px; line-height:1; padding:5px 9px;
+}
+.merged-scrubber .nl-axis-btn:first-child { border-left:0; }
+.merged-scrubber .nl-axis-btn.active { background:var(--good); color:#0a0a12; font-weight:600; }
+.merged-scrubber .nl-axis-btn:disabled { opacity:0.35; cursor:default; }
+.nl-metric-card .nl-mc-other b { font-weight:400; color:var(--ink-2); text-align:right; }
+.nl-metric-card .nl-mc-warn, .nl-metric-card .nl-mc-warn b { color:var(--warn, #f59e0b); font-weight:400; }
 
 @media (max-width: 880px){
   .compare.merged.has-cubes {

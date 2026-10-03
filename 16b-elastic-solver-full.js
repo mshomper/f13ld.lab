@@ -70,7 +70,7 @@
 
 /* Mirrors 16-elastic-solver.js's rc3 tuning */
 var CG_TOL_FULL     = 1e-4;
-var CG_MAXITER_FULL = 300;
+var CG_MAXITER_FULL = 1000;
 
 
 /* ════════════════════════════════════════════════════════════

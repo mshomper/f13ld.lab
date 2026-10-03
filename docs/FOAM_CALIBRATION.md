@@ -120,3 +120,9 @@ Run set [`foam-calibration/foam_plateau_runs.csv`](foam-calibration/foam_plateau
 ## 9. F13LD.foam estimator (v0.5.0)
 
 Uses §6–7: ρ measured by point-sampling the exact field at 64³ (worker threads, ~0.5–2 s); mean E from the open / closed law × Poisson-seed factor × plateau factor; ν(ρ); G = E/2(1+ν); stretch split s^m with the mean kept; shear split (E_i E_j)^(r/2). Likely range per axis combines the fit rms, seed-to-seed scatter scaled to the foam's cell count, the ±7 % cell-count band, and extra width for anything outside the calibration (density range, Kelvin / Weaire–Phelan, uniform-random seeds, organic > 0, normalize off, stretch beyond 2:1), each named in a "not calibrated" note. Exports a `homogenization` block with F13LD.tpms's field names (F13LD.mesh's foam summary shows it). Constants live in one `FOAM_CAL` block; refit = paste from the fit page's JSON.
+
+## 10. Re-run at the 1000-iteration cap (v0.16.0) — ready to run
+
+The first pass (§6) used the sweep's Standard preset, which then stopped each load case at 300 iterations. 27 of the 48 runs hit that cap: every open and plateau foam at 18–35 % on both grids, the 12–18 % closed foams at 64³ (their 128³ solves, which §6 uses, mostly converged), and the stretched (set D) foams. The solver starts from a uniform strain and works down, so a stopped solve reads **stiff**; the open law above 18 % may be high.
+
+v0.16.0 raises Standard to 1000 iterations (tolerance unchanged, 1e-4) and the export records `cg_maxiter`. [`foam-calibration/foam_rerun_1000_runs.csv`](foam-calibration/foam_rerun_1000_runs.csv) holds the 27 rows, unchanged from `foam_calibration_runs.csv`; run them with the §1 settings (void 1e-6). In the fit page, drop the old results file **first** and the re-run results **after** — a run id loaded later replaces the earlier row. The plateau (§7) and cell-count (§8) files can be re-run as they are; they pick up the new cap automatically.

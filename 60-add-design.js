@@ -682,6 +682,7 @@ function ingestHandoffJson(json, name){
     if (typeof disposeStiffnessViz === 'function') disposeStiffnessViz(old[oi].id);
     if (typeof BUCKLE_BY_DESIGN !== 'undefined') delete BUCKLE_BY_DESIGN[old[oi].id];
     if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[old[oi].id];
+    if (typeof NONLIN_AXES !== 'undefined') delete NONLIN_AXES[old[oi].id];
   }
   if (!append) LAB_STATE.designs = [design];   // replace demo set with the imported one
   if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();

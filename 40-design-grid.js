@@ -137,6 +137,16 @@ function governingLimitPill(d){
   return '<span class="dc-limit-pill ' + cls + '" title="' + tip + '">' + txt + '</span>';
 }
 
+/* v0.16.0 — "not converged · 1000 it" when any elastic load case stopped at
+   the CG cap; null when converged (or no record). */
+function elasticNotConvergedText(r){
+  if (!r || r.converged !== false) return null;
+  var worst = 0, lcs = r.perLC || [];
+  for (var i = 0; i < lcs.length; i++) if (lcs[i] && !lcs[i].converged && lcs[i].iters > worst) worst = lcs[i].iters;
+  if (!worst && r.cgMaxiter) worst = r.cgMaxiter;
+  return 'not converged' + (worst ? ' \u00b7 ' + worst + ' it' : '');
+}
+
 function statsForDesign(d, mode){
   var r = d.results;
   if (!r){
@@ -149,8 +159,18 @@ function statsForDesign(d, mode){
     r = (typeof stubResults === 'function') ? stubResults() : { E11:0, E22:0, E33:0, zener:0, pcr_py:0, sigma_y_z:0, kappa_z:0 };
     r.failure_mode = 'not-computed';
   }
-  /* Sprint A — sentinel-safe elastic cells (0 = not computed, never "-100% vs B"). */
-  function dv(key){ return (r[key] && isFinite(r[key])) ? deltaVsBaseline(r[key], key, d.id) : ['\u2014','neut']; }
+  /* Sprint A — sentinel-safe elastic cells (0 = not computed, never "-100% vs B").
+     v0.16.0 — when a load case hit the CG iteration cap the moduli read high
+     (the solve starts from a uniform strain and works down), so the stiffness
+     rows say so instead of showing a baseline delta. */
+  var cgFlag = elasticNotConvergedText(r);
+  function dv(key){
+    if (cgFlag && /^E\d\d$|^G\d\d$/.test(key) && r[key] && isFinite(r[key])) return [cgFlag, 'warn'];
+    /* v0.16.0 — stiffness within 50x of the void (void at its floor) */
+    if (/^E\d\d$|^G\d\d$/.test(key) && r[key] > 0 && typeof voidLimited === 'function' && voidLimited(r[key] * 1000, r.Es_MPa, r.voidRatio))
+      return ['void-limited \u00b7 void ' + r.voidRatio.toExponential(0) + ' of solid', 'warn'];
+    return (r[key] && isFinite(r[key])) ? deltaVsBaseline(r[key], key, d.id) : ['\u2014','neut'];
+  }
   var zVal = (r.zener > 0 && isFinite(r.zener)) ? r.zener.toFixed(2) : '\u2014';
   var zDesc = (r.zener > 0 && isFinite(r.zener)) ? zenerDescriptor(r.zener) : '\u2014';
 
@@ -169,7 +189,8 @@ function statsForDesign(d, mode){
     var yVal, yDelta;
     if (nld && nld.yielded && isFinite(nld.sigma_y_eff)) {
       yVal = fmtEngMPa(nld.sigma_y_eff);
-      yDelta = [(nld.axis||'zz').toUpperCase() + (nld.truncated ? ' · partial' : ' · crush'), 'neut'];
+      var nAx = (typeof nlAvailableAxes === 'function') ? nlAvailableAxes(d.id).length : 1;
+      yDelta = [(nld.axis||'zz').toUpperCase() + (nld.truncated ? ' · partial' : (nAx > 1 ? ' · weakest of ' + nAx : ' · crush')), 'neut'];
     } else if (nld && !nld.error) {
       yVal = isFinite(nld.sigmaCap) ? ('> ' + fmtEngMPa(nld.sigmaCap)) : 'no yield';
       yDelta = (nld.truncReason === 'step-budget' && isFinite(nld.eAxisMax))
@@ -1027,6 +1048,7 @@ function removeDesign(designId){
   if (typeof RUN_STATE !== 'undefined' && RUN_STATE.running && typeof cancelRun === 'function') cancelRun();
   if (typeof BUCKLE_BY_DESIGN !== 'undefined') delete BUCKLE_BY_DESIGN[designId];
   if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[designId];
+  if (typeof NONLIN_AXES !== 'undefined') delete NONLIN_AXES[designId];
 
   LAB_STATE.designs = LAB_STATE.designs.filter(function(d){ return d.id !== designId; });
   if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();   /* freed slot returns to the pool; survivors keep theirs */
@@ -1426,12 +1448,27 @@ function upsampleScalarTrilinear(src, Ns, Nd){
   return out;
 }
 
+/* v0.16.0 — compact "other axes" row on a crush metric card: modulus and
+   yield of the axes not in view, e.g. "X 1.21 GPa · 38 MPa  Y …". */
+function nlOtherAxesRow(id, viewAx){
+  if (typeof nlAvailableAxes !== 'function') return '';
+  var av = nlAvailableAxes(id), parts = [];
+  for (var i = 0; i < av.length; i++){
+    if (av[i] === viewAx) continue;
+    var e = nlAxisEntry(id, av[i]);
+    var y = (e.yielded && isFinite(e.sigma_y_eff)) ? fmtEngMPa(e.sigma_y_eff) : (isFinite(e.sigmaCap) ? '> ' + fmtEngMPa(e.sigmaCap) : 'no yield');
+    parts.push(av[i].charAt(0).toUpperCase() + ' ' + (isFinite(e.E0) ? fmtEngMPa(e.E0) : '\u2014') + ' \u00b7 ' + y);
+  }
+  if (!parts.length) return '';
+  return '<div class="nl-mc-row nl-mc-other"><span>Other axes</span><b>' + parts.join('<br>') + '</b></div>';
+}
+
 /* Gather up to 3 loaded designs that have a usable α progression. */
 function nlEntries(){
   var out = [];
   for (var i = 0; i < LAB_STATE.designs.length && out.length < 3; i++){
     var d = LAB_STATE.designs[i];
-    var nl = (typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null;
+    var nl = (typeof nlForView === 'function') ? nlForView(d.id) : ((typeof NONLIN_BY_DESIGN !== 'undefined') ? NONLIN_BY_DESIGN[d.id] : null);
     if (!nl || nl.error || !nl.alphaSteps || !nl.alphaSteps.length) continue;
     var axisKey = nl.axis || 'zz';
     var elastic = (d.results && d.results._fieldsByAxis) ? d.results._fieldsByAxis[axisKey] : null;
@@ -1488,8 +1525,25 @@ function renderNonlinearViz(){
   }
   cubes.innerHTML = ch;
 
-  /* Shared scrubber. */
-  scrub.innerHTML =
+  /* Shared scrubber.  v0.16.0 — axis switch (X/Y/Z) on the left when more
+     than one axis has been crushed for any design. */
+  var axSeen = {}, axCount = 0;
+  for (var ai = 0; ai < LAB_STATE.designs.length; ai++){
+    var avl = (typeof nlAvailableAxes === 'function') ? nlAvailableAxes(LAB_STATE.designs[ai].id) : [];
+    for (var aj = 0; aj < avl.length; aj++) if (!axSeen[avl[aj]]){ axSeen[avl[aj]] = 1; axCount++; }
+  }
+  var axSw = '';
+  if (axCount > 1){
+    var curView = entries[0].axisKey;
+    axSw = '<span class="nl-axis-sw" title="Crush axis shown in the preview and metric cards (bold on the plot)">';
+    for (var ak = 0; ak < 3; ak++){
+      var axk = ['xx', 'yy', 'zz'][ak];
+      axSw += '<button class="nl-axis-btn' + (axk === curView ? ' active' : '') + '"' + (axSeen[axk] ? '' : ' disabled') +
+              ' onclick="onNonlinViewAxis(\'' + axk + '\')">' + axk.charAt(0).toUpperCase() + '</button>';
+    }
+    axSw += '</span>';
+  }
+  scrub.innerHTML = axSw +
     '<button class="nl-play" id="nlPlayBtn" title="Play / pause">\u275a\u275a</button>' +
     '<div class="nl-track-wrap">' +
       '<div class="nl-ticks" id="nlTicks"></div>' +
@@ -1510,9 +1564,13 @@ function renderNonlinearViz(){
       var loadStr = lc ? fmtForceN(lc.N) : '\u2014';
       mh += '<div class="nl-metric-card" style="border-left-color:' + em.design.color + '">' +
               '<div class="nl-mc-head"><span class="dot" style="background:' + em.design.color + '"></span>' +
-                nlCubeLabel(em.design) + '</div>' +
+                nlCubeLabel(em.design) + ' \u00b7 ' + em.axisKey.charAt(0).toUpperCase() + ' crush</div>' +
               '<div class="nl-mc-row"><span>Crush Modulus</span><b>' + crushMod + '</b></div>' +
+              ((typeof voidLimited === 'function' && voidLimited(nlm.E0, nlm.Es_MPa, nlm.voidContrast))
+                ? '<div class="nl-mc-row nl-mc-warn"><span>void-limited</span><b>void ' + nlm.voidContrast.toExponential(0) + ' of solid</b></div>' : '') +
+              ((nlm.voidScaled === false) ? '<div class="nl-mc-row nl-mc-warn"><span>void not scaled</span><b>run Elastic too</b></div>' : '') +
               '<div class="nl-mc-row"><span>Yield Strength</span><b>' + yStr + '</b></div>' +
+              nlOtherAxesRow(em.design.id, em.axisKey) +
               '<div class="nl-mc-row"><span>Load Capacity</span><b>' + loadStr + '</b></div>' +
             '</div>';
     }

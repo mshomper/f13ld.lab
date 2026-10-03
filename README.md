@@ -40,6 +40,16 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.16.0
+
+**Crush on all three axes.** The Crush axis selector has **All (XX·YY·ZZ)**: each design is crushed along X, Y and Z in turn (about 3× the crush time; the estimate accounts for it). Axes already solved with the same grid, strain cap and design are reused, so running X, Y and Z one at a time builds the same set. The stress–strain plot draws every crushed axis on one chart — colour is the design, line style is the axis (X solid, Y dashed, Z dotted). An **X / Y / Z switch** next to the scrubber picks the preview axis: its cubes, metric cards (with the other axes' modulus and yield listed), and its curves drawn bold with the 0.2% offset line, yield label and buckling line. Design cards use the **weakest axis** for Yield Strength and Load Capacity, and the buckling-to-yield ratio is the lowest of the per-axis ratios (each axis's buckling over that axis's yield).
+
+**Void scaled to the design.** Empty space is modelled as a very soft material. At the old fixed values (1/10,000 of the solid for linear runs, 1/1,000 for the crush) that filler carried a large share of the load in ultra-compliant designs: a gyroid × Fischer-Koch S pi-TPMS read 44 MPa on the card and 166 MPa as the crush modulus, against 30.4 MPa with a void of 1/1,000,000 — at the same iteration count. Now the void is 1 % of the design's own stiffness (rounded down, floor 1/1,000,000; never stiffer than the old values): a linear run whose softest axis is under ~0.5 % of the solid is re-solved once with the scaled void, and each crush axis uses 1 % of that axis's linear modulus (1/10,000 when Elastic did not run). The stress–strain header shows the void used; cards and crush metric cards say **void-limited** when a stiffness is within 50× of the void.
+
+**Sweep Standard preset: 300 → 1000 iterations** (tolerance unchanged); the export adds `cg_maxiter`. Re-run list for the foam calibration: `docs/foam-calibration/foam_rerun_1000_runs.csv` (`FOAM_CALIBRATION.md` §10).
+
+**Elastic iteration cap 300 → 1000.** The normal (non-sweep) elastic solve allowed 300 iterations per load case; disordered designs (foams, spinodoids) often stopped there, and because the solve starts from a uniform strain a stopped solve reads stiff. The cap is now 1000, and a card shows **not converged · N it** on its modulus rows when a load case still stops at the cap.
+
 ## What's new in v0.15.1
 
 **Sweep export (v0.15.1)** adds the second grid's own solid fraction (`grid2_vf_voxel_pct`, `grid2_vf_measured_pct`), its convergence and per-load-case iterations. **Foam fit page:** `docs/foam-calibration/foam-fit.html` — drop in sweep exports to fit and chart F13LD.foam's stiffness laws (see `docs/FOAM_CALIBRATION.md`).

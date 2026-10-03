@@ -488,7 +488,9 @@ async function runNonlinearKernelTest(mat) {
        (b) plastic       : strain-mode crush vs 16f at N=8
    ════════════════════════════════════════════════════════════ */
 
-var NL_VOID_CONTRAST = 1e-3;   /* void stiffness = this * solid; ~+2% modulus for ~5x faster CG */
+var NL_VOID_CONTRAST = 1e-3;   /* default / cap: void stiffness = this * solid.  v0.16.0 — the lab passes a
+                                  per-design value (1 % of the design's linear stiffness); 1e-3 inflated ultra-
+                                  compliant designs several-fold (pi-TPMS at E/Es ~3e-4: crush E0 166 vs 31.6 MPa) */
 var NL_NEWTON_TOL    = 1e-3;   /* f32-appropriate outer tol (inner CG floor ~1e-4) */
 var NL_NEWTON_ACCEPT = 5e-3;   /* accept a stalled field solve below this (f32-floor guard) */
 var NL_NEWTON_MAX    = 12;   /* cap failed-attempt cost; successful solves use ~3 */
@@ -521,11 +523,14 @@ function NonlinearSolverFull(N, fftPlan) {
 
   this.newtonTol = NL_NEWTON_TOL; this.newtonMax = NL_NEWTON_MAX;
   this.cgTol = NL_CG_TOL; this.cgMax = NL_CG_MAX;
+  /* v0.16.0 — per-solve void contrast (upload opts.voidContrast); the lab
+     scales it to the design's own linear stiffness (50-controls voidForStiffness). */
+  this.voidContrast = NL_VOID_CONTRAST;
   this.acceptRel = NL_NEWTON_ACCEPT;
 }
 
 NonlinearSolverFull.prototype.setMaterial = function (m) {
-  var Ev = m.E * NL_VOID_CONTRAST;
+  var Ev = m.E * (this.voidContrast > 0 ? this.voidContrast : NL_VOID_CONTRAST);
   var mu_v = Ev / (2 * (1 + m.nu));
   var lam_v = Ev * m.nu / ((1 + m.nu) * (1 - 2 * m.nu));
   var K_v = lam_v + 2 * mu_v / 3;
@@ -561,7 +566,8 @@ NonlinearSolverFull.prototype.upload = function (recipe, opts) {
   var mat = nlResolveMaterial(recipe.material);   /* 16f: merge over NL_MAT_DEFAULT so plasticity keys (sigY0, Voce) are never dropped */
   var m = nlMakeMaterial(mat);
   this.material = m;
-  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * NL_VOID_CONTRAST, m.nu), C_0 = isoC(m.E, m.nu);
+  if (opts && opts.voidContrast > 0) this.voidContrast = opts.voidContrast;
+  var C_s = isoC(m.E, m.nu), C_v = isoC(m.E * this.voidContrast, m.nu), C_0 = isoC(m.E, m.nu);
   var Gamma = buildGammaFull(this.N, C_0[21], C_0[1]);
   this.es.uploadDesign(solid, Gamma, C_s, C_v, C_0);
   this.setMaterial(m);
