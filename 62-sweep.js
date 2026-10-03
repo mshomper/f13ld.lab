@@ -24,7 +24,9 @@ var SWEEP_STORE_KEY = 'f13ld.lab.sweep.v1';
 var SWEEP_ES = 110000;            /* MPa; every stiffness is divided by this */
 var SWEEP_VF_TOL = 0.01;          /* build check: |vf − expected| / expected */
 var SWEEP_PRECISION = {
-  standard: { tol: 1e-4, maxiter: 300,  label: 'Standard (1e-4)' },
+  /* v0.16.0 — Standard cap 300 -> 1000: 27 of the 48 foam calibration runs stopped at 300
+     (open/plateau 18-35 %, closed 12-18 % at 64³), and a stopped solve reads stiff. */
+  standard: { tol: 1e-4, maxiter: 1000, label: 'Standard (1e-4)' },
   high:     { tol: 1e-5, maxiter: 1000, label: 'High (1e-5)' }
 };
 var VOIGT = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
@@ -603,7 +605,7 @@ function sweepCsvCell(v) {
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 function sweepExportCsv() {
-  var cols = ['run_id', 'tier', 'set', 'purpose', 'grid_N', 'nu_s', 'cg_tol', 'connectivity', 'param_name', 'param_value', 'param2_name', 'param2_value',
+  var cols = ['run_id', 'tier', 'set', 'purpose', 'grid_N', 'nu_s', 'cg_tol', 'cg_maxiter', 'connectivity', 'param_name', 'param_value', 'param2_name', 'param2_value',
               'expected_vf_pct', 'vf_voxel_pct', 'vf_measured_pct', 'vf_check_rel_pct', 'trim_removed_pct'];
   cols.push('void_ratio');
   for (var i = 1; i <= 6; i++) for (var j = i; j <= 6; j++) cols.push('C' + i + j);
@@ -630,7 +632,7 @@ function sweepExportCsv() {
       expected_vf_pct: run.expectedVf, error: r.error || ''
     };
     if (!r.error) {
-      row.cg_tol = r.tol; row.connectivity = r.connectivity; row.void_ratio = r.voidRatio != null ? r.voidRatio : 1e-4;
+      row.cg_tol = r.tol; row.cg_maxiter = r.maxiter; row.connectivity = r.connectivity; row.void_ratio = r.voidRatio != null ? r.voidRatio : 1e-4;
       if (r.companion) {
         var cp = r.companion;
         row.grid2_N = cp.N; row.grid2_iters = cp.iters; row.grid2_residual = cp.residual; row.grid2_wall_time_s = cp.wall_s;

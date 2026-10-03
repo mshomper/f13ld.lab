@@ -56,6 +56,33 @@ var NONLIN_BY_DESIGN = {};
 var NONLIN_AXES = {};
 var NL_AXIS_KEYS = ['xx', 'yy', 'zz'];
 
+/* v0.16.0 — void stiffness scaled to the design.  The void (empty space) is
+   given VOID_SCALE_FRAC of the design's own stiffness, as a fraction of the
+   solid, clamped to [VOID_FLOOR, cap] and rounded down to one significant
+   figure (stable cache signatures).  At a fixed 1e-4 (linear) / 1e-3 (crush)
+   an ultra-compliant design (E/Es ~3e-4) read 44 / 166 MPa against 30.4 MPa
+   at 1e-6; iterations were unchanged (342 -> 351). */
+var VOID_SCALE_FRAC = 0.01, VOID_FLOOR = 1e-6, VOID_LINEAR_DEFAULT = 1e-4, VOID_LIMIT_FACTOR = 50;
+function voidForStiffness(E_MPa, Es_MPa, cap){
+  if (!(E_MPa > 0) || !(Es_MPa > 0)) return null;
+  var v = Math.max(VOID_FLOOR, Math.min(cap, VOID_SCALE_FRAC * E_MPa / Es_MPa));
+  var p = Math.pow(10, Math.floor(Math.log10(v) + 1e-9));
+  return Math.max(VOID_FLOOR, +(Math.floor(v / p + 1e-9) * p).toPrecision(1));
+}
+/* True when a stiffness sits within VOID_LIMIT_FACTOR of the void (only
+   possible at the floor): the void carries a visible share of the load. */
+function voidLimited(E_MPa, Es_MPa, voidRatio){
+  return (E_MPa > 0 && Es_MPa > 0 && voidRatio > 0) ? (E_MPa / Es_MPa < VOID_LIMIT_FACTOR * voidRatio) : false;
+}
+/* Softer void for a linear re-solve, or null when the default is already
+   at most ~2 % of the softest axis. */
+function elasticSoftVoid(R){
+  if (!R || !R.valid) return null;
+  var Emin = Math.min(R.Ex_MPa, R.Ey_MPa, R.Ez_MPa), cur = R.voidRatio || VOID_LINEAR_DEFAULT;
+  var v = voidForStiffness(Emin, R.Es_MPa, VOID_LINEAR_DEFAULT);
+  return (v != null && v <= 0.5 * cur) ? v : null;
+}
+
 function nlAxesToRun(){ return NONLIN_STATE.axis === 'all' ? NL_AXIS_KEYS.slice() : [NONLIN_STATE.axis]; }
 function nlAxisEntry(id, ax){ var s = NONLIN_AXES[id]; return (s && s[ax]) || null; }
 /* Axes with a usable (non-error) crush result for this design. */
@@ -523,7 +550,7 @@ async function runRealSweep(N, runToken){
       /* Skip recompute when nothing this mode depends on changed: grid N,
          prune flag, solver path (full 6-LC Voigt) and the recipe/material
          fingerprint (Sprint A — ids alone are not unique across imports). */
-      var elSig = 'N' + N + '|p' + GEOM_STATE.connectivity + '|full6|cg' + CG_MAXITER_FULL + '|r' + recipeFp[i];
+      var elSig = 'N' + N + '|p' + GEOM_STATE.connectivity + '|full6|cg' + CG_MAXITER_FULL + '|vs1|r' + recipeFp[i];
       if (d.results && !d.results._error && d.results._elasticSig === elSig){
         paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · cached');
         doneUnits++; bumpProgress();
@@ -534,7 +561,16 @@ async function runRealSweep(N, runToken){
 
       var elasticResult = null, solveErr = null;
       nFresh.elastic++;
-      try { elasticResult = await solveDesignElasticFull(recipe, N, connOpts()); }
+      try {
+        elasticResult = await solveDesignElasticFull(recipe, N, connOpts());
+        /* v0.16.0 — compliant design: re-solve with the void scaled to it */
+        var vSoft = elasticSoftVoid(elasticResult);
+        if (vSoft != null && !stale()){
+          paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · N=' + N + ' · compliant design · re-solving with void ' + vSoft.toExponential(0) + '…');
+          var R2 = await solveDesignElasticFull(recipe, N, Object.assign({}, connOpts(), { voidRatio: vSoft }));
+          if (R2 && R2.valid){ R2.voidFirst = elasticResult.voidRatio; R2.tCG_ms = (R2.tCG_ms || 0) + (elasticResult.tCG_ms || 0); elasticResult = R2; }
+        }
+      }
       catch (err){ solveErr = err; console.error('[run] design ' + d.id + ' elastic solve failed:', err); }
       if (stale()) return;
 
@@ -602,7 +638,15 @@ async function runRealSweep(N, runToken){
         renderDesignGrid();
 
         var baseUnits = doneUnits;
-        var nlSig = nlBase + '|a' + axKey;
+        /* v0.16.0 — void scaled to this axis's linear stiffness (cap 1e-3,
+           the old fixed value); 1e-4 when no linear result is available. */
+        var nlEs = (rcpN.material && rcpN.material.Es_MPa) || 110000;
+        var rLin = dn.results && !dn.results._error ? dn.results : null;
+        var eLin = rLin ? 1000 * (axKey === 'xx' ? rLin.E11 : axKey === 'yy' ? rLin.E22 : rLin.E33) : 0;
+        var nlVoid = voidForStiffness(eLin, nlEs, NL_VOID_CONTRAST);
+        var nlVoidScaled = nlVoid != null;
+        if (!nlVoidScaled) nlVoid = 1e-4;
+        var nlSig = nlBase + '|a' + axKey + '|v' + nlVoid;
         var nlExist = axStore[axKey];
         if (nlExist && !nlExist.error && nlExist._sig === nlSig && nlExist.alphaSteps){
           paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · ' + axLbl + ' · cached');
@@ -632,7 +676,7 @@ async function runRealSweep(N, runToken){
         nFresh.nonlinear++;
         try {
           nlSolver = new NonlinearSolverFull(nlN, nlfft);
-          nlSolver.upload(rcpN, connOpts());
+          nlSolver.upload(rcpN, Object.assign({}, connOpts(), { voidContrast: nlVoid }));
           nlOut = await nlSolver.crush(axisMap[axKey], { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: onNlStep, captureAlpha: true /* tie-up #5 — per-step plastic-strain field for the Nonlinear-tab scrubber */ });
         } catch (e){ nlErr = e; if (!stale()) console.error('[run] nonlinear solve failed for ' + dn.id + ' (' + axKey + '):', e); }
         if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
@@ -652,6 +696,7 @@ async function runRealSweep(N, runToken){
             /* tie-up #1/#5 — α progression for the Nonlinear field tab (transient; never localStorage'd) */
             alphaSteps: nlOut.alphaSteps || null,
             alphaMax: nlOut.alphaMax || 0,
+            voidContrast: nlVoid, voidScaled: nlVoidScaled, Es_MPa: nlEs,
             _sig: nlSig
           };
         }
@@ -931,6 +976,8 @@ function mapElasticToResults(R){
     /* v0.16.0 — per-load-case CG record ({axis, iters, converged}); the cards
        flag the moduli when any load case stopped at the iteration cap. */
     perLC:        R.perLC || null,
+    voidRatio:    R.voidRatio || null,     /* v0.16.0 — void used (scaled to the design when compliant) */
+    Es_MPa:       R.Es_MPa || null,
     cgMaxiter:    (typeof CG_MAXITER_FULL !== 'undefined') ? CG_MAXITER_FULL : null,
     /* Push 5 — full Voigt 6×6 effective compliance (S) and stiffness (C_eff)
        tensors in PHYSICAL-axis coordinates, units MPa.  S is consumed by the

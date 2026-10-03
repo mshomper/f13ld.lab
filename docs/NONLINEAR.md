@@ -20,7 +20,7 @@ That σ_y_eff is the number that **retires the provisional 880 MPa seam** in `P_
 
 ### Material defaults (Ti-6Al-4V, LPBF)
 
-`Es = 110000 MPa`, `nu = 0.34`; Voce `σ_Y0 = 950`, `σ_sat = 1150`, `δ = 60`, `H_lin = 300 MPa`. Void contrast `1e-3`.
+`Es = 110000 MPa`, `nu = 0.34`; Voce `σ_Y0 = 950`, `σ_sat = 1150`, `δ = 60`, `H_lin = 300 MPa`. Void contrast `1e-3` by default; **v0.16.0:** the lab passes `upload(recipe, { voidContrast })` = 1 % of the crushed axis's linear modulus ÷ Es, rounded down to one figure, clamped to [1e-6, 1e-3] (1e-4 without a linear result). At a fixed 1e-3 a pi-TPMS at E/Es ≈ 3e-4 read E0 = 166 MPa vs 31.6 MPa at 1e-5.
 
 ### Why uniaxial-stress, one normal axis
 

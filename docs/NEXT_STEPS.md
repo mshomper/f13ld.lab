@@ -24,7 +24,7 @@
 | **v0.14.0** | F13LD.foam family: verbatim mesh foam kernel (`13d-foam-kernel.js`), import + `#r=` inline links, periodic-only, foam sweep parameters (thickness exact by solid fraction, seeds regenerated for count / regularity / Lloyd / random seed), `family = foam` CSV rows, `validate-foam.js`. Calibration study ready: `FOAM_CALIBRATION.md` |
 | **v0.15.0** | Fast elastic path for sweeps (`16i-elastic-fast.js`): GPU-resident CG, packed operator, cached Γ, lean buffers; sweep CSV records `solver` and `gamma_build_s`; foam study moved to Standard (1e-4) |
 | **v0.15.1** | Sweep export adds the second grid's solid fraction, convergence and per-load-case iterations. Foam fit page (`docs/foam-calibration/foam-fit.html`); first-pass foam laws (`FOAM_CALIBRATION.md` §6); plateau pass ready (§7) |
-| **v0.16.0** | Three-axis crush (Crush axis = All; per-axis cache; all axes on one stress–strain plot; preview axis switch; cards use the weakest axis; buckling ratio = lowest per-axis ratio). Elastic CG cap 300 → 1000 with a "not converged" flag on card moduli |
+| **v0.16.0** | Three-axis crush (Crush axis = All; per-axis cache; all axes on one stress–strain plot; preview axis switch; cards use the weakest axis; buckling ratio = lowest per-axis ratio). Elastic CG cap 300 → 1000 with a "not converged" flag on card moduli. Void scaled to the design (1 % of its own stiffness, floor 1e-6) for linear runs (one re-solve when compliant) and per crush axis; "void-limited" flags. Sweep Standard cap 1000 + `cg_maxiter` column; foam re-run list (`FOAM_CALIBRATION.md` §10) |
 
 ---
 

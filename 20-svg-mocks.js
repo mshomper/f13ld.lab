@@ -394,10 +394,14 @@ function buildMergedCurvePlot(size){
   for (var ak = 0; ak < 3; ak++){ var akk = ['xx', 'yy', 'zz'][ak]; if (axesSeen[akk]) axList.push(akk.charAt(0).toUpperCase()); }
   var axisLabel = axList.join(' · ');
   var capPct = Math.round((entries[0].nl.epsCap || 0.05) * 100);
+  /* v0.16.0 — void used (scaled per design and axis) */
+  var vMin = Infinity, vMax = 0;
+  for (var vi = 0; vi < entries.length; vi++){ var vc = entries[vi].nl.voidContrast; if (vc > 0){ if (vc < vMin) vMin = vc; if (vc > vMax) vMax = vc; } }
+  var voidTxt = (vMax > 0) ? (' · void ' + vMin.toExponential(0) + (vMax > vMin * 1.0001 ? '–' + vMax.toExponential(0) : '')) : '';
   var html = '<div class="mp-head">' +
     '<div class="mp-title">Stress–Strain · Comparison</div>' +
     '<div class="mp-head-right">' +
-      '<span class="mp-sub">UNIAXIAL · ' + axisLabel + ' · J2 plasticity (small strain) · N=' + entries[0].nl.N + ' · ε≤' + capPct + '%</span>' +
+      '<span class="mp-sub">UNIAXIAL · ' + axisLabel + ' · J2 plasticity (small strain) · N=' + entries[0].nl.N + ' · ε≤' + capPct + '%' + voidTxt + '</span>' +
       '<span class="mp-scale">' +
         '<button class="mp-scale-btn' + (!norm ? ' active' : '') + '" onclick="onCurveScaleToggle(\'abs\')" title="Stress in MPa">MPa</button>' +
         '<button class="mp-scale-btn' + (norm ? ' active' : '') + '" onclick="onCurveScaleToggle(\'norm\')" title="Each curve divided by its own yield strength — compares curve shape across designs of very different strength">÷ own yield</button>' +

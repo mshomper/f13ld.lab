@@ -166,6 +166,9 @@ function statsForDesign(d, mode){
   var cgFlag = elasticNotConvergedText(r);
   function dv(key){
     if (cgFlag && /^E\d\d$|^G\d\d$/.test(key) && r[key] && isFinite(r[key])) return [cgFlag, 'warn'];
+    /* v0.16.0 — stiffness within 50x of the void (void at its floor) */
+    if (/^E\d\d$|^G\d\d$/.test(key) && r[key] > 0 && typeof voidLimited === 'function' && voidLimited(r[key] * 1000, r.Es_MPa, r.voidRatio))
+      return ['void-limited \u00b7 void ' + r.voidRatio.toExponential(0) + ' of solid', 'warn'];
     return (r[key] && isFinite(r[key])) ? deltaVsBaseline(r[key], key, d.id) : ['\u2014','neut'];
   }
   var zVal = (r.zener > 0 && isFinite(r.zener)) ? r.zener.toFixed(2) : '\u2014';
@@ -1563,6 +1566,9 @@ function renderNonlinearViz(){
               '<div class="nl-mc-head"><span class="dot" style="background:' + em.design.color + '"></span>' +
                 nlCubeLabel(em.design) + ' \u00b7 ' + em.axisKey.charAt(0).toUpperCase() + ' crush</div>' +
               '<div class="nl-mc-row"><span>Crush Modulus</span><b>' + crushMod + '</b></div>' +
+              ((typeof voidLimited === 'function' && voidLimited(nlm.E0, nlm.Es_MPa, nlm.voidContrast))
+                ? '<div class="nl-mc-row nl-mc-warn"><span>void-limited</span><b>void ' + nlm.voidContrast.toExponential(0) + ' of solid</b></div>' : '') +
+              ((nlm.voidScaled === false) ? '<div class="nl-mc-row nl-mc-warn"><span>void not scaled</span><b>run Elastic too</b></div>' : '') +
               '<div class="nl-mc-row"><span>Yield Strength</span><b>' + yStr + '</b></div>' +
               nlOtherAxesRow(em.design.id, em.axisKey) +
               '<div class="nl-mc-row"><span>Load Capacity</span><b>' + loadStr + '</b></div>' +
