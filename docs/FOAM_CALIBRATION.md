@@ -1,6 +1,6 @@
 # F13LD.foam stiffness calibration — study design (v0.14.0)
 
-**Date:** 2026-10-02 · **Status:** ready to run on Matt's GPU · **Plan:** [`FOAM_CALIBRATION_HANDOFF.md`](FOAM_CALIBRATION_HANDOFF.md) (approved with defaults)
+**Date:** 2026-10-02 · **Status (2026-10-03):** first pass fitted (§6–7) and live in F13LD.foam v0.5.0 (§9); **provisional** — 27 runs stopped at the old 300-iteration cap, re-run list ready (§10); cell-count pass ready (§8) · **Plan:** [`FOAM_CALIBRATION_HANDOFF.md`](FOAM_CALIBRATION_HANDOFF.md) (approved with defaults)
 
 Goal: fit F13LD.foam's in-tool stiffness estimate to the lab's validated FFT solver, per topology, rather than borrowing literature fits.
 

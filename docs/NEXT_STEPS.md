@@ -1,7 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.17.1 · 2026-10-03 · foam laws fitted (incl. plateau); F13LD.foam v0.5.0 estimator; cell-count pass ready (§1-foam)
-**Full history of the last session:** [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md) (previous: [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
+**As of:** v0.17.1 · 2026-10-03 · three-axis crush, design-scaled void, rebuilt crush side-stress loop, Plotly stress–strain plot; foam laws provisional (27 calibration runs to re-run at the 1000-iteration cap)
+**Full history of the last session:** [`SESSION_RECAP_2026-10-03.md`](SESSION_RECAP_2026-10-03.md) (previous: [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md), [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
 ---
@@ -33,11 +33,43 @@
 
 ---
 
-## 1. CURRENT FOCUS — PI-TPMS paper, production pass (v0.12.1)
+## 1. PICK UP HERE (2026-10-03)
+
+Do these in order; 1–3 are on Matt's GPU, the rest are dev work to propose first.
+
+1. **Verify v0.17.1 on the RTX machine** (nothing below has run on real hardware yet — recap §5). Reload, check the header says v0.17.1, clear cached crushes (`for (const k in NONLIN_BY_DESIGN) delete NONLIN_BY_DESIGN[k]; for (const k in NONLIN_AXES) delete NONLIN_AXES[k];`), then:
+   - **Poisson-disk foam, Crush axis = All.** Expect X: `[crush] lateral precision floor …% … restarting at the tighter tolerance`, then a tight run; Y and Z start tight; no "post-yield approximate"; ~2½–3 min total. Report the floor lines and the total time.
+   - **pi-TPMS (gyroid × Fischer-Koch S), All.** Expect floor ~0.4 %, ~1.2 s per axis, curves bending below the elastic slope after yield, card E ≈ crush E0 (~30–32 MPa).
+   - **The new plot**: scales, Focus X/Y/Z/All, legend chips, hover-scrub of the cubes, click-to-pin, zoom box, PNG export. Note anything to push further or pull back.
+2. **Foam calibration re-run at the 1000-iteration cap** ([`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §10). Sweep → CSV → `docs/foam-calibration/foam_rerun_1000_runs.csv` (27 runs) with the §1 settings (Standard, void 1e-6, 64 ↔ 128 pair, order 2). Also run `foam_cellcount_runs.csv` (6) and, if time allows, re-run `foam_plateau_runs.csv` (19). Load results into `foam-fit.html` **old file first, re-runs after** (later run ids replace earlier ones) and export the fit JSON + summary.
+3. **Refit and decide** (with Claude, from the fit page output): updated open / plateau laws; whether the open law needs a cell-count term or the ±7 % cell-count band can go. Then **F13LD.foam v0.5.1**: paste the new constants into its `FOAM_CAL` block, update its README numbers.
+4. **PI-TPMS paper** (§1c) — Figure 6, verification table, Section 5 text. The v0.16–v0.17 changes do not touch sweep numbers (sweeps keep their own void 1e-6 and precision preset; the production pass ran at High, 1000 iterations).
+5. **Dev cycle** — §1a.
+
+## 1-foam. Foam stiffness calibration — laws provisional until the re-run
+
+Laws (open 0.724 ρ^1.93, closed 0.304 ρ + 0.456 ρ², plateau factor 1 + 0.118(1 − e^(−k/0.111)), G = E/2(1+ν), stretch and Poisson-seed factors) are in [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §6–7 and live in F13LD.foam v0.5.0 (§9). **27 of the 48 runs stopped at the old 300-iteration cap** (open / plateau 18–35 % on both grids, closed 12–18 % at 64³, set D), and a stopped solve reads stiff, so the open law above 18 % may be high. Re-run, refit and update F13LD.foam per §1 items 2–3.
+
+## 1a. Next dev cycle — pick up (in suggested order; propose before building)
+
+1. **Crush on real hardware, follow-ups** (after §1 item 1):
+   - If the foam's tight run is too slow, options: tighten only the steps after yield; or cache the tight elastic setup across runs of the same design (today it is per run, shared across axes).
+   - The 16f CPU oracle now mirrors 16g's lateral loop (Broyden, floor, one retry) but has only been syntax-checked — run a small CPU crush on Matt's machine against 16g.
+   - Real-GPU check of the v0.8.1 cutback / early-stop paths (hyperuniform N=64 with `NL_TRACE`).
+2. **Deferred crush items (not yet approved):** a quasi-elastic gradient readout (ISO 13314 style) on the Nonlinear tab; grid labels on cards and a warning when the elastic and crush grids differ.
+3. **Plot follow-ups:** use `Plotly.toImage` for the future PDF report; reuse `20b-curve-plotly.js` patterns for the Sweep Atlas line chart (Plotly-style hover was already on its wish list); retire the SVG plot once the Plotly one has been used for a while (keep it as the offline fallback until then).
+4. **Normal (non-sweep) elastic runs on the fast path.** Runs that capture fields still use 16b (2 blocking readbacks per CG iteration). Port field capture to `16i-elastic-fast.js`; the compliant-design void re-solve (v0.16.0) makes this more valuable — those designs now solve twice.
+5. **Thinnest feature, properly** — (a) `thinnest_feature_T` export column; (b) fix the voxel estimator's low bias on flattened tubes (`SWEEP.md` §8); (c) builder "step by thinnest feature".
+6. **Partial-volume voxels** (laminate mixing, Kabel/Merkert/Schneider 2015): N = 64 is 11–14 % low on thin PI / skeletal walls.
+7. **Foam preview at 96³** in the lab (deferred by Matt until his foam testing is done); spinodoid demo does not converge on either elastic path — look at it.
+8. **Main-lab axis triad check** (triad from rotation-matrix columns vs the ray-marcher's transpose).
+9. **Sprint B2 — buckling speed** (§2).
+
+## 1c. PI-TPMS paper — production pass done; write-up open
 
 Matt's PI-TPMS Paper 1, Section 5: the run matrix is now **42 rows** (A4m added; E1 moved to A4m's wall ratio). Everything needed to produce the paper numbers is on main. See [`SWEEP.md`](SWEEP.md) §4–§8.
 
-**Next action (Matt, on his GPU):** load the 42-row matrix → High (1e-5) · void 1e-6 · second grid **64 ↔ 128 pair** · order 2 → Run 42 (~15–20 min) → Export CSV. This replaces the planned B6 / B7 reruns and also redoes B5 and G3. Then analyse (Figure 6, verification table, Section 5 text).
+**Status:** the 42-row production pass (High 1e-5 · void 1e-6 · 64 ↔ 128 pair · order 2) ran on Matt's GPU on 2026-10-01 and was checked ([`SWEEP.md`](SWEEP.md) §9). **Next:** build Figure 6, the verification table vs Vixiv, fitted density exponents and directional-mean columns, and the Section 5 text with Matt; check B7's shear and B6's no-load axes at 1e-5.
 
 **Decisions on record (Matt, 2026-10-01):**
 - Keep the lab's island trim (faithful to how cells are built physically); report trim differences as notes.
@@ -52,20 +84,6 @@ Matt's PI-TPMS Paper 1, Section 5: the run matrix is now **42 rows** (A4m added;
 - At void 1e-6 the lab reads ~10 % below Vixiv at the run grid and ~5–7 % below after extrapolation (A5 three-grid: 0.95). The earlier near-perfect matches were the void stiffness. Plausible reason for the residual gap: voxel FFT converges from below, displacement FE from above — unconfirmed.
 - Matched feature (0.126 T): A4m is 1.77× D7 in-plane, 0.43× along z, ≈ equal on the directional mean, at 1.7× the solid; D7 is 2.4× stiffer along [111] than its axes — report directional mean or E max / E min, not axes only (`SWEEP.md` §8).
 - Fischer–Koch G set: Ez × 8.5 from wall ratio 0.17 → 0.19 (contacts forming; Euler characteristic 25 → 33 → 41 → 57 loops per cell). G1 sits at contact onset and is the most grid-sensitive run.
-
-## 1-foam. Foam stiffness calibration — estimator live in F13LD.foam v0.5.0; cell-count pass next
-
-Laws: open 0.724 ρ^1.93, closed 0.304 ρ + 0.456 ρ², plateau factor 1 + 0.118(1 − e^(−k/0.111)), G = E/2(1+ν), stretch and Poisson-seed factors — [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §6–7, estimator §9. **Next action (Matt, on his GPU):** run `docs/foam-calibration/foam_cellcount_runs.csv` (6 runs), drop all three results files into `docs/foam-calibration/foam-fit.html`; then decide whether the open law needs a cell-count term or the ±7 % cell-count band can come out of F13LD.foam.
-
-## 1a. Next dev cycle — pick up (in suggested order)
-
-1. **Production pass done and checked (`SWEEP.md` §9).** Next: build Figure 6, the verification table and the Section 5 text from it with Matt — Figure 6 data, verification table vs Vixiv, fitted density exponents, directional-mean columns. Check B7's shear and B6's no-load axes at 1e-5.
-2. **Thinnest feature, properly** (Matt: "later" — this is the next lab feature). (a) A `thinnest_feature_T` export column. (b) Fix the voxel estimator's low bias on flattened tubes (the medial ribbon's edge balls — ~3–4 % low on PI; see `SWEEP.md` §8), e.g. keep only ridge points whose ball is a local maximum along the ridge, or measure minor width by chords at ridge points. (c) Builder: *step by thinnest feature*, like step by solid fraction.
-3. **Partial-volume voxels** (laminate mixing, Kabel/Merkert/Schneider 2015) — the lab's N = 64 numbers are 11–14 % low on thin PI/skeletal walls; this would shrink the grid gap and the need for extrapolation.
-4. **Elastic solver speed — done for sweeps in v0.15.0 (`16i-elastic-fast.js`).** GPU-resident CG (one 32-float readback per block of up to 16 iterations), packed batch-3 spectral operator (the nonlinear v0.8.1 kernels), Γ built once per grid and cached on the GPU, lean buffers. Same operator / CG / stopping test; checked against the legacy path on the software adapter (Schwarz P, beam BCC: C within 1e-6, identical iteration counts and residuals). **Pending: Matt's GPU** — `await runElasticFastTest(64)` in the console, then time a few foam rows. Normal (non-sweep) runs that capture fields still use 16b; porting them is the follow-up.
-5. **Main-lab axis triad check:** the geometry tiles' triad is drawn from the rotation matrix columns while the ray-marcher shows the transpose — verify, fix if wrong (the Atlas computes its own and is consistent).
-6. **Atlas, later:** self-contained HTML export (results + views only, licence-safe); per-axis tick formatting polish on the 3-D surface; optional Plotly-style hover crosshair on the line chart.
-7. **Sprint B2 — buckling speed** (still queued, §2).
 
 ## 1b. STL unit-cell import (done, v0.9.0–v0.9.1)
 
@@ -149,7 +167,7 @@ Also:
 
 **Speed**
 
-- **Elastic solver (16b), GPU-resident CG.** It still does 2 blocking `mapAsync` per CG iteration. Port the v0.8.1 nonlinear approach: scalars stay on the GPU, convergence is checked every ≤16 iterations, and σ̄ is reduced on the GPU.
+- **Elastic solver (16b), GPU-resident CG.** Done for sweeps (v0.15.0, `16i-elastic-fast.js`); normal runs with field capture still use 16b — §1a item 4.
 - **Real-GPU check of the v0.8.1 cutback / early-stop paths** (hyperuniform N=64 with `NL_TRACE`).
 
 **Physics and fidelity**
@@ -165,7 +183,7 @@ Also:
 
 **UI and roadmap**
 
-- **Plot marker synced to the strain scrubber.**
+- ~~Plot marker synced to the strain scrubber~~ — done in v0.17.0 (amber strain cursor, hover-scrub).
 - **Finite strain / damage / densification** (long term) for plateau and energy-absorption curves.
 - **Roadmap phases 9–10:** PDF report export, F13LD.vault integration.
 
@@ -192,6 +210,11 @@ Also:
 | `F13LD_buckleBench(recipe, N)` | Any recipe through the real worker pool (voxel FE by default) |
 | `runNonlinearFastOpTest()` | Fast nonlinear operator vs the reference |
 | `window.NL_TRACE` / `NL_FAST` / `NL_PREDICT` / `NL_EW` | Nonlinear logging and A/B switches |
+| `await runElasticFastTest(64)` | Fast elastic path (16i) vs 16b on demo recipes |
+| `node validate-foam.js` | Foam kernel byte-match across lab / mesh / foam, field parity, import, sweep |
+| `NL_LATERAL_*`, `NL_TIGHT_*`, `VOID_FLOOR`, `VOID_SCALE_FRAC` | Crush side-stress limits, tight-solve tolerances, void rule (recap §8) |
+| `[crush-timing]` / `[crush]` console lines | Per-step macro corrections, cutbacks, step-1 lateral floor, tight restarts |
+| Stubbed-solver page tests | Swap `NonlinearSolverFull` / `solveDesignElasticFull` for stubs in a headless page to test the run loop, caching and UI (SwiftShader cannot run the crush pipeline) |
 | Node harnesses | Load the numbered solver files into one scope with small `window/document/performance` shims (see `proto/fe-buckling/h.js`) |
 | Headless WebGPU | SwiftShader in the preinstalled Chromium, `--enable-unsafe-webgpu --use-webgpu-adapter=swiftshader --enable-features=Vulkan`, served over `http://localhost` |
 
@@ -200,7 +223,7 @@ Also:
 ## 4. Conventions (do not violate)
 
 - **Line endings.**
-  - `index.html`, `50-controls.js`, `40-design-grid.js`, `21-raymarcher.js`, `22-stiffness-viz.js` and `README.md` are CRLF; `14a-connectivity.js` and `16b-elastic-solver-full.js` are mixed (mostly CRLF, some LF blocks — match the lines around an edit). Check each with `file`.
+  - `40-design-grid.js`, `21-raymarcher.js` and `22-stiffness-viz.js` are CRLF; `50-controls.js`, `14a-connectivity.js` and `16b-elastic-solver-full.js` are mixed (match the lines around an edit); `index.html`, `README.md` and the docs are currently LF. Check each with `file` before editing.
   - Patch these with count-guarded Python (`newline=""`, assert the match count).
   - Never normalize endings.
 - **Solver frame = physical frame** since v0.7.2 (x is the slowest index in `buildVoxels`).
@@ -210,6 +233,10 @@ Also:
 - Recipes without normalization flags default to normalization OFF.
 - Click-test on the raw.githack branch preview before merging.
 - **Never use the words "genuine" / "genuinely."**
+- **Version bump** on significant changes: `index.html` header, `99-init.js` banner, README "What's new", §0 table here.
+- **Commits / PRs:** `Co-Authored-By: Claude …` is fine; no claude.ai session links anywhere in the repo. GitHub GraphQL is blocked from Claude sessions — open and merge PRs with `gh api` (REST).
+- **Vendored code** lives in `vendor/` with its licence file (Plotly basic 2.35.2, MIT). Plotly 2.35: no layout transitions with `fillgradient` traces (throws).
+- **Heavy analyses run on Matt's machine** (give him a tool or a page), not on the VM.
 - Present proposed diffs for approval before applying.
 
 Repo: `github.com/mshomper/f13ld.lab` · contact: matt@notarobot-eng.com

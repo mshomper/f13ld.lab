@@ -90,7 +90,7 @@ For parameters where solid is a threshold on a per-voxel quantity (TPMS level, s
 
 ## 2. Settings
 
-- **Precision:** *Standard* — CG tolerance 1e-4, up to 300 iterations per load case (same as a normal run). *High* — 1e-5, up to 1,000 iterations. A6 at N = 64 on the CPU reference took ~60 iterations per load case at 1e-5.
+- **Precision:** *Standard* — CG tolerance 1e-4, up to 1,000 iterations per load case (300 before v0.16.0; the export's `cg_maxiter` column records which). *High* — 1e-5, up to 1,000 iterations. A6 at N = 64 on the CPU reference took ~60 iterations per load case at 1e-5.
 - **Islands:** follows the Connectivity selector in the run controls (default *all networks · islands removed*, Matt's choice for the paper: faithful to how the cells are built). Each run records the voxel solid fraction before and after the trim; any run where the trim removed solid gets a note. On the §5 matrix the trim removes nothing on any run, B10 included.
 - **Normalization:** solved with E_s = 110,000 MPa and divided out, so every stiffness is ÷ E_s.
 - **Void stiffness (v0.10.1):** 1e-4, 1e-6 or 1e-8 × E_s; **sweeps default to 1e-6** (Matt, 2026-10-01). Normal lab runs keep 1e-4. At 1e-4 the void adds roughly 1e-4 to every direction, which inflated A1–A3 and the unloaded axes of B7 (§6). Lowering it doesn't change the iteration count. Recorded per run (`void_ratio`).
