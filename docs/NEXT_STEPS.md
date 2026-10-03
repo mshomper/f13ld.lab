@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.14.0 · 2026-10-02 · F13LD.foam family added; foam calibration study ready to run (§1-foam)
+**As of:** v0.15.0 · 2026-10-02 · fast elastic sweep path (pending GPU check); F13LD.foam family; foam calibration study ready to run (§1-foam)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md) (previous: [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -22,6 +22,7 @@
 | **v0.12.1** | Sweep panel in three sections (define runs: builder / CSV tabs · run settings · runs); ↺ New sweep; ✕ remove CSV; renamable study title; second grid **64 ↔ 128 pair**. Matched-feature A4m (`SWEEP.md` §8) |
 | **v0.13.0** | Field-pair PI-TPMS (F13LD.tpms v1.1.0 / mesh v0.7.1): field B any preset or terms at a whole-number frequency multiple; sweep steps field B frequency |
 | **v0.14.0** | F13LD.foam family: verbatim mesh foam kernel (`13d-foam-kernel.js`), import + `#r=` inline links, periodic-only, foam sweep parameters (thickness exact by solid fraction, seeds regenerated for count / regularity / Lloyd / random seed), `family = foam` CSV rows, `validate-foam.js`. Calibration study ready: `FOAM_CALIBRATION.md` |
+| **v0.15.0** | Fast elastic path for sweeps (`16i-elastic-fast.js`): GPU-resident CG, packed operator, cached Γ, lean buffers; sweep CSV records `solver` and `gamma_build_s`; foam study moved to Standard (1e-4) |
 
 ---
 
@@ -47,14 +48,14 @@ Matt's PI-TPMS Paper 1, Section 5: the run matrix is now **42 rows** (A4m added;
 
 ## 1-foam. Foam stiffness calibration — ready for Matt's GPU run
 
-v0.14.0 adds the foam family (F13LD.foam v0.4.0 has ⚗ Open in F13LD.lab and a live solid-fraction readout). **Next action (Matt, on his GPU):** ⟳ Sweep → CSV tab → load `docs/foam-calibration/foam_calibration_runs.csv` (48 runs) → High (1e-5) · void 1e-6 · second grid **64 ↔ 128 pair** · order 2 → Run → Export CSV. Then fit E/Es = C·ρⁿ per topology and build the estimator panel in F13LD.foam. Study design, resolution limits (closed-cell walls are thin — §2) and the CPU spot checks: [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md). Original plan: [`FOAM_CALIBRATION_HANDOFF.md`](FOAM_CALIBRATION_HANDOFF.md).
+v0.14.0 adds the foam family (F13LD.foam v0.4.0 has ⚗ Open in F13LD.lab and a live solid-fraction readout). **Next action (Matt, on his GPU):** ⟳ Sweep → CSV tab → load `docs/foam-calibration/foam_calibration_runs.csv` (48 runs) → **Standard (1e-4)** · void 1e-6 · second grid **64 ↔ 128 pair** · order 2 → Run → Export CSV (Standard matched High to 3 significant figures on the first 8 rows; v0.15.0 fast path). Then fit E/Es = C·ρⁿ per topology and build the estimator panel in F13LD.foam. Study design, resolution limits (closed-cell walls are thin — §2) and the CPU spot checks: [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md). Original plan: [`FOAM_CALIBRATION_HANDOFF.md`](FOAM_CALIBRATION_HANDOFF.md).
 
 ## 1a. Next dev cycle — pick up (in suggested order)
 
 1. **Production pass done and checked (`SWEEP.md` §9).** Next: build Figure 6, the verification table and the Section 5 text from it with Matt — Figure 6 data, verification table vs Vixiv, fitted density exponents, directional-mean columns. Check B7's shear and B6's no-load axes at 1e-5.
 2. **Thinnest feature, properly** (Matt: "later" — this is the next lab feature). (a) A `thinnest_feature_T` export column. (b) Fix the voxel estimator's low bias on flattened tubes (the medial ribbon's edge balls — ~3–4 % low on PI; see `SWEEP.md` §8), e.g. keep only ridge points whose ball is a local maximum along the ridge, or measure minor width by chords at ridge points. (c) Builder: *step by thinnest feature*, like step by solid fraction.
 3. **Partial-volume voxels** (laminate mixing, Kabel/Merkert/Schneider 2015) — the lab's N = 64 numbers are 11–14 % low on thin PI/skeletal walls; this would shrink the grid gap and the need for extrapolation.
-4. **Elastic solver speed (16b GPU-resident CG):** still 2 blocking `mapAsync` per CG iteration. Port the v0.8.1 nonlinear approach. Directly speeds up sweeps.
+4. **Elastic solver speed — done for sweeps in v0.15.0 (`16i-elastic-fast.js`).** GPU-resident CG (one 32-float readback per block of up to 16 iterations), packed batch-3 spectral operator (the nonlinear v0.8.1 kernels), Γ built once per grid and cached on the GPU, lean buffers. Same operator / CG / stopping test; checked against the legacy path on the software adapter (Schwarz P, beam BCC: C within 1e-6, identical iteration counts and residuals). **Pending: Matt's GPU** — `await runElasticFastTest(64)` in the console, then time a few foam rows. Normal (non-sweep) runs that capture fields still use 16b; porting them is the follow-up.
 5. **Main-lab axis triad check:** the geometry tiles' triad is drawn from the rotation matrix columns while the ray-marcher shows the transpose — verify, fix if wrong (the Atlas computes its own and is consistent).
 6. **Atlas, later:** self-contained HTML export (results + views only, licence-safe); per-axis tick formatting polish on the 3-D surface; optional Plotly-style hover crosshair on the line chart.
 7. **Sprint B2 — buckling speed** (still queued, §2).

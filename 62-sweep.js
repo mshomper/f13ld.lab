@@ -394,7 +394,8 @@ async function sweepSolveAt(recipe, N, prec, conn) {
     if (p.finalResidual != null && p.finalResidual > resMax) resMax = p.finalResidual;
   });
   var Cfull = R.C_eff.map(function (v) { return v / SWEEP_ES; });
-  return { N: N, R: R, Cfull: Cfull, wall: wall, iters: itTot, itersBy: itersBy, residual: resMax, converged: !!R.converged, noLoad: noLoad };
+  return { N: N, R: R, Cfull: Cfull, wall: wall, iters: itTot, itersBy: itersBy, residual: resMax, converged: !!R.converged, noLoad: noLoad,
+           solver: R.solverPath || 'legacy', gamma_s: (R.tGamma_ms || 0) / 1000 };
 }
 /* An axis reading within this of zero (÷ E solid) carries no load: 20 × the void stiffness, at least 1e-5. */
 function sweepNoLoadLimit() { return Math.max(20 * (SWEEP_STATE.voidRatio || 1e-4), 1e-5); }
@@ -417,7 +418,8 @@ async function sweepRunOne(run) {
     Ex: R.Ex_MPa / SWEEP_ES, Ey: R.Ey_MPa / SWEEP_ES, Ez: R.Ez_MPa / SWEEP_ES,
     Gyz: R.Gyz_MPa / SWEEP_ES, Gxz: R.Gxz_MPa / SWEEP_ES, Gxy: R.Gxy_MPa / SWEEP_ES,
     nu_xy: R.nu_xy, nu_xz: R.nu_xz, nu_yz: R.nu_yz,
-    iters: A.iters, itersBy: A.itersBy, residual: A.residual, converged: A.converged, wall_s: A.wall
+    iters: A.iters, itersBy: A.itersBy, residual: A.residual, converged: A.converged, wall_s: A.wall,
+    solver: A.solver, gamma_s: A.gamma_s   /* v0.15.0 — 'fast' (16i) or 'legacy'; Γ build time (0 when cached) */
   };
   if (A.noLoad) res.noLoad = A.noLoad;
   /* Optional second grid + extrapolation: C_ext = C_fine + (C_fine − C_coarse) / (2^p − 1),
@@ -612,7 +614,7 @@ function sweepExportCsv() {
     'ext_order', 'ext_from_grids']);
   for (var ie = 1; ie <= 6; ie++) for (var je = ie; je <= 6; je++) cols.push('ext_C' + ie + je);
   cols = cols.concat(['ext_Ex', 'ext_Ey', 'ext_Ez', 'ext_Gyz', 'ext_Gxz', 'ext_Gxy', 'ext_nu_xy', 'ext_nu_xz', 'ext_nu_yz',
-    'ext_ratio_Ex', 'ext_ratio_Ey', 'ext_ratio_Ez', 'notes', 'error']);
+    'ext_ratio_Ex', 'ext_ratio_Ey', 'ext_ratio_Ez', 'solver', 'gamma_build_s', 'notes', 'error']);
   var lines = [cols.join(',')];
   SWEEP_STATE.runs.forEach(function (run) {
     var r = SWEEP_STATE.results[run.id];
@@ -644,6 +646,7 @@ function sweepExportCsv() {
       row.iters_total = r.iters;
       for (var ib in r.itersBy) row[ib] = r.itersBy[ib];
       row.final_residual_max = r.residual; row.converged = r.converged ? 'yes' : 'no'; row.wall_time_s = r.wall_s;
+      row.solver = r.solver || ''; row.gamma_build_s = r.gamma_s;
       ['Ex', 'Ey', 'Ez'].forEach(function (q) {
         row['ref_' + q] = ref[q];
         row['ratio_' + q] = (ref[q] != null && Math.abs(ref[q]) > 1e-5) ? r[q] / ref[q] : null;
