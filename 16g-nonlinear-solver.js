@@ -927,6 +927,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
      every lateral correction and carried across load steps (16f nlBroydenUpdate). */
   var Hff = Sff ? new Float64Array(Sff) : null;
   var lateralCutbacks = 0;
+  var latFloor = null, latLimit = Infinity;   /* v0.16.3 — precision floor measured on step 1 (see 16f NL_LATERAL_FLOOR_MULT) */
   var Cfa = new Float64Array(nf);
   for (var ci = 0; ci < nf; ci++) Cfa[ci] = C[freeIdx[ci] * 6 + axis];
   var S6 = invert6x6(C);
@@ -971,7 +972,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     es._copyPair(encS, { n: this.epp_n, s: this.epp_s }, { n: this.snapEpp_n, s: this.snapEpp_s });
     d.queue.submit([encS.finish()]);
 
-    var trial = eAxis + dStep, ok = false, res = null, cut = 0;
+    var trial = eAxis + dStep, ok = false, res = null, cut = 0, latCuts = 0;
     while (cut <= cutbackMax) {
       eb[axis] = trial;
       /* Seed the free lateral strains. First step (cold): elastic predictor, so
@@ -994,20 +995,16 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       }
       /* field predictor from the last two converged fields (snap = this step's start) */
       if (this._predictOn && step > 0 && eAxis > eAxisPP) this._fPredict((trial - eAxis) / (eAxis - eAxisPP));
-      /* v0.16.2 — guarded lateral loop (see nlLateralStep, 16f):
-         (a) a correction that at least doubles the lateral stress is half taken
-             back and not learned from (Broyden on f32 noise overshot to 22 %);
-         (b) one correction moves no lateral strain by more than this step's
-             axial increment;
-         (c) the attempt with the lowest lateral stress is kept (re-solved
-             when it was not the last one) if it is within latAccept;
+      /* Lateral loop (nlLateralStep, 16f): Broyden-updated corrections;
+         (c) the attempt with the lowest lateral stress is kept (re-solved when
+             the last one is over the limit and clearly worse);
          (d) every cutback restarts from the elastic compliance (a learned
              compliance reused on every retry trapped a compliant pi-TPMS Z
-             crush in five field divergences). */
+             crush in five field divergences).
+         v0.16.3: v0.16.2's per-correction cap and overshoot backtrack removed. */
       var fieldDiverged = false, latRel = 0, mit = 0;
       if (!broyden) Hff = new Float64Array(Sff);
-      var lat = { xPrev: null, fPrev: null, latPrev: Infinity, lastDx: null, best: null,
-                  cap: Math.max(Math.abs(trial - eAxis), 1e-6), H: Hff, broyden: broyden, n: nf };
+      var lat = { xPrev: null, fPrev: null, best: null, H: Hff, broyden: broyden, n: nf };
       var solveAt = async function (self) {
         var encB = d.createCommandEncoder();
         es._copyPair(encB, { n: self.snapEpp_n, s: self.snapEpp_s }, { n: self.epp_n, s: self.epp_s });
@@ -1028,7 +1025,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       }
       if (mit >= macroMax) mit = macroMax - 1;
       /* (c) keep the best attempt when the last one is over the limit */
-      if (!fieldDiverged && latRel > latAccept && lat.best && lat.best.lat <= latAccept) {
+      if (!fieldDiverged && latRel > latAccept && lat.best && lat.best.lat < 0.9 * latRel) {
         for (var rb = 0; rb < nf; rb++) eb[freeIdx[rb]] = lat.best.x[rb];
         res = await solveAt(this);
         if (!res.converged) fieldDiverged = true;
@@ -1038,16 +1035,17 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
           latRel = Math.sqrt(snB) / srefB;
         }
       }
-      /* v0.16.1 — accept when the field Newton converged AND the lateral stress
-         is within latAccept (2 % of axial).  A larger residual partly confines
-         the cell and reads stiff (compliant pi-TPMS: post-yield slope above the
-         elastic one), so the step is cut back like a field divergence; on the
-         last allowed attempt it is accepted and recorded (lateralResMax). */
-      var latBad = !fieldDiverged && latRel > latAccept;
+      /* v0.16.1/3 — accept when the field Newton converged AND the lateral
+         stress is within latLimit = max(2 %, 1.5 x this design's precision
+         floor, measured on step 1).  A larger residual partly confines the
+         cell and reads stiff, so the step is cut back — at most
+         NL_LATERAL_RETRIES time(s) per step (halving cannot beat a precision
+         floor) — then accepted and recorded (lateralResMax). */
+      var latBad = !fieldDiverged && latRel > latLimit && latCuts < NL_LATERAL_RETRIES;
       if (!fieldDiverged && (!latBad || cut >= cutbackMax)) { ok = true; break; }
       if (latBad) {
-        lateralCutbacks++;
-        console.warn('[crush] lateral stress ' + (latRel * 100).toFixed(1) + '% of axial after ' + macroMax + ' corrections (> ' + (latAccept * 100).toFixed(0) + '%) @ eps=' + (trial * 100).toFixed(2) + '% — cutting the step back');
+        lateralCutbacks++; latCuts++;
+        console.warn('[crush] lateral stress ' + (latRel * 100).toFixed(1) + '% of axial after ' + macroMax + ' corrections (> ' + (latLimit * 100).toFixed(1) + '%) @ eps=' + (trial * 100).toFixed(2) + '% — cutting the step back once');
       }
       var encR = d.createCommandEncoder();
       es._copyPair(encR, { n: this.snap_n, s: this.snap_s }, es.eps);
@@ -1080,6 +1078,12 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
     eAxis = trial;
     curve.push({ eps: eAxis, sigma: res.sigma_bar[axis] });
     if (latRel > lateralResMax) lateralResMax = latRel;
+    if (latFloor === null){   /* v0.16.3 — step 1 (elastic) sets the design's precision floor */
+      latFloor = latRel;
+      latLimit = Math.max(latAccept, NL_LATERAL_FLOOR_MULT * latFloor);
+      console.log('[crush] lateral precision floor ' + (latFloor * 100).toFixed(1) + '% of axial (step 1) -> lateral limit ' + (latLimit * 100).toFixed(1) + '%' +
+                  (latFloor > NL_LATERAL_FLAG ? ' — compliant design at single precision: post-yield curve shape is approximate' : ''));
+    }
     ebFreePrev = freeIdx.map(function (fi) { return eb[fi]; });
     eAxisPrev = eAxis;
     var _nlTstep = _nlNow(); _nlCgTotal += res.totalCgIters;
@@ -1110,13 +1114,13 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
      reported "no yield (> sigma_cap)" at a strain that never reached the cap. */
   var budgetHit = (kneeStep < 0) && (eAxis < capEps - 1e-9);
   if (budgetHit) console.warn('[crush] step budget (' + maxSteps + ') exhausted at eps=' + (eAxis * 100).toFixed(2) + '% < cap ' + (capEps * 100).toFixed(0) + '% (cutbacks)');
-  if (lateralResMax > latAccept) console.warn('[crush] lateral stress residual up to ' + (lateralResMax * 100).toFixed(1) + '% of axial (limit ' + (latAccept * 100).toFixed(0) + '%) on step(s) accepted after the last allowed cutback — curve may read stiff there');
-  if (lateralCutbacks) console.log('[crush] ' + lateralCutbacks + ' step(s) cut back for lateral stress > ' + (latAccept * 100).toFixed(0) + '%');
+  if (lateralResMax > latLimit) console.warn('[crush] lateral stress residual up to ' + (lateralResMax * 100).toFixed(1) + '% of axial (limit ' + (latLimit * 100).toFixed(1) + '%) on step(s) accepted after the allowed retry — curve may read stiff there');
+  if (lateralCutbacks) console.log('[crush] ' + lateralCutbacks + ' step(s) cut back once for lateral stress');
   console.log('[crush-timing] DONE N=' + this.N + '  steps=' + step + '  total=' + (_nlNow() - _nlRun0).toFixed(0) + 'ms  (' +
               ((_nlNow() - _nlRun0) / Math.max(1, step)).toFixed(0) + ' ms/step avg)  cg(sum of accepted-solve iters)=' + _nlCgTotal);
   var yEx = nlOffsetYieldEx(curve, E0, 0.002);
   return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: yEx.sigma, yielded: yEx.yielded, E0: E0, N: this.N, epsCap: capEps, eAxisMax: eAxis, alphaSteps: alphaSteps, alphaMax: alphaMax,
-           truncated: budgetHit, truncReason: budgetHit ? 'step-budget' : null, lateralResMax: lateralResMax, lateralCutbacks: lateralCutbacks };
+           truncated: budgetHit, truncReason: budgetHit ? 'step-budget' : null, lateralResMax: lateralResMax, lateralCutbacks: lateralCutbacks, lateralFloor: latFloor };
 };
 
 

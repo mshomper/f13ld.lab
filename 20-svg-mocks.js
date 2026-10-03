@@ -521,7 +521,8 @@ function buildMergedCurvePlot(size){
     html += '<div class="mp-legend-item">' +
       '<div class="swatch" style="background:' + ld.color + '"></div>' +
       '<strong style="color:' + ld.color + '">Design ' + lletter + '</strong> ' + ld.title +
-      '<span class="marker">' + (multi ? lv.axis.charAt(0).toUpperCase() + ': ' : '') + yieldTxt + lbTxt + '</span>' +
+      '<span class="marker">' + (multi ? lv.axis.charAt(0).toUpperCase() + ': ' : '') + yieldTxt + lbTxt +
+        ((lnl.lateralFloor > (typeof NL_LATERAL_FLAG !== 'undefined' ? NL_LATERAL_FLAG : 0.05)) ? ' · <span style="color:var(--warn)" title="Side stress resolved only to about ' + Math.round(lnl.lateralFloor * 100) + '% of axial at single precision">post-yield approximate</span>' : '') + '</span>' +
       '</div>';
   }
   if (squashedList.length) html += '<div class="mp-legend-item mp-legend-hint">Design' + (squashedList.length > 1 ? 's ' : ' ') + squashedList.join(', ') + (squashedList.length > 1 ? ' are' : ' is') + ' small at this scale — switch to <button class="mp-scale-btn" onclick="onCurveScaleToggle(\'norm\')">÷ own yield</button> to compare curve shapes</div>';

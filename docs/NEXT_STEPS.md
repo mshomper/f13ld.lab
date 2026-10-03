@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.16.2 · 2026-10-03 · foam laws fitted (incl. plateau); F13LD.foam v0.5.0 estimator; cell-count pass ready (§1-foam)
+**As of:** v0.16.3 · 2026-10-03 · foam laws fitted (incl. plateau); F13LD.foam v0.5.0 estimator; cell-count pass ready (§1-foam)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md) (previous: [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -27,6 +27,7 @@
 | **v0.16.0** | Three-axis crush (Crush axis = All; per-axis cache; all axes on one stress–strain plot; preview axis switch; cards use the weakest axis; buckling ratio = lowest per-axis ratio). Elastic CG cap 300 → 1000 with a "not converged" flag on card moduli. Void scaled to the design (1 % of its own stiffness, floor 1e-6) for linear runs (one re-solve when compliant) and per crush axis; "void-limited" flags. Sweep Standard cap 1000 + `cg_maxiter` column; foam re-run list (`FOAM_CALIBRATION.md` §10) |
 | **v0.16.1** | Crush lateral (uniaxial-stress) loop: Broyden secant lateral compliance carried across steps, up to 8 corrections, cut back when lateral stress > 2 % of axial (was: elastic compliance, 4 tries, always accepted). Same in the 16f oracle |
 | **v0.16.2** | Guarded lateral loop (`nlLateralStep`): elastic compliance restored on every cutback, half-step back on a ≥2× rise (no Broyden update), per-correction cap = axial increment, best attempt kept within 2 %. Fixes a pi-TPMS Z crush stalled in five field divergences |
+| **v0.16.3** | Lateral limit = max(2 %, 1.5 × precision floor measured on step 1), one lateral retry per step, best attempt kept; v0.16.2 cap/backtrack removed (stalled a compliant foam at ~40 solves/step); "post-yield approximate" flag when floor > 5 %. Open: tighter f32 field tolerance for compliant designs (floor ∝ relRes × Es/E) |
 
 ---
 

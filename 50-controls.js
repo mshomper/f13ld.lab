@@ -697,6 +697,7 @@ async function runRealSweep(N, runToken){
             alphaSteps: nlOut.alphaSteps || null,
             alphaMax: nlOut.alphaMax || 0,
             voidContrast: nlVoid, voidScaled: nlVoidScaled, Es_MPa: nlEs,
+            lateralFloor: (nlOut.lateralFloor != null ? nlOut.lateralFloor : null),   /* v0.16.3 — side-stress precision floor (step 1) */
             _sig: nlSig
           };
         }

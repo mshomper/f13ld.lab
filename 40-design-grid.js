@@ -1569,6 +1569,8 @@ function renderNonlinearViz(){
               ((typeof voidLimited === 'function' && voidLimited(nlm.E0, nlm.Es_MPa, nlm.voidContrast))
                 ? '<div class="nl-mc-row nl-mc-warn"><span>void-limited</span><b>void ' + nlm.voidContrast.toExponential(0) + ' of solid</b></div>' : '') +
               ((nlm.voidScaled === false) ? '<div class="nl-mc-row nl-mc-warn"><span>void not scaled</span><b>run Elastic too</b></div>' : '') +
+              ((nlm.lateralFloor > (typeof NL_LATERAL_FLAG !== 'undefined' ? NL_LATERAL_FLAG : 0.05))
+                ? '<div class="nl-mc-row nl-mc-warn" title="This design is so compliant that its average stress is a tiny fraction of the stresses in its struts; at the GPU\'s single precision the side stress of the crush could only be resolved to about ' + Math.round(nlm.lateralFloor * 100) + '% of the axial stress. The elastic slope and the yield onset hold; the curve past yield is approximate."><span>post-yield approximate</span><b>side stress \u00b1' + Math.round(nlm.lateralFloor * 100) + '%</b></div>' : '') +
               '<div class="nl-mc-row"><span>Yield Strength</span><b>' + yStr + '</b></div>' +
               nlOtherAxesRow(em.design.id, em.axisKey) +
               '<div class="nl-mc-row"><span>Load Capacity</span><b>' + loadStr + '</b></div>' +
