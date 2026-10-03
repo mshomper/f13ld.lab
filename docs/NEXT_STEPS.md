@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.15.1 · 2026-10-03 · fast elastic sweep path (checked on Matt's GPU); foam laws fitted; plateau pass ready (§1-foam)
+**As of:** v0.15.1 · 2026-10-03 · foam laws fitted (incl. plateau); F13LD.foam v0.5.0 estimator; cell-count pass ready (§1-foam)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md) (previous: [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -47,9 +47,9 @@ Matt's PI-TPMS Paper 1, Section 5: the run matrix is now **42 rows** (A4m added;
 - Matched feature (0.126 T): A4m is 1.77× D7 in-plane, 0.43× along z, ≈ equal on the directional mean, at 1.7× the solid; D7 is 2.4× stiffer along [111] than its axes — report directional mean or E max / E min, not axes only (`SWEEP.md` §8).
 - Fischer–Koch G set: Ez × 8.5 from wall ratio 0.17 → 0.19 (contacts forming; Euler characteristic 25 → 33 → 41 → 57 loops per cell). G1 sits at contact onset and is the most grid-sensitive run.
 
-## 1-foam. Foam stiffness calibration — first pass fitted, plateau pass next
+## 1-foam. Foam stiffness calibration — estimator live in F13LD.foam v0.5.0; cell-count pass next
 
-First pass (48 runs, 2026-10-03) fitted: open E/Es = 0.724 ρ^1.93, closed 0.304 ρ + 0.456 ρ², G = E/2(1+ν), stretch and seed-mode factors — [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §6. **Next action (Matt, on his GPU):** run `docs/foam-calibration/foam_plateau_runs.csv` (19 runs, same settings), then drop both results CSVs into `docs/foam-calibration/foam-fit.html`. After that: the estimator panel in F13LD.foam (needs Matt's approval of the design first). Kelvin / Weaire–Phelan get a "not calibrated" note.
+Laws: open 0.724 ρ^1.93, closed 0.304 ρ + 0.456 ρ², plateau factor 1 + 0.118(1 − e^(−k/0.111)), G = E/2(1+ν), stretch and Poisson-seed factors — [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §6–7, estimator §9. **Next action (Matt, on his GPU):** run `docs/foam-calibration/foam_cellcount_runs.csv` (6 runs), drop all three results files into `docs/foam-calibration/foam-fit.html`; then decide whether the open law needs a cell-count term or the ±7 % cell-count band can come out of F13LD.foam.
 
 ## 1a. Next dev cycle — pick up (in suggested order)
 

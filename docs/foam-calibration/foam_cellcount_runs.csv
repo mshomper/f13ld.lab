@@ -1,0 +1,7 @@
+run_id,family,set,purpose,seed_mode,cells,regularity,lloyd_iterations,rng_seed,topology,thickness,plateau_k,organic,stretch_x,stretch_y,stretch_z,normalize,grid_N,nu_s,expected_vf_pct,target_vf_pct,feature_vox_64,feature_vox_128,note
+N-c16-open-12-r2,foam,N,cell count,lloyd,16,0.9,4,2,open,0.33939,,0,1,1,1,true,64,0.3,12,12,4.3,8.7,
+N-c50-open-12-r2,foam,N,cell count,lloyd,50,0.9,4,2,open,0.23264,,0,1,1,1,true,64,0.3,12,12,3,6,
+N-c50-open-12-r3,foam,N,cell count,lloyd,50,0.9,4,3,open,0.2334,,0,1,1,1,true,64,0.3,12,12,3,6,
+N-c100-open-18-r1,foam,N,cell count,lloyd,100,0.9,4,1,open,0.23415,,0,1,1,1,true,64,0.3,18,18,3,6,
+N-c100-open-18-r2,foam,N,cell count,lloyd,100,0.9,4,2,open,0.23491,,0,1,1,1,true,64,0.3,18,18,3,6,
+N-c100-open-25-r1,foam,N,cell count,lloyd,100,0.9,4,1,open,0.28614,,0,1,1,1,true,64,0.3,25,25,3.7,7.3,

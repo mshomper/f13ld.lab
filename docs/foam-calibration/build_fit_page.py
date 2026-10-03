@@ -8,6 +8,6 @@ def read(name):
     p = os.path.join(HERE, name)
     return open(p, encoding='utf-8').read().strip() if os.path.exists(p) else ''
 src = read('foam-fit.src.html')
-out = src.replace('__RUNS_CALIBRATION__', read('foam_calibration_runs.csv')).replace('__RUNS_PLATEAU__', read('foam_plateau_runs.csv'))
+out = src.replace('__RUNS_CALIBRATION__', read('foam_calibration_runs.csv')).replace('__RUNS_PLATEAU__', read('foam_plateau_runs.csv')).replace('__RUNS_CELLCOUNT__', read('foam_cellcount_runs.csv'))
 open(os.path.join(HERE, 'foam-fit.html'), 'w', encoding='utf-8').write(out)
 print('wrote foam-fit.html (%d KB)' % (len(out) // 1024))

@@ -77,7 +77,7 @@ code{font-family:var(--mono);font-size:12px;color:var(--text)}
 <div class="drop" id="drop">
   <button class="btn" id="pick">Load results CSV…</button>
   <input type="file" id="file" accept=".csv" multiple hidden>
-  <div class="note" style="margin:0">Drop one or more F13LD.lab sweep exports here (results CSVs). Run-matrix CSVs are recognised too; the two foam study matrices are built in. A later file replaces earlier rows with the same run id.</div>
+  <div class="note" style="margin:0">Drop one or more F13LD.lab sweep exports here (results CSVs). Run-matrix CSVs are recognised too; the foam study run matrices are built in. A later file replaces earlier rows with the same run id.</div>
   <div class="files" id="files"></div>
 </div>
 
@@ -154,6 +154,13 @@ P-c50-8-open-r2,foam,P,plateau k (realization 2),lloyd,50,0.9,4,2,open,0.18477,,
 P-c50-8-k0.2-r2,foam,P,plateau k (realization 2),lloyd,50,0.9,4,2,plateau,0.17311,0.2,0,1,1,1,true,64,0.3,8,8,2.2,4.4,"thin at 64 (2.2 voxels, 2t): compare with its paired open run"
 N-c16-open-12,foam,N,cell count,lloyd,16,0.9,4,1,open,0.33836,,0,1,1,1,true,64,0.3,12,12,4.3,8.7,
 N-c50-open-12,foam,N,cell count,lloyd,50,0.9,4,1,open,0.23247,,0,1,1,1,true,64,0.3,12,12,3,6,</script>
+<script id="runs-cellcount" type="text/csv">run_id,family,set,purpose,seed_mode,cells,regularity,lloyd_iterations,rng_seed,topology,thickness,plateau_k,organic,stretch_x,stretch_y,stretch_z,normalize,grid_N,nu_s,expected_vf_pct,target_vf_pct,feature_vox_64,feature_vox_128,note
+N-c16-open-12-r2,foam,N,cell count,lloyd,16,0.9,4,2,open,0.33939,,0,1,1,1,true,64,0.3,12,12,4.3,8.7,
+N-c50-open-12-r2,foam,N,cell count,lloyd,50,0.9,4,2,open,0.23264,,0,1,1,1,true,64,0.3,12,12,3,6,
+N-c50-open-12-r3,foam,N,cell count,lloyd,50,0.9,4,3,open,0.2334,,0,1,1,1,true,64,0.3,12,12,3,6,
+N-c100-open-18-r1,foam,N,cell count,lloyd,100,0.9,4,1,open,0.23415,,0,1,1,1,true,64,0.3,18,18,3,6,
+N-c100-open-18-r2,foam,N,cell count,lloyd,100,0.9,4,2,open,0.23491,,0,1,1,1,true,64,0.3,18,18,3,6,
+N-c100-open-25-r1,foam,N,cell count,lloyd,100,0.9,4,1,open,0.28614,,0,1,1,1,true,64,0.3,25,25,3.7,7.3,</script>
 <script>
 'use strict';
 /* ════════════════════════════════════════════════════════════
@@ -191,7 +198,7 @@ function ingest(text, name) {
     FILES.push({ name: name, kind: 'run matrix', n: rows.length });
   } else throw new Error(name + ': not a sweep export or foam run matrix');
 }
-['runs-calibration', 'runs-plateau'].forEach(function (id) {
+['runs-calibration', 'runs-plateau', 'runs-cellcount'].forEach(function (id) {
   var t = document.getElementById(id).textContent.trim();
   if (t && t.indexOf('__RUNS_') !== 0) parseCsv(t).forEach(function (r) { RUNS[r.run_id] = r; });
 });
@@ -260,8 +267,11 @@ function analyse() {
   ids.forEach(function (k) {
     var d = D[k], m = RM[d.topo] || RM.open;
     var low = d.w64 < (d.topo === 'closed' ? 2.0 : 2.5);
-    function best(q) { return low && m ? num(d.r['grid2_' + q]) / (1 - m.a * Math.pow(d.w128, -m.p)) : num(d.r['ext_' + q]); }
-    d.src = low ? '128 + model' : 'ext (64↔128)';
+    /* plateau-pass plateau rows: 2t understates a Plateau-border strut, so no model
+       correction — they are read only as a 128³ ratio to their paired open run */
+    d.paired = d.set === 'P' && d.topo === 'plateau';
+    function best(q) { return d.paired ? num(d.r['grid2_' + q]) : low && m ? num(d.r['grid2_' + q]) / (1 - m.a * Math.pow(d.w128, -m.p)) : num(d.r['ext_' + q]); }
+    d.src = d.paired ? '128³ (paired)' : low ? '128 + model' : 'ext (64↔128)';
     d.low = low;
     d.ax = AX.map(best); d.sh = SH.map(best);
     d.E = avg(d.ax); d.G = avg(d.sh);
@@ -317,11 +327,17 @@ function analyse() {
     var d = D[k]; if (d.set !== 'P' || d.topo !== 'plateau') return;
     var o = ids.map(function (j) { return D[j]; }).filter(function (b) { return b.set === 'P' && b.topo === 'open' && b.cells === d.cells && b.rng === d.rng && Math.abs(b.target - d.target) < 0.5; })[0];
     if (!o) return;
-    F.plateau.push({ id: k, open: o.id, k: d.k, cells: d.cells, target: d.target, f128: d.E128 / o.E128, fbest: d.E / o.E, rho: d.rho, rhoOpen: o.rho });
+    F.plateau.push({ id: k, open: o.id, k: d.k, cells: d.cells, target: d.target, f128: d.E128 / o.E128, rho: d.rho, rhoOpen: o.rho });
+    d.ratio = d.E128 / o.E128; d.ratioKind = 'pair';
   });
+  /* plateau factor f(k) = 1 + A (1 − e^(−k/k0)) fitted to the pairs */
+  if (F.plateau.length >= 3) {
+    var pf = nm2(function (q) { return F.plateau.reduce(function (e, x) { var r = 1 + q[0] * (1 - Math.exp(-x.k / q[1])) - x.f128; return e + r * r; }, 0); }, [0.1, 0.1], [0, 0.01], [1, 2]);
+    F.plateauFit = { A: pf.x[0], k0: pf.x[1], rms: Math.sqrt(pf.f / F.plateau.length) };
+  }
   /* cell count (set N + set A at the same target) */
   var byCells = {};
-  ids.forEach(function (k) { var d = D[k]; if (d.set === 'N' || (d.set === 'A' && d.topo === 'open' && Math.abs(d.target - 12) < 0.5)) (byCells[d.cells] = byCells[d.cells] || []).push(d.ratio); });
+  ids.forEach(function (k) { var d = D[k]; if ((d.set === 'N' || (d.set === 'A' && d.topo === 'open')) && !d.low) (byCells[d.cells] = byCells[d.cells] || []).push(d.ratio); });
   F.cells = Object.keys(byCells).map(function (c) { return { cells: +c, ratio: avg(byCells[c]), n: byCells[c].length }; }).sort(function (a, b) { return a.cells - b.cells; });
   F.lattice = ids.filter(function (k) { return D[k].lattice; }).map(function (k) { return { id: k, ratio: D[k].ratio, R: D[k].R }; });
   return { D: D, ids: ids, RM: RM, F: F, missing: missing };
@@ -410,7 +426,8 @@ function render() {
     'mean E within ' + pc(Math.max.apply(null, F.stretch.open.concat(F.stretch.closed).map(function (x) { return Math.abs(x.meanE - 1); })), 0) + ' of unstretched');
   if (F.plateau.length) h += card('<span class="sw" style="background:var(--s-plateau)"></span>Plateau vs open (same ρ)', 'E ratio ' + fmt(Math.min.apply(null, F.plateau.map(function (x) { return x.f128; }))) + '–' + fmt(Math.max.apply(null, F.plateau.map(function (x) { return x.f128; }))),
     F.plateau.length + ' pairs, 128³ ratio (resolution error cancels in the pair)');
-  if (F.cells.length > 1) h += card('Cell count (open, 12 %)', F.cells.map(function (c) { return c.cells + ' cells: ' + fmt(c.ratio); }).join(' · '), 'E ÷ law; 1 = the law holds at that cell count');
+  if (F.plateauFit) h += card('<span class="sw" style="background:var(--s-plateau)"></span>Plateau factor', '1 + ' + F.plateauFit.A.toFixed(3) + ' (1 − e<sup>−k/' + F.plateauFit.k0.toFixed(3) + '</sup>)', 'fit to ' + F.plateau.length + ' pairs, rms ' + pc(F.plateauFit.rms, 1) + '; applies while the swell adds mass');
+  if (F.cells.length > 1) h += card('Cell count (open, all densities)', F.cells.map(function (c) { return c.cells + ': ' + fmt(c.ratio) + ' (' + c.n + ')'; }).join(' · '), 'mean E ÷ law per cell count (runs); 1 = the law holds there');
   h += '</div>';
 
   /* charts */
@@ -448,7 +465,8 @@ function render() {
   }
   if (F.plateau.length) {
     h += fig('Plateau vs open at the same ρ', chart({ id: 4, title: 'plateau', x: { log: false, lo: 0, hi: 0.32, label: 'plateau k', fmt: function (v) { return v.toFixed(2); } }, y: { log: false, lo: 0.7, hi: 1.3, label: 'E plateau ÷ E open (128³)', fmt: function (v) { return v.toFixed(2); } }, refY: 1,
-        points: F.plateau.map(function (x) { var d = D[x.id]; return { x: x.k, y: x.f128, shape: x.cells > 30 ? 'tri' : 'ci', col: COL.plateau, hollow: /-r2$/.test(x.id), tip: tipOf(d, 'paired with ' + x.open + '<br>128³ ratio ' + fmt(x.f128) + ' · best-estimate ratio ' + fmt(x.fbest)) }; }) }),
+        lines: F.plateauFit ? [{ pts: (function () { var p = []; for (var k = 0; k <= 0.32; k += 0.01) p.push([k, 1 + F.plateauFit.A * (1 - Math.exp(-k / F.plateauFit.k0))]); return p; })(), col: COL.plateau, dash: '4 4' }] : [],
+        points: F.plateau.map(function (x) { var d = D[x.id]; return { x: x.k, y: x.f128, shape: x.cells > 30 ? 'tri' : 'ci', col: COL.plateau, hollow: /-r2$/.test(x.id), tip: tipOf(d, 'paired with ' + x.open + '<br>128³ ratio ' + fmt(x.f128)) }; }) }),
       'Each plateau foam against the open foam with the same cells, density and seeds. Triangles 50 cells, circles 27 cells; hollow = second realization. 1 means the open law applies to plateau at its measured ρ.', '');
   } else h += '<div class="fig"><h3>Plateau vs open</h3><div class="empty">Load the plateau pass results (set P) to see this.</div></div>';
   h += '</div>';
@@ -459,7 +477,7 @@ function render() {
   ids.slice().sort().forEach(function (k) {
     var d = D[k], rcl = !isFinite(d.ratio) ? '' : Math.abs(d.ratio - 1) > 0.15 ? 'bad' : Math.abs(d.ratio - 1) > 0.07 ? 'flag' : '';
     h += '<tr><td>' + esc(k) + '</td><td>' + esc(d.set) + '</td><td class="l">' + esc(d.topo) + '</td><td class="l">' + esc(d.seed) + '</td><td>' + d.cells + '</td><td>' + (d.k || '') + '</td><td>' + (d.sz !== 1 ? d.sz : '') + '</td><td>' + (100 * d.rho).toFixed(2) +
-      '</td><td class="' + (d.w64 < 2.5 ? 'flag' : '') + '">' + d.w64.toFixed(1) + '</td><td class="' + (d.R > 1.3 || d.R < 0.95 ? 'flag' : '') + '">' + fmt(d.R) + '</td><td>' + fmt(d.E) + '</td><td class="l">' + esc(d.lattice ? 'not calibrated' : d.src) + '</td><td class="' + rcl + '">' + fmt(d.ratio) + '</td><td>' + fmt(d.Giso) + '</td><td>' + fmt(d.nu) +
+      '</td><td class="' + (d.w64 < 2.5 ? 'flag' : '') + '">' + d.w64.toFixed(1) + '</td><td class="' + (d.R > 1.3 || d.R < 0.95 ? 'flag' : '') + '">' + fmt(d.R) + '</td><td>' + fmt(d.E) + '</td><td class="l">' + esc(d.lattice ? 'not calibrated' : d.src) + '</td><td class="' + (d.ratioKind ? '' : rcl) + '">' + fmt(d.ratio) + (d.ratioKind ? ' ÷ pair' : '') + '</td><td>' + fmt(d.Giso) + '</td><td>' + fmt(d.nu) +
       '</td><td>' + (isFinite(d.iters) ? d.iters : '') + '/' + (isFinite(d.iters2) ? d.iters2 : '') + '</td><td>' + fmt(d.wall) + '</td><td class="l" style="color:var(--muted)">' + esc(d.file) + '</td></tr>';
   });
   h += '</tbody></table></div>';
@@ -484,7 +502,7 @@ function exportFit(A) {
   if (F.closed) o.closed = { form: 'E/Es = a * rho + b * rho^2', a: F.closed.a, b: F.closed.b, rms_log: F.closed.rms, nu: F.closed.nu, rho_range: F.closed.range, cells: F.closed.cells, realization_half_spread: F.closed.real, axis_spread: F.closed.axis };
   o.resolution = A.RM; o.poisson_factor = F.poisson;
   o.stretch = { form: 'Ez/Exy = s^m; shear split ~ (Ei Ej)^(r/2)', open: { m: F.stretch.openM, r: F.stretch.openR }, closed: { m: F.stretch.closedM, r: F.stretch.closedR }, runs: F.stretch.open.concat(F.stretch.closed) };
-  o.plateau_pairs = F.plateau; o.cell_count = F.cells; o.lattice = F.lattice;
+  o.plateau_pairs = F.plateau; o.plateau_factor = F.plateauFit ? { form: 'f = 1 + A (1 - exp(-k / k0))', A: F.plateauFit.A, k0: F.plateauFit.k0, rms: F.plateauFit.rms } : null; o.cell_count = F.cells; o.lattice = F.lattice;
   return o;
 }
 function markdown(A) {
@@ -496,9 +514,10 @@ function markdown(A) {
   L.push('- **Poisson ÷ Lloyd seeds:** open ' + fmt(F.poisson.open) + ', closed ' + fmt(F.poisson.closed));
   if (F.stretch.openM) L.push('- **Stretch:** Ez/Exy = s^' + F.stretch.openM.toFixed(2) + ' open, s^' + fmt(F.stretch.closedM) + ' closed');
   if (F.plateau.length) L.push('- **Plateau ÷ open at equal ρ (128³):** ' + F.plateau.map(function (x) { return x.id + ' ' + fmt(x.f128); }).join(', '));
-  if (F.cells.length) L.push('- **Cell count (open 12 %, E ÷ law):** ' + F.cells.map(function (c) { return c.cells + ' cells ' + fmt(c.ratio); }).join(', '));
+  if (F.plateauFit) L.push('- **Plateau factor:** 1 + ' + F.plateauFit.A.toFixed(3) + ' (1 − e^(−k/' + F.plateauFit.k0.toFixed(3) + ')), rms ' + pc(F.plateauFit.rms, 1));
+  if (F.cells.length) L.push('- **Cell count (open, mean E ÷ law):** ' + F.cells.map(function (c) { return c.cells + ' cells ' + fmt(c.ratio) + ' (' + c.n + ' runs)'; }).join(', '));
   L.push('', '| run | topology | seeds | cells | ρ % | E/Es | source | ÷ law | ν |', '|---|---|---|---|---|---|---|---|---|');
-  A.ids.slice().sort().forEach(function (k) { var d = A.D[k]; L.push('| ' + [k, d.topo + (d.k ? ' k ' + d.k : ''), d.seed, d.cells, (100 * d.rho).toFixed(2), fmt(d.E), d.lattice ? 'not calibrated' : d.src, fmt(d.ratio), fmt(d.nu)].join(' | ') + ' |'); });
+  A.ids.slice().sort().forEach(function (k) { var d = A.D[k]; L.push('| ' + [k, d.topo + (d.k ? ' k ' + d.k : ''), d.seed, d.cells, (100 * d.rho).toFixed(2), fmt(d.E), d.lattice ? 'not calibrated' : d.src, fmt(d.ratio) + (d.ratioKind ? ' ÷ pair' : ''), fmt(d.nu)].join(' | ') + ' |'); });
   return L.join('\n') + '\n';
 }
 
