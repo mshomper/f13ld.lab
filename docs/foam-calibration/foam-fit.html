@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F13LD Foam Fit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* F13LD.foam calibration fit — F13LD.lab docs/foam-calibration (2026-10-03).
+   Self-contained: drop the lab's sweep export(s) here; everything runs in the page. */
+:root{
+  color-scheme: dark;
+  --ground:#06080c; --panel:#0c1016; --panel-2:#11161d; --line:#1b2229; --line-2:#27303a;
+  --text:#e8ecef; --text-2:#a3acb4; --muted:#68727b;
+  --jade:#1D9E75; --lime:#c8f542; --warn:#e8b04a; --bad:#e66767;
+  --s-open:#3987e5; --s-closed:#d95926; --s-plateau:#1D9E75; --s-lattice:#8a939b; --s-lit:#7b858e;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace; --sans:'Exo 2',system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--ground);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.45}
+.wrap{max-width:1240px;margin:0 auto;padding:0 16px 48px}
+header{display:flex;align-items:center;gap:14px;padding:14px 0 12px;border-bottom:1px solid var(--line);margin-bottom:16px;flex-wrap:wrap}
+.wm{font-weight:700;letter-spacing:.06em;font-size:18px}.wm .j{color:var(--jade)}.wm .l{color:var(--lime)}
+.tool{font-weight:600;letter-spacing:.14em;color:var(--text-2);font-size:13px;border-left:1px solid var(--line-2);padding-left:14px}
+.sub{color:var(--muted);font-family:var(--mono);font-size:11px;margin-left:auto}
+h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-2);font-weight:600;margin:28px 0 10px}
+h3{font-size:14px;margin:0 0 4px;font-weight:600}
+p.note,.note{color:var(--text-2);font-size:13px;margin:4px 0 10px;max-width:880px}
+.drop{border:1px dashed var(--line-2);border-radius:10px;padding:16px;background:var(--panel);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.drop.hot{border-color:var(--jade);background:#0d1a16}
+.btn{font-family:var(--sans);font-size:12px;font-weight:600;padding:6px 14px;border-radius:20px;border:1px solid var(--jade);background:rgba(29,158,117,.1);color:var(--jade);cursor:pointer}
+.btn:hover{background:rgba(29,158,117,.2)} .btn.ghost{border-color:var(--line-2);color:var(--text-2);background:none}
+.files{font-family:var(--mono);font-size:11px;color:var(--text-2);display:flex;flex-direction:column;gap:2px}
+.files .x{color:var(--muted);cursor:pointer;margin-left:6px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card .k{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.card .v{font-family:var(--mono);font-size:15px;margin-top:4px;color:var(--text)}
+.card .d{font-size:12px;color:var(--text-2);margin-top:4px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:baseline}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(520px,1fr));gap:14px}
+.fig{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 12px 6px;min-width:0}
+.fig svg{width:100%;height:auto;display:block}
+.fig .cap{font-size:12px;color:var(--text-2);margin:2px 4px 8px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--text-2);margin:2px 4px 6px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.fig .legend svg{width:14px;height:14px;flex:none}
+svg text{font-family:var(--mono);font-size:10.5px;fill:var(--text-2)}
+svg .ax{stroke:var(--line-2);stroke-width:1}
+svg .gr{stroke:var(--line);stroke-width:1}
+svg .lab{fill:var(--text-2);font-family:var(--sans);font-size:11.5px}
+svg .dl{font-family:var(--sans);font-size:11px;fill:var(--text)}
+svg .hit{fill:transparent;cursor:crosshair}
+.tip{position:fixed;pointer-events:none;background:#0a0e13;border:1px solid var(--line-2);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:11px;color:var(--text);z-index:9;display:none;max-width:360px;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+.tip b{color:var(--lime);font-weight:500}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:11.5px}
+th{position:sticky;top:0;background:var(--panel-2);color:var(--text-2);font-weight:500;text-align:right;padding:6px 8px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child,td.l{text-align:left}
+tr:hover td{background:#0f141a}
+.tbl{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.flag{color:var(--warn)} .bad{color:var(--bad)} .ok{color:var(--jade)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.empty{color:var(--muted);font-size:13px;padding:24px;text-align:center}
+code{font-family:var(--mono);font-size:12px;color:var(--text)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="wm"><span class="j">F</span><span class="l">13</span><span class="j">LD</span></div>
+  <div class="tool">FOAM FIT</div>
+  <div class="sub">F13LD.foam stiffness calibration · F13LD.lab sweep exports</div>
+</header>
+
+<div class="drop" id="drop">
+  <button class="btn" id="pick">Load results CSV…</button>
+  <input type="file" id="file" accept=".csv" multiple hidden>
+  <div class="note" style="margin:0">Drop one or more F13LD.lab sweep exports here (results CSVs). Run-matrix CSVs are recognised too; the two foam study matrices are built in. A later file replaces earlier rows with the same run id.</div>
+  <div class="files" id="files"></div>
+</div>
+
+<div id="out"><div class="empty">No results loaded yet.</div></div>
+</div>
+<div class="tip" id="tip"></div>
+
+<script id="runs-calibration" type="text/csv">run_id,family,set,purpose,seed_mode,cells,regularity,lloyd_iterations,rng_seed,topology,thickness,plateau_k,organic,stretch_x,stretch_y,stretch_z,normalize,grid_N,nu_s,expected_vf_pct,target_vf_pct,feature_vox_64,feature_vox_128,note
+A-open-8-r1,foam,A,core law,lloyd,27,0.9,4,1,open,0.22904,,0,1,1,1,true,64,0.3,8,8,2.9,5.9,
+A-open-8-r2,foam,A,core law,lloyd,27,0.9,4,2,open,0.22788,,0,1,1,1,true,64,0.3,8,8,2.9,5.8,
+A-open-12-r1,foam,A,core law,lloyd,27,0.9,4,1,open,0.28729,,0,1,1,1,true,64,0.3,12,12,3.7,7.4,
+A-open-12-r2,foam,A,core law,lloyd,27,0.9,4,2,open,0.28579,,0,1,1,1,true,64,0.3,12,12,3.7,7.3,
+A-open-18-r1,foam,A,core law,lloyd,27,0.9,4,1,open,0.36412,,0,1,1,1,true,64,0.3,18,18,4.7,9.3,
+A-open-18-r2,foam,A,core law,lloyd,27,0.9,4,2,open,0.36235,,0,1,1,1,true,64,0.3,18,18,4.6,9.3,
+A-open-25-r1,foam,A,core law,lloyd,27,0.9,4,1,open,0.44426,,0,1,1,1,true,64,0.3,25,25,5.7,11.4,
+A-open-25-r2,foam,A,core law,lloyd,27,0.9,4,2,open,0.44216,,0,1,1,1,true,64,0.3,25,25,5.7,11.3,
+A-open-35-r1,foam,A,core law,lloyd,27,0.9,4,1,open,0.55251,,0,1,1,1,true,64,0.3,35,35,7.1,14.1,
+A-open-35-r2,foam,A,core law,lloyd,27,0.9,4,2,open,0.55057,,0,1,1,1,true,64,0.3,35,35,7,14.1,
+A-plateau-8-r1,foam,A,core law,lloyd,27,0.9,4,1,plateau,0.22868,0.05,0,1,1,1,true,64,0.3,8,8,2.9,5.9,
+A-plateau-8-r2,foam,A,core law,lloyd,27,0.9,4,2,plateau,0.22749,0.05,0,1,1,1,true,64,0.3,8,8,2.9,5.8,
+A-plateau-12-r1,foam,A,core law,lloyd,27,0.9,4,1,plateau,0.28729,0.05,0,1,1,1,true,64,0.3,12,12,3.7,7.4,
+A-plateau-12-r2,foam,A,core law,lloyd,27,0.9,4,2,plateau,0.28579,0.05,0,1,1,1,true,64,0.3,12,12,3.7,7.3,
+A-plateau-18-r1,foam,A,core law,lloyd,27,0.9,4,1,plateau,0.36412,0.05,0,1,1,1,true,64,0.3,18,18,4.7,9.3,
+A-plateau-18-r2,foam,A,core law,lloyd,27,0.9,4,2,plateau,0.36235,0.05,0,1,1,1,true,64,0.3,18,18,4.6,9.3,
+A-plateau-25-r1,foam,A,core law,lloyd,27,0.9,4,1,plateau,0.44426,0.05,0,1,1,1,true,64,0.3,25,25,5.7,11.4,
+A-plateau-25-r2,foam,A,core law,lloyd,27,0.9,4,2,plateau,0.44216,0.05,0,1,1,1,true,64,0.3,25,25,5.7,11.3,
+A-plateau-35-r1,foam,A,core law,lloyd,27,0.9,4,1,plateau,0.55251,0.05,0,1,1,1,true,64,0.3,35,35,7.1,14.1,
+A-plateau-35-r2,foam,A,core law,lloyd,27,0.9,4,2,plateau,0.55057,0.05,0,1,1,1,true,64,0.3,35,35,7,14.1,
+A-closed-12-r1,foam,A,core law,lloyd,16,0.9,4,1,closed,0.08959,,0,1,1,1,true,64,0.3,12,12,1.1,2.3,thin: 2.3 voxels across at 128 (1.1 at 64) — read as indicative
+A-closed-12-r2,foam,A,core law,lloyd,16,0.9,4,2,closed,0.09016,,0,1,1,1,true,64,0.3,12,12,1.2,2.3,thin: 2.3 voxels across at 128 (1.2 at 64) — read as indicative
+A-closed-18-r1,foam,A,core law,lloyd,16,0.9,4,1,closed,0.13755,,0,1,1,1,true,64,0.3,18,18,1.8,3.5,
+A-closed-18-r2,foam,A,core law,lloyd,16,0.9,4,2,closed,0.13841,,0,1,1,1,true,64,0.3,18,18,1.8,3.5,
+A-closed-25-r1,foam,A,core law,lloyd,16,0.9,4,1,closed,0.1975,,0,1,1,1,true,64,0.3,25,25,2.5,5.1,
+A-closed-25-r2,foam,A,core law,lloyd,16,0.9,4,2,closed,0.1982,,0,1,1,1,true,64,0.3,25,25,2.5,5.1,
+A-closed-35-r1,foam,A,core law,lloyd,16,0.9,4,1,closed,0.2887,,0,1,1,1,true,64,0.3,35,35,3.7,7.4,
+A-closed-35-r2,foam,A,core law,lloyd,16,0.9,4,2,closed,0.29018,,0,1,1,1,true,64,0.3,35,35,3.7,7.4,
+B-open-8,foam,B,disorder (Poisson),poisson,27,0.9,,1,open,0.22182,,0,1,1,1,true,64,0.3,8,8,2.8,5.7,
+B-open-18,foam,B,disorder (Poisson),poisson,27,0.9,,1,open,0.35497,,0,1,1,1,true,64,0.3,18,18,4.5,9.1,
+B-open-35,foam,B,disorder (Poisson),poisson,27,0.9,,1,open,0.54517,,0,1,1,1,true,64,0.3,35,35,7,14,
+B-plateau-18,foam,B,disorder (Poisson),poisson,27,0.9,,1,plateau,0.35496,0.05,0,1,1,1,true,64,0.3,18,18,4.5,9.1,
+B-closed-18,foam,B,disorder (Poisson),poisson,16,0.9,,1,closed,0.13229,,0,1,1,1,true,64,0.3,18,18,1.7,3.4,
+B-closed-35,foam,B,disorder (Poisson),poisson,16,0.9,,1,closed,0.27786,,0,1,1,1,true,64,0.3,35,35,3.6,7.1,
+C-K-open-12,foam,C,ordered (Kelvin),kelvin,16,,,,open,0.39097,,0,1,1,1,true,64,0.3,12.01,12,5,10,
+C-K-open-25,foam,C,ordered (Kelvin),kelvin,16,,,,open,0.54797,,0,1,1,1,true,64,0.3,25.05,25,7,14,
+C-K-closed-12,foam,C,ordered (Kelvin),kelvin,16,,,,closed,0.07813,,0,1,1,1,true,64,0.3,13.48,12,1,2,thin: 2 voxels across at 128 (1 at 64) — read as indicative
+C-K-closed-25,foam,C,ordered (Kelvin),kelvin,16,,,,closed,0.2257,,0,1,1,1,true,64,0.3,25.1,25,2.9,5.8,
+C-WP-open-12,foam,C,ordered (Weaire–Phelan),weairePhelan,8,,,,open,0.44724,,0,1,1,1,true,64,0.3,12.01,12,5.7,11.4,
+C-WP-open-25,foam,C,ordered (Weaire–Phelan),weairePhelan,8,,,,open,0.66784,,0,1,1,1,true,64,0.3,25.01,25,8.5,17.1,
+C-WP-closed-12,foam,C,ordered (Weaire–Phelan),weairePhelan,8,,,,closed,0.10483,,0,1,1,1,true,64,0.3,12.4,12,1.3,2.7,thin: 2.7 voxels across at 128 (1.3 at 64) — read as indicative
+C-WP-closed-25,foam,C,ordered (Weaire–Phelan),weairePhelan,8,,,,closed,0.24473,,0,1,1,1,true,64,0.3,24.82,25,3.1,6.3,
+D-open-sz1.25,foam,D,stretch z,lloyd,27,0.9,4,1,open,0.35772,,0,1,1,1.25,true,64,0.3,18,18,4.6,9.2,
+D-open-sz1.5,foam,D,stretch z,lloyd,27,0.9,4,1,open,0.34543,,0,1,1,1.5,true,64,0.3,18,18,4.4,8.8,
+D-open-sz2,foam,D,stretch z,lloyd,27,0.9,4,1,open,0.32363,,0,1,1,2,true,64,0.3,18,18,4.1,8.3,
+D-closed-sz1.25,foam,D,stretch z,lloyd,16,0.9,4,1,closed,0.13583,,0,1,1,1.25,true,64,0.3,18,18,1.7,3.5,
+D-closed-sz1.5,foam,D,stretch z,lloyd,16,0.9,4,1,closed,0.13273,,0,1,1,1.5,true,64,0.3,18,18,1.7,3.4,
+D-closed-sz2,foam,D,stretch z,lloyd,16,0.9,4,1,closed,0.12636,,0,1,1,2,true,64,0.3,18,18,1.6,3.2,</script>
+<script id="runs-plateau" type="text/csv">run_id,family,set,purpose,seed_mode,cells,regularity,lloyd_iterations,rng_seed,topology,thickness,plateau_k,organic,stretch_x,stretch_y,stretch_z,normalize,grid_N,nu_s,expected_vf_pct,target_vf_pct,feature_vox_64,feature_vox_128,note
+P-c27-5-open,foam,P,plateau k,lloyd,27,0.9,4,1,open,0.17773,,0,1,1,1,true,64,0.3,5,5,2.3,4.5,"thin at 64 (2.3 voxels, 2t): compare with its paired open run"
+P-c27-5-k0.1,foam,P,plateau k,lloyd,27,0.9,4,1,plateau,0.16972,0.1,0,1,1,1,true,64,0.3,5,5,2.2,4.3,"thin at 64 (2.2 voxels, 2t): compare with its paired open run"
+P-c27-5-k0.2,foam,P,plateau k,lloyd,27,0.9,4,1,plateau,0.16204,0.2,0,1,1,1,true,64,0.3,5,5,2.1,4.1,"thin at 64 (2.1 voxels, 2t): compare with its paired open run"
+P-c27-5-k0.3,foam,P,plateau k,lloyd,27,0.9,4,1,plateau,0.15439,0.3,0,1,1,1,true,64,0.3,5,5,2,4,"thin at 64 (2 voxels, 2t): compare with its paired open run"
+P-c50-5-open,foam,P,plateau k,lloyd,50,0.9,4,1,open,0.14274,,0,1,1,1,true,64,0.3,5,5,1.8,3.7,"thin at 64 (1.8 voxels, 2t): compare with its paired open run"
+P-c50-5-k0.05,foam,P,plateau k,lloyd,50,0.9,4,1,plateau,0.13007,0.05,0,1,1,1,true,64,0.3,5,5,1.7,3.3,"thin at 64 (1.7 voxels, 2t): compare with its paired open run"
+P-c50-5-k0.1,foam,P,plateau k,lloyd,50,0.9,4,1,plateau,0.11728,0.1,0,1,1,1,true,64,0.3,5,5,1.5,3,"thin at 64 (1.5 voxels, 2t): compare with its paired open run"
+P-c50-5-k0.2,foam,P,plateau k,lloyd,50,0.9,4,1,plateau,0.09072,0.2,0,1,1,1,true,64,0.3,5,5,1.2,2.3,"thin at 64 (1.2 voxels, 2t): compare with its paired open run"
+P-c50-8-open,foam,P,plateau k,lloyd,50,0.9,4,1,open,0.18553,,0,1,1,1,true,64,0.3,8,8,2.4,4.7,"thin at 64 (2.4 voxels, 2t): compare with its paired open run"
+P-c50-8-k0.05,foam,P,plateau k,lloyd,50,0.9,4,1,plateau,0.18259,0.05,0,1,1,1,true,64,0.3,8,8,2.3,4.7,"thin at 64 (2.3 voxels, 2t): compare with its paired open run"
+P-c50-8-k0.1,foam,P,plateau k,lloyd,50,0.9,4,1,plateau,0.18005,0.1,0,1,1,1,true,64,0.3,8,8,2.3,4.6,"thin at 64 (2.3 voxels, 2t): compare with its paired open run"
+P-c50-8-k0.2,foam,P,plateau k,lloyd,50,0.9,4,1,plateau,0.17461,0.2,0,1,1,1,true,64,0.3,8,8,2.2,4.5,"thin at 64 (2.2 voxels, 2t): compare with its paired open run"
+P-c50-8-k0.3,foam,P,plateau k,lloyd,50,0.9,4,1,plateau,0.16938,0.3,0,1,1,1,true,64,0.3,8,8,2.2,4.3,"thin at 64 (2.2 voxels, 2t): compare with its paired open run"
+P-c50-5-open-r2,foam,P,plateau k (realization 2),lloyd,50,0.9,4,2,open,0.14307,,0,1,1,1,true,64,0.3,5,5,1.8,3.7,"thin at 64 (1.8 voxels, 2t): compare with its paired open run"
+P-c50-5-k0.2-r2,foam,P,plateau k (realization 2),lloyd,50,0.9,4,2,plateau,0.09154,0.2,0,1,1,1,true,64,0.3,5,5,1.2,2.3,"thin at 64 (1.2 voxels, 2t): compare with its paired open run"
+P-c50-8-open-r2,foam,P,plateau k (realization 2),lloyd,50,0.9,4,2,open,0.18477,,0,1,1,1,true,64,0.3,8,8,2.4,4.7,"thin at 64 (2.4 voxels, 2t): compare with its paired open run"
+P-c50-8-k0.2-r2,foam,P,plateau k (realization 2),lloyd,50,0.9,4,2,plateau,0.17311,0.2,0,1,1,1,true,64,0.3,8,8,2.2,4.4,"thin at 64 (2.2 voxels, 2t): compare with its paired open run"
+N-c16-open-12,foam,N,cell count,lloyd,16,0.9,4,1,open,0.33836,,0,1,1,1,true,64,0.3,12,12,4.3,8.7,
+N-c50-open-12,foam,N,cell count,lloyd,50,0.9,4,1,open,0.23247,,0,1,1,1,true,64,0.3,12,12,3,6,</script>
+<script>
+'use strict';
+/* ════════════════════════════════════════════════════════════
+   Data
+   ════════════════════════════════════════════════════════════ */
+var RUNS = {};          // run_id -> run-matrix row
+var RESULTS = {};       // run_id -> results row (+ _file)
+var FILES = [];         // [{name, kind, n}]
+
+function parseCsv(text) {
+  var rows = [], row = [], cur = '', q = false;
+  for (var i = 0; i < text.length; i++) {
+    var c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(cur); cur = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cur); cur = ''; if (row.length > 1 || row[0] !== '') rows.push(row); row = []; }
+    else cur += c;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  if (!rows.length) return [];
+  var h = rows[0].map(function (s) { return s.trim(); });
+  return rows.slice(1).map(function (r) { var o = {}; h.forEach(function (k, j) { o[k] = (r[j] || '').trim(); }); return o; });
+}
+function num(v) { var x = parseFloat(v); return isFinite(x) ? x : NaN; }
+function ingest(text, name) {
+  var rows = parseCsv(text);
+  if (!rows.length) throw new Error(name + ': empty');
+  var h = rows[0];
+  if ('Ex' in h && 'run_id' in h) {
+    rows.forEach(function (r) { r._file = name; RESULTS[r.run_id] = r; });
+    FILES.push({ name: name, kind: 'results', n: rows.length });
+  } else if ('seed_mode' in h && 'run_id' in h) {
+    rows.forEach(function (r) { RUNS[r.run_id] = r; });
+    FILES.push({ name: name, kind: 'run matrix', n: rows.length });
+  } else throw new Error(name + ': not a sweep export or foam run matrix');
+}
+['runs-calibration', 'runs-plateau'].forEach(function (id) {
+  var t = document.getElementById(id).textContent.trim();
+  if (t && t.indexOf('__RUNS_') !== 0) parseCsv(t).forEach(function (r) { RUNS[r.run_id] = r; });
+});
+
+/* ════════════════════════════════════════════════════════════
+   Analysis
+   ════════════════════════════════════════════════════════════ */
+var AX = ['Ex', 'Ey', 'Ez'], SH = ['Gyz', 'Gxz', 'Gxy'];
+function avg(a) { return a.reduce(function (s, v) { return s + v; }, 0) / a.length; }
+function mean3(r, pref, qs) { return avg(qs.map(function (q) { return num(r[pref + q]); })); }
+
+/* Nelder–Mead on a 2-parameter function with box clamps */
+function nm2(fn, x0, lo, hi) {
+  function cl(x) { return [Math.min(hi[0], Math.max(lo[0], x[0])), Math.min(hi[1], Math.max(lo[1], x[1]))]; }
+  var s = [cl(x0), cl([x0[0] * 1.3 + 0.1, x0[1]]), cl([x0[0], x0[1] * 1.3 + 0.1])].map(function (x) { return { x: x, f: fn(x) }; });
+  for (var it = 0; it < 400; it++) {
+    s.sort(function (a, b) { return a.f - b.f; });
+    var c = [(s[0].x[0] + s[1].x[0]) / 2, (s[0].x[1] + s[1].x[1]) / 2];
+    var r = cl([2 * c[0] - s[2].x[0], 2 * c[1] - s[2].x[1]]), fr = fn(r);
+    if (fr < s[0].f) { var e = cl([3 * c[0] - 2 * s[2].x[0], 3 * c[1] - 2 * s[2].x[1]]), fe = fn(e); s[2] = fe < fr ? { x: e, f: fe } : { x: r, f: fr }; }
+    else if (fr < s[1].f) s[2] = { x: r, f: fr };
+    else { var k = cl([(c[0] + s[2].x[0]) / 2, (c[1] + s[2].x[1]) / 2]), fk = fn(k);
+      if (fk < s[2].f) s[2] = { x: k, f: fk };
+      else s = [s[0]].concat(s.slice(1).map(function (p) { var x = cl([(p.x[0] + s[0].x[0]) / 2, (p.x[1] + s[0].x[1]) / 2]); return { x: x, f: fn(x) }; })); }
+  }
+  s.sort(function (a, b) { return a.f - b.f; });
+  return s[0];
+}
+function fitRes(ids, W, Rr) {
+  if (ids.length < 3) return null;
+  var fn = function (q) { var e = 0; for (var i = 0; i < W.length; i++) { var m = (1 - q[0] * Math.pow(2 * W[i], -q[1])) / (1 - q[0] * Math.pow(W[i], -q[1])); e += (m - Rr[i]) * (m - Rr[i]); } return e; };
+  var best = null;
+  [0.5, 1, 2, 4].forEach(function (a) { [1, 2, 3].forEach(function (p) { var r = nm2(fn, [a, p], [0, 0.3], [50, 8]); if (!best || r.f < best.f) best = r; }); });
+  return { a: best.x[0], p: best.x[1], rms: Math.sqrt(best.f / W.length) };
+}
+function linfit(x, y) { var n = x.length, mx = avg(x), my = avg(y), sxy = 0, sxx = 0; for (var i = 0; i < n; i++) { sxy += (x[i] - mx) * (y[i] - my); sxx += (x[i] - mx) * (x[i] - mx); } var b = sxy / sxx; return { b: b, a: my - b * mx }; }
+
+function analyse() {
+  var ids = Object.keys(RESULTS).filter(function (k) { return RUNS[k] && !RESULTS[k].error; });
+  var missing = Object.keys(RESULTS).filter(function (k) { return !RUNS[k]; });
+  var D = {};
+  ids.forEach(function (k) {
+    var u = RUNS[k], r = RESULTS[k], t = num(u.thickness);
+    var d = {
+      id: k, set: u.set, topo: u.topology, seed: u.seed_mode, cells: num(u.cells), rng: u.rng_seed, k: num(u.plateau_k) || 0,
+      sz: num(u.stretch_z) || 1, sx: num(u.stretch_x) || 1, sy: num(u.stretch_y) || 1, target: num(u.target_vf_pct || u.expected_vf_pct),
+      w64: 2 * t * 6.4, w128: 2 * t * 12.8, file: r._file,
+      rho64: num(r.vf_measured_pct) / 100, rho128: num(r.grid2_vf_measured_pct) / 100,
+      E64: mean3(r, '', AX), E128: mean3(r, 'grid2_', AX), Eext: mean3(r, 'ext_', AX),
+      conv: r.converged, iters: num(r.iters_total), iters2: num(r.grid2_iters), wall: num(r.wall_time_s),
+      nu: avg(['nu_xy', 'nu_xz', 'nu_yz'].map(function (q) { return num(r['ext_' + q]); })),
+      r: r
+    };
+    d.rho = isFinite(d.rho128) ? d.rho128 : d.rho64;
+    d.R = d.E128 / d.E64;
+    d.lattice = d.seed === 'kelvin' || d.seed === 'weairePhelan';
+    D[k] = d;
+  });
+  /* 1. resolution models from the well-resolved disordered runs */
+  function resBasis(fam, minW) {
+    var s = ids.filter(function (k) { var d = D[k]; return d.topo === fam && !d.lattice && d.sz === 1 && d.sx === 1 && d.sy === 1 && d.w64 >= minW && (d.set === 'A' || d.set === 'B'); });
+    return fitRes(s, s.map(function (k) { return D[k].w64; }), s.map(function (k) { return D[k].R; }));
+  }
+  var RM = { open: resBasis('open', 2.5), closed: resBasis('closed', 2.4) };
+  RM.plateau = RM.open;
+  ids.forEach(function (k) {
+    var d = D[k], m = RM[d.topo] || RM.open;
+    var low = d.w64 < (d.topo === 'closed' ? 2.0 : 2.5);
+    function best(q) { return low && m ? num(d.r['grid2_' + q]) / (1 - m.a * Math.pow(d.w128, -m.p)) : num(d.r['ext_' + q]); }
+    d.src = low ? '128 + model' : 'ext (64↔128)';
+    d.low = low;
+    d.ax = AX.map(best); d.sh = SH.map(best);
+    d.E = avg(d.ax); d.G = avg(d.sh);
+    d.Giso = isFinite(d.nu) && !low ? d.G / (d.E / (2 * (1 + d.nu))) : NaN;
+    d.axisSpread = Math.max.apply(null, d.ax.map(function (v) { return Math.abs(v / d.E - 1); }));
+  });
+  /* 2. laws on set A */
+  var A = function (t) { return ids.filter(function (k) { return D[k].set === 'A' && D[k].topo === t; }).sort(function (a, b) { return D[a].rho - D[b].rho; }); };
+  var op = A('open'), cl = A('closed'), F = {};
+  if (op.length >= 3) {
+    var lf = linfit(op.map(function (k) { return Math.log(D[k].rho); }), op.map(function (k) { return Math.log(D[k].E); }));
+    F.open = { C: Math.exp(lf.a), n: lf.b };
+    F.open.law = function (r) { return F.open.C * Math.pow(r, F.open.n); };
+    F.open.rms = Math.sqrt(avg(op.map(function (k) { var e = Math.log(D[k].E / F.open.law(D[k].rho)); return e * e; })));
+    var nl = linfit(op.map(function (k) { return D[k].rho; }), op.map(function (k) { return D[k].nu; }));
+    F.open.nu0 = nl.a; F.open.nu1 = nl.b;
+    F.open.range = [D[op[0]].rho, D[op[op.length - 1]].rho];
+  }
+  if (cl.length >= 2) {
+    var s11 = 0, s12 = 0, s22 = 0, t1 = 0, t2 = 0;
+    cl.forEach(function (k) { var r = D[k].rho, e = D[k].E; s11 += r * r; s12 += r * r * r; s22 += r * r * r * r; t1 += r * e; t2 += r * r * e; });
+    var det = s11 * s22 - s12 * s12;
+    F.closed = { a: (t1 * s22 - t2 * s12) / det, b: (s11 * t2 - s12 * t1) / det };
+    F.closed.law = function (r) { return F.closed.a * r + F.closed.b * r * r; };
+    F.closed.rms = Math.sqrt(avg(cl.map(function (k) { var e = Math.log(D[k].E / F.closed.law(D[k].rho)); return e * e; })));
+    var nuv = cl.filter(function (k) { return isFinite(D[k].nu) && !D[k].low; }).map(function (k) { return D[k].nu; });
+    F.closed.nu = nuv.length ? avg(nuv) : NaN;
+    F.closed.range = [D[cl[0]].rho, D[cl[cl.length - 1]].rho];
+  }
+  function law(d) { var L = d.topo === 'closed' ? F.closed : F.open; return L ? L.law(d.rho) : NaN; }
+  ids.forEach(function (k) { D[k].ratio = D[k].E / law(D[k]); });
+  /* realization pairs and per-axis spread (set A) */
+  function pairSpread(t) { var o = []; op.concat(cl).forEach(function (k) { var d = D[k]; if (d.topo === t && /-r1$/.test(k)) { var b = D[k.replace(/-r1$/, '-r2')]; if (b) o.push(Math.abs(d.E - b.E) / (d.E + b.E)); } }); return o.length ? avg(o) : NaN; }
+  if (F.open) { F.open.real = pairSpread('open'); F.open.axis = avg(op.map(function (k) { return D[k].axisSpread; })); F.open.cells = D[op[0]].cells; }
+  if (F.closed) { F.closed.real = pairSpread('closed'); F.closed.axis = avg(cl.map(function (k) { return D[k].axisSpread; })); F.closed.cells = D[cl[0]].cells; }
+  /* seed-mode factors: set B (Poisson) */
+  function setFac(set, t) { var v = ids.filter(function (k) { return D[k].set === set && (t === 'closed' ? D[k].topo === 'closed' : D[k].topo !== 'closed'); }).map(function (k) { return D[k].ratio; }); return v.length ? avg(v) : NaN; }
+  F.poisson = { open: setFac('B', 'open'), closed: setFac('B', 'closed') };
+  /* stretch: each D run against the same seeds unstretched in set A */
+  function base(d) { return ids.map(function (k) { return D[k]; }).filter(function (b) { return b.set === 'A' && b.topo === d.topo && b.cells === d.cells && b.rng === d.rng && Math.abs(b.target - d.target) < 0.5 && b.sz === 1; })[0]; }
+  F.stretch = { open: [], closed: [] };
+  ids.forEach(function (k) {
+    var d = D[k]; if (d.set !== 'D') return;
+    var b = base(d); if (!b) return;
+    var rr = (d.ax[2] / ((d.ax[0] + d.ax[1]) / 2)) / (b.ax[2] / ((b.ax[0] + b.ax[1]) / 2));
+    var gr = (((d.sh[0] + d.sh[1]) / 2) / d.sh[2]) / (((b.sh[0] + b.sh[1]) / 2) / b.sh[2]);
+    (F.stretch[d.topo === 'closed' ? 'closed' : 'open']).push({ id: k, s: d.sz, ratio: rr, m: Math.log(rr) / Math.log(d.sz), g: gr, r: Math.log(gr) / Math.log(rr), meanE: d.E / b.E });
+  });
+  ['open', 'closed'].forEach(function (t) { var L = F.stretch[t]; if (L.length) { F.stretch[t + 'M'] = avg(L.map(function (x) { return x.m; })); F.stretch[t + 'R'] = avg(L.map(function (x) { return x.r; })); } });
+  /* plateau pairs (set P): plateau run vs open run with same cells, target, seeds */
+  F.plateau = [];
+  ids.forEach(function (k) {
+    var d = D[k]; if (d.set !== 'P' || d.topo !== 'plateau') return;
+    var o = ids.map(function (j) { return D[j]; }).filter(function (b) { return b.set === 'P' && b.topo === 'open' && b.cells === d.cells && b.rng === d.rng && Math.abs(b.target - d.target) < 0.5; })[0];
+    if (!o) return;
+    F.plateau.push({ id: k, open: o.id, k: d.k, cells: d.cells, target: d.target, f128: d.E128 / o.E128, fbest: d.E / o.E, rho: d.rho, rhoOpen: o.rho });
+  });
+  /* cell count (set N + set A at the same target) */
+  var byCells = {};
+  ids.forEach(function (k) { var d = D[k]; if (d.set === 'N' || (d.set === 'A' && d.topo === 'open' && Math.abs(d.target - 12) < 0.5)) (byCells[d.cells] = byCells[d.cells] || []).push(d.ratio); });
+  F.cells = Object.keys(byCells).map(function (c) { return { cells: +c, ratio: avg(byCells[c]), n: byCells[c].length }; }).sort(function (a, b) { return a.cells - b.cells; });
+  F.lattice = ids.filter(function (k) { return D[k].lattice; }).map(function (k) { return { id: k, ratio: D[k].ratio, R: D[k].R }; });
+  return { D: D, ids: ids, RM: RM, F: F, missing: missing };
+}
+
+/* ════════════════════════════════════════════════════════════
+   Charts (hand-built SVG)
+   ════════════════════════════════════════════════════════════ */
+var COL = { open: 'var(--s-open)', closed: 'var(--s-closed)', plateau: 'var(--s-plateau)', lattice: 'var(--s-lattice)', lit: 'var(--s-lit)' };
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function niceTicksLog(lo, hi) { var t = []; for (var e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++) [1, 2, 5].forEach(function (m) { var v = m * Math.pow(10, e); if (v >= lo * 0.999 && v <= hi * 1.001) t.push(v); }); return t; }
+function niceTicksLin(lo, hi, n) { var span = hi - lo, st = Math.pow(10, Math.floor(Math.log10(span / n))), err = span / n / st; st *= err >= 5 ? 5 : err >= 2 ? 2 : 1; var t = []; for (var v = Math.ceil(lo / st) * st; v <= hi + 1e-12; v += st) t.push(+v.toPrecision(10)); return t; }
+function fmt(v) { if (!isFinite(v)) return '—'; var a = Math.abs(v); return a === 0 ? '0' : a >= 100 ? v.toFixed(0) : a >= 1 ? +v.toPrecision(3) + '' : a >= 0.01 ? +v.toPrecision(3) + '' : v.toExponential(1); }
+function marker(shape, x, y, col, hollow) {
+  var f = hollow ? 'var(--panel)' : col, s = 'stroke="' + col + '" stroke-width="2" fill="' + f + '"';
+  if (shape === 'sq') return '<rect x="' + (x - 4.5) + '" y="' + (y - 4.5) + '" width="9" height="9" rx="1.5" ' + s + '/>';
+  if (shape === 'tri') return '<path d="M' + x + ',' + (y - 5.5) + 'L' + (x + 5.5) + ',' + (y + 4.5) + 'L' + (x - 5.5) + ',' + (y + 4.5) + 'Z" ' + s + ' stroke-linejoin="round"/>';
+  if (shape === 'x') return '<path d="M' + (x - 4) + ',' + (y - 4) + 'L' + (x + 4) + ',' + (y + 4) + 'M' + (x + 4) + ',' + (y - 4) + 'L' + (x - 4) + ',' + (y + 4) + '" stroke="' + col + '" stroke-width="2" stroke-linecap="round"/>';
+  return '<circle cx="' + x + '" cy="' + y + '" r="4.5" ' + s + '/>';
+}
+/* spec: {w,h,x:{log,lo,hi,label,fmt},y:{...},points:[{x,y,shape,col,hollow,tip}],lines:[{pts:[[x,y]],col,dash,label}],refY} */
+function chart(spec) {
+  var W = spec.w || 560, H = spec.h || 340, L = 58, R = 16, T = 12, B = 44, pw = W - L - R, ph = H - T - B;
+  function sc(a, v) { return a.log ? (Math.log(v) - Math.log(a.lo)) / (Math.log(a.hi) - Math.log(a.lo)) : (v - a.lo) / (a.hi - a.lo); }
+  function X(v) { return L + sc(spec.x, v) * pw; } function Y(v) { return T + ph - sc(spec.y, v) * ph; }
+  var o = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(spec.title || '') + '">';
+  var xt = spec.x.log ? niceTicksLog(spec.x.lo, spec.x.hi) : niceTicksLin(spec.x.lo, spec.x.hi, 6);
+  var yt = spec.y.log ? niceTicksLog(spec.y.lo, spec.y.hi) : niceTicksLin(spec.y.lo, spec.y.hi, 5);
+  xt.forEach(function (v) { o += '<line class="gr" x1="' + X(v) + '" x2="' + X(v) + '" y1="' + T + '" y2="' + (T + ph) + '"/><text x="' + X(v) + '" y="' + (T + ph + 15) + '" text-anchor="middle">' + (spec.x.fmt || fmt)(v) + '</text>'; });
+  yt.forEach(function (v) { o += '<line class="gr" x1="' + L + '" x2="' + (L + pw) + '" y1="' + Y(v) + '" y2="' + Y(v) + '"/><text x="' + (L - 6) + '" y="' + (Y(v) + 3.5) + '" text-anchor="end">' + (spec.y.fmt || fmt)(v) + '</text>'; });
+  o += '<line class="ax" x1="' + L + '" x2="' + L + '" y1="' + T + '" y2="' + (T + ph) + '"/><line class="ax" x1="' + L + '" x2="' + (L + pw) + '" y1="' + (T + ph) + '" y2="' + (T + ph) + '"/>';
+  if (spec.refY != null) o += '<line x1="' + L + '" x2="' + (L + pw) + '" y1="' + Y(spec.refY) + '" y2="' + Y(spec.refY) + '" stroke="var(--muted)" stroke-dasharray="2 4"/>';
+  o += '<text class="lab" x="' + (L + pw / 2) + '" y="' + (H - 6) + '" text-anchor="middle">' + esc(spec.x.label) + '</text>';
+  o += '<text class="lab" transform="translate(13,' + (T + ph / 2) + ') rotate(-90)" text-anchor="middle">' + esc(spec.y.label) + '</text>';
+  o += '<defs><clipPath id="c' + spec.id + '"><rect x="' + L + '" y="' + T + '" width="' + pw + '" height="' + ph + '"/></clipPath></defs><g clip-path="url(#c' + spec.id + ')">';
+  (spec.lines || []).forEach(function (ln) {
+    var d = ln.pts.filter(function (p) { return isFinite(p[0]) && isFinite(p[1]) && p[1] > 0; }).map(function (p, i) { return (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ',' + Y(p[1]).toFixed(1); }).join('');
+    o += '<path d="' + d + '" fill="none" stroke="' + ln.col + '" stroke-width="2"' + (ln.dash ? ' stroke-dasharray="' + ln.dash + '"' : '') + ' stroke-linecap="round"/>';
+  });
+  o += '</g>';
+  (spec.lines || []).forEach(function (ln) { if (!ln.label) return; var p = ln.pts[ln.labelAt != null ? ln.labelAt : ln.pts.length - 1]; if (!p) return;
+    o += '<text class="dl" x="' + (X(p[0]) + (ln.dx || -4)) + '" y="' + (Y(p[1]) + (ln.dy || -8)) + '" text-anchor="' + (ln.anchor || 'end') + '">' + esc(ln.label) + '</text>'; });
+  var hits = '';
+  (spec.points || []).forEach(function (p, i) {
+    if (!isFinite(p.x) || !isFinite(p.y) || p.y <= 0 && spec.y.log) return;
+    var x = X(p.x), y = Y(p.y);
+    o += marker(p.shape, x, y, p.col, p.hollow);
+    hits += '<circle class="hit" cx="' + x + '" cy="' + y + '" r="10" data-tip="' + esc(p.tip || '') + '"/>';
+  });
+  return o + hits + '</svg>';
+}
+function shapeOf(d) { return d.lattice ? 'x' : d.topo === 'closed' ? 'sq' : d.topo === 'plateau' ? 'tri' : 'ci'; }
+function colOf(d) { return d.lattice ? COL.lattice : COL[d.topo] || COL.open; }
+function tipOf(d, extra) {
+  return '<b>' + esc(d.id) + '</b><br>' + esc(d.topo + ' · ' + d.seed + ' · ' + d.cells + ' cells' + (d.k ? ' · k ' + d.k : '') + (d.sz !== 1 ? ' · stretch z ' + d.sz : '')) +
+    '<br>ρ ' + (100 * d.rho).toFixed(2) + ' %   E/Es ' + fmt(d.E) + ' (' + esc(d.src) + ')' +
+    '<br>64³ ' + fmt(d.E64) + '  128³ ' + fmt(d.E128) + '  ratio ' + d.R.toFixed(2) + (extra ? '<br>' + extra : '');
+}
+
+/* ════════════════════════════════════════════════════════════
+   Render
+   ════════════════════════════════════════════════════════════ */
+var LAST = null;
+function render() {
+  var fl = document.getElementById('files');
+  fl.innerHTML = FILES.map(function (f, i) { return '<div>' + esc(f.name) + ' · ' + f.kind + ' · ' + f.n + ' rows<span class="x" data-i="' + i + '" title="remove">✕</span></div>'; }).join('');
+  var out = document.getElementById('out');
+  if (!Object.keys(RESULTS).length) { out.innerHTML = '<div class="empty">No results loaded yet.</div>'; return; }
+  var A = analyse(); LAST = A;
+  var D = A.D, F = A.F, ids = A.ids, h = '';
+  if (A.missing.length) h += '<p class="note flag">⚠ ' + A.missing.length + ' result row(s) have no run-matrix entry (load the matching run CSV): ' + esc(A.missing.slice(0, 8).join(', ')) + (A.missing.length > 8 ? ' …' : '') + '</p>';
+
+  /* summary cards */
+  h += '<h2>Fitted laws</h2><div class="cards">';
+  if (F.open) h += card('<span class="sw" style="background:var(--s-open)"></span>Open (and plateau)', 'E/Es = ' + F.open.C.toFixed(3) + ' ρ<sup>' + F.open.n.toFixed(2) + '</sup>',
+    'ρ ' + pc(F.open.range[0]) + '–' + pc(F.open.range[1]) + ' · fit rms ' + pc(F.open.rms, 1) + ' · ν = ' + F.open.nu0.toFixed(3) + (F.open.nu1 < 0 ? ' − ' : ' + ') + Math.abs(F.open.nu1).toFixed(3) + ' ρ');
+  if (F.closed) h += card('<span class="sw" style="background:var(--s-closed);border-radius:2px"></span>Closed', 'E/Es = ' + F.closed.a.toFixed(3) + ' ρ + ' + F.closed.b.toFixed(3) + ' ρ²',
+    'ρ ' + pc(F.closed.range[0]) + '–' + pc(F.closed.range[1]) + ' · fit rms ' + pc(F.closed.rms, 1) + ' · ν ≈ ' + fmt(F.closed.nu));
+  h += card('Shear', 'G ≈ E / 2(1 + ν)', 'median G ÷ that = ' + fmt(median(ids.map(function (k) { return D[k].Giso; }).filter(isFinite))) + ' over ' + ids.filter(function (k) { return isFinite(D[k].Giso); }).length + ' runs');
+  h += card('Resolution (64 → 128)', A.RM.open ? 'open p = ' + A.RM.open.p.toFixed(2) + (A.RM.closed ? ' · closed p = ' + A.RM.closed.p.toFixed(2) : '') : '—',
+    'error ∝ (voxels across)<sup>−p</sup>; p ≈ 2 ⇒ order-2 extrapolation holds');
+  if (F.open && isFinite(F.open.real)) h += card('Realization scatter', '±' + pc(F.open.real, 1) + ' open · ±' + pc(F.closed ? F.closed.real : NaN, 1) + ' closed',
+    'two seeds per point at ' + F.open.cells + ' / ' + (F.closed ? F.closed.cells : '—') + ' cells; per-axis ±' + pc(F.open.axis, 0) + ' open');
+  h += card('Seed mode', 'Poisson ÷ Lloyd: ' + fmt(F.poisson.open) + ' open · ' + fmt(F.poisson.closed) + ' closed', 'Kelvin / Weaire–Phelan: not calibrated (grid-aligned walls; see table)');
+  if (F.stretch.openM) h += card('Stretch', 'E<sub>z</sub>/E<sub>xy</sub> = s<sup>' + F.stretch.openM.toFixed(2) + '</sup> open · s<sup>' + fmt(F.stretch.closedM) + '</sup> closed',
+    'mean E within ' + pc(Math.max.apply(null, F.stretch.open.concat(F.stretch.closed).map(function (x) { return Math.abs(x.meanE - 1); })), 0) + ' of unstretched');
+  if (F.plateau.length) h += card('<span class="sw" style="background:var(--s-plateau)"></span>Plateau vs open (same ρ)', 'E ratio ' + fmt(Math.min.apply(null, F.plateau.map(function (x) { return x.f128; }))) + '–' + fmt(Math.max.apply(null, F.plateau.map(function (x) { return x.f128; }))),
+    F.plateau.length + ' pairs, 128³ ratio (resolution error cancels in the pair)');
+  if (F.cells.length > 1) h += card('Cell count (open, 12 %)', F.cells.map(function (c) { return c.cells + ' cells: ' + fmt(c.ratio); }).join(' · '), 'E ÷ law; 1 = the law holds at that cell count');
+  h += '</div>';
+
+  /* charts */
+  h += '<h2>Charts</h2><div class="grid2">';
+  var lawPts = function (L, lo, hi) { var p = []; for (var i = 0; i <= 60; i++) { var r = lo * Math.pow(hi / lo, i / 60); p.push([r, L(r)]); } return p; };
+  var main = ids.filter(function (k) { return D[k].sz === 1 && D[k].sx === 1 && D[k].sy === 1; });
+  var lines = [];
+  lines.push({ pts: lawPts(function (r) { return 0.93 * Math.pow(r, 2.04); }, 0.04, 0.4), col: COL.lit, dash: '5 5' });
+  lines.push({ pts: lawPts(function (r) { return 0.563 * Math.pow(r, 1.19); }, 0.04, 0.4), col: COL.lit, dash: '2 4' });
+  if (F.open) lines.push({ pts: lawPts(F.open.law, 0.04, 0.4), col: COL.open });
+  if (F.closed) lines.push({ pts: lawPts(F.closed.law, 0.04, 0.4), col: COL.closed });
+  h += fig('Stiffness vs solid fraction', chart({ id: 1, title: 'E vs rho', x: { log: true, lo: 0.04, hi: 0.4, label: 'solid fraction ρ', fmt: function (v) { return Math.round(v * 100) + '%'; } },
+      y: { log: true, lo: 0.001, hi: 0.3, label: 'E / Es (mean of x, y, z)' }, lines: lines,
+      points: main.map(function (k) { var d = D[k]; return { x: d.rho, y: d.E, shape: shapeOf(d), col: colOf(d), hollow: d.seed === 'poisson' || d.low, tip: tipOf(d, 'E ÷ law ' + fmt(d.ratio)) }; }) }),
+    'Filled: Lloyd seeds, extrapolated 64 ↔ 128. Hollow: Poisson seeds, or a 128³ value corrected by the resolution model (walls / struts too thin at 64³). Grey lines: Roberts & Garboczi fits for Voronoi foams.',
+    legendMain() + '<div class="legend">' + ll(COL.open, '', 'open law') + ll(COL.closed, '', 'closed law') + ll(COL.lit, '5 5', 'R–G open') + ll(COL.lit, '2 4', 'R–G closed') + '</div>');
+
+  var rx = [], ry = [];
+  ids.forEach(function (k) { var d = D[k]; if (!d.lattice && isFinite(d.R) && d.R > 0) { rx.push(d.w64); ry.push(d.R); } });
+  var rl = [];
+  ['open', 'closed'].forEach(function (t) { var m = A.RM[t]; if (!m) return; var p = []; for (var w = 1.6; w <= 8.01; w += 0.1) p.push([w, (1 - m.a * Math.pow(2 * w, -m.p)) / (1 - m.a * Math.pow(w, -m.p))]); rl.push({ pts: p, col: COL[t] }); });
+  h += fig('Resolution: 128³ ÷ 64³', chart({ id: 2, title: 'resolution', x: { log: false, lo: 0.5, hi: 8, label: 'wall / strut width at 64³ (voxels, 2t)', fmt: function (v) { return v.toFixed(0); } },
+      y: { log: true, lo: 0.75, hi: 2.2, label: 'E(128³) ÷ E(64³)', fmt: function (v) { return v.toFixed(v < 1 ? 2 : 1); } }, refY: 1, lines: rl,
+      points: ids.filter(function (k) { return isFinite(D[k].R) && D[k].R > 0; }).map(function (k) { var d = D[k]; return { x: d.w64, y: Math.min(Math.max(d.R, 0.76), 2.15), shape: shapeOf(d), col: colOf(d), hollow: d.seed === 'poisson', tip: tipOf(d) + (d.R > 2.15 ? '<br>(off scale: ' + fmt(d.R) + ')' : '') }; }) }),
+    'Each run’s 64³ → 128³ change against how many voxels cross a wall or strut at 64³. Curves: E_h = E∞(1 − a·w<sup>−p</sup>) fitted to the resolved disordered runs; p ≈ 2 means the lab’s order-2 extrapolation is right. Points pinned to the edge are off scale (64³ solve broken).',
+    legendMain() + '<div class="legend">' + (A.RM.open ? ll(COL.open, '', 'open model, p = ' + A.RM.open.p.toFixed(2)) : '') + (A.RM.closed ? ll(COL.closed, '', 'closed model, p = ' + A.RM.closed.p.toFixed(2)) : '') + '</div>');
+
+  if (F.stretch.open.length || F.stretch.closed.length) {
+    var sl = [];
+    ['open', 'closed'].forEach(function (t) { var m = F.stretch[t + 'M']; if (!m) return; sl.push({ pts: [[1, 1], [2.1, Math.pow(2.1, m)]], col: COL[t], dash: '4 4' }); });
+    h += fig('Stretch along z (18 %)', chart({ id: 3, title: 'stretch', x: { log: true, lo: 0.95, hi: 2.2, label: 'stretch s (z)', fmt: function (v) { return v.toFixed(v < 1.5 ? 2 : 1); } }, y: { log: true, lo: 0.9, hi: 8, label: 'Ez/Exy ÷ same seeds unstretched' }, lines: sl, refY: 1,
+        points: F.stretch.open.concat(F.stretch.closed).map(function (x) { var d = D[x.id]; return { x: x.s, y: x.ratio, shape: shapeOf(d), col: colOf(d), tip: tipOf(d, 'Ez/Exy ratio ' + fmt(x.ratio) + ' · m ' + x.m.toFixed(2) + ' · mean E ' + fmt(x.meanE) + '× · shear ratio ' + fmt(x.g)) }; }) }),
+      'Directional split under the foam tool’s anisotropy stretch. The average stiffness hardly moves; stiffness shifts toward the stretch axis as s<sup>m</sup>.',
+      legendTopo() + '<div class="legend">' + (F.stretch.openM ? ll(COL.open, '4 4', 'open s^' + F.stretch.openM.toFixed(2)) : '') + (F.stretch.closedM ? ll(COL.closed, '4 4', 'closed s^' + F.stretch.closedM.toFixed(2)) : '') + '</div>');
+  }
+  if (F.plateau.length) {
+    h += fig('Plateau vs open at the same ρ', chart({ id: 4, title: 'plateau', x: { log: false, lo: 0, hi: 0.32, label: 'plateau k', fmt: function (v) { return v.toFixed(2); } }, y: { log: false, lo: 0.7, hi: 1.3, label: 'E plateau ÷ E open (128³)', fmt: function (v) { return v.toFixed(2); } }, refY: 1,
+        points: F.plateau.map(function (x) { var d = D[x.id]; return { x: x.k, y: x.f128, shape: x.cells > 30 ? 'tri' : 'ci', col: COL.plateau, hollow: /-r2$/.test(x.id), tip: tipOf(d, 'paired with ' + x.open + '<br>128³ ratio ' + fmt(x.f128) + ' · best-estimate ratio ' + fmt(x.fbest)) }; }) }),
+      'Each plateau foam against the open foam with the same cells, density and seeds. Triangles 50 cells, circles 27 cells; hollow = second realization. 1 means the open law applies to plateau at its measured ρ.', '');
+  } else h += '<div class="fig"><h3>Plateau vs open</h3><div class="empty">Load the plateau pass results (set P) to see this.</div></div>';
+  h += '</div>';
+
+  /* table */
+  h += '<h2>Runs</h2><div class="row" style="margin-bottom:8px"><button class="btn" id="dlJson">Download fit (JSON)</button><button class="btn ghost" id="dlMd">Download summary (.md)</button></div>';
+  h += '<div class="tbl"><table><thead><tr><th>run</th><th>set</th><th>topology</th><th>seeds</th><th>cells</th><th>k</th><th>s<sub>z</sub></th><th>ρ %</th><th>w64</th><th>128÷64</th><th>E/Es</th><th>source</th><th>÷ law</th><th>G ÷ iso</th><th>ν</th><th>iters 64/128</th><th>time s</th><th>file</th></tr></thead><tbody>';
+  ids.slice().sort().forEach(function (k) {
+    var d = D[k], rcl = !isFinite(d.ratio) ? '' : Math.abs(d.ratio - 1) > 0.15 ? 'bad' : Math.abs(d.ratio - 1) > 0.07 ? 'flag' : '';
+    h += '<tr><td>' + esc(k) + '</td><td>' + esc(d.set) + '</td><td class="l">' + esc(d.topo) + '</td><td class="l">' + esc(d.seed) + '</td><td>' + d.cells + '</td><td>' + (d.k || '') + '</td><td>' + (d.sz !== 1 ? d.sz : '') + '</td><td>' + (100 * d.rho).toFixed(2) +
+      '</td><td class="' + (d.w64 < 2.5 ? 'flag' : '') + '">' + d.w64.toFixed(1) + '</td><td class="' + (d.R > 1.3 || d.R < 0.95 ? 'flag' : '') + '">' + fmt(d.R) + '</td><td>' + fmt(d.E) + '</td><td class="l">' + esc(d.lattice ? 'not calibrated' : d.src) + '</td><td class="' + rcl + '">' + fmt(d.ratio) + '</td><td>' + fmt(d.Giso) + '</td><td>' + fmt(d.nu) +
+      '</td><td>' + (isFinite(d.iters) ? d.iters : '') + '/' + (isFinite(d.iters2) ? d.iters2 : '') + '</td><td>' + fmt(d.wall) + '</td><td class="l" style="color:var(--muted)">' + esc(d.file) + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  h += '<p class="note">w64 = 2 × thickness in voxels at 64³ (open strut / closed wall width with normalize on; plateau borders are wider than this). Source: <b>ext</b> = the lab’s order-2 extrapolation from 64³ and 128³; <b>128 + model</b> = the 128³ value divided by (1 − a·w<sup>−p</sup>) where the 64³ solve is too coarse to use. “÷ law” compares each run with the open or closed law at its own ρ.</p>';
+  out.innerHTML = h;
+  document.getElementById('dlJson').onclick = function () { save('foam_fit.json', JSON.stringify(exportFit(A), null, 1), 'application/json'); };
+  document.getElementById('dlMd').onclick = function () { save('foam_fit_summary.md', markdown(A), 'text/markdown'); };
+}
+function pc(v, d) { return isFinite(v) ? (100 * v).toFixed(d == null ? 0 : d) + ' %' : '—'; }
+function median(a) { if (!a.length) return NaN; a = a.slice().sort(function (x, y) { return x - y; }); return a[Math.floor(a.length / 2)]; }
+function card(k, v, d) { return '<div class="card"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="d">' + d + '</div></div>'; }
+function fig(title, svg, cap, legend) { return '<div class="fig"><h3>' + title + '</h3>' + (legend || '') + svg + '<div class="cap">' + cap + '</div></div>'; }
+function lg(shape, col, label, hollow) { return '<span><svg width="14" height="14" viewBox="0 0 14 14">' + marker(shape, 7, 7, col, hollow) + '</svg>' + label + '</span>'; }
+function ll(col, dash, label) { return '<span><svg width="22" height="10" viewBox="0 0 22 10" style="width:22px;height:10px"><line x1="1" y1="5" x2="21" y2="5" stroke="' + col + '" stroke-width="2"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/></svg>' + label + '</span>'; }
+function legendTopo() { return '<div class="legend">' + lg('ci', COL.open, 'open') + lg('sq', COL.closed, 'closed') + '</div>'; }
+function legendMain() { return '<div class="legend">' + lg('ci', COL.open, 'open') + lg('sq', COL.closed, 'closed') + lg('tri', COL.plateau, 'plateau') + lg('x', COL.lattice, 'Kelvin / W–P') + lg('ci', COL.open, 'Poisson or 128 + model', true) + '</div>'; }
+function save(name, text, type) { var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500); }
+
+function exportFit(A) {
+  var F = A.F, o = { generated: new Date().toISOString(), files: FILES.filter(function (f) { return f.kind === 'results'; }).map(function (f) { return f.name; }), n_runs: A.ids.length, shear: 'G = E / (2 (1 + nu))' };
+  if (F.open) o.open = { form: 'E/Es = C * rho^n', C: F.open.C, n: F.open.n, rms_log: F.open.rms, nu: { c0: F.open.nu0, c1: F.open.nu1 }, rho_range: F.open.range, cells: F.open.cells, realization_half_spread: F.open.real, axis_spread: F.open.axis };
+  if (F.closed) o.closed = { form: 'E/Es = a * rho + b * rho^2', a: F.closed.a, b: F.closed.b, rms_log: F.closed.rms, nu: F.closed.nu, rho_range: F.closed.range, cells: F.closed.cells, realization_half_spread: F.closed.real, axis_spread: F.closed.axis };
+  o.resolution = A.RM; o.poisson_factor = F.poisson;
+  o.stretch = { form: 'Ez/Exy = s^m; shear split ~ (Ei Ej)^(r/2)', open: { m: F.stretch.openM, r: F.stretch.openR }, closed: { m: F.stretch.closedM, r: F.stretch.closedR }, runs: F.stretch.open.concat(F.stretch.closed) };
+  o.plateau_pairs = F.plateau; o.cell_count = F.cells; o.lattice = F.lattice;
+  return o;
+}
+function markdown(A) {
+  var F = A.F, L = ['# F13LD.foam stiffness fit', '', 'Generated ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ' from ' + FILES.filter(function (f) { return f.kind === 'results'; }).map(function (f) { return '`' + f.name + '`'; }).join(', ') + ' (' + A.ids.length + ' runs).', ''];
+  if (F.open) L.push('- **Open (and plateau):** E/Es = ' + F.open.C.toFixed(3) + ' ρ^' + F.open.n.toFixed(3) + ' over ρ ' + pc(F.open.range[0]) + '–' + pc(F.open.range[1]) + ' (rms ' + pc(F.open.rms, 1) + '); ν = ' + F.open.nu0.toFixed(3) + ' ' + (F.open.nu1 < 0 ? '−' : '+') + ' ' + Math.abs(F.open.nu1).toFixed(3) + ' ρ');
+  if (F.closed) L.push('- **Closed:** E/Es = ' + F.closed.a.toFixed(3) + ' ρ + ' + F.closed.b.toFixed(3) + ' ρ² over ρ ' + pc(F.closed.range[0]) + '–' + pc(F.closed.range[1]) + ' (rms ' + pc(F.closed.rms, 1) + '); ν ≈ ' + fmt(F.closed.nu));
+  L.push('- **Shear:** G = E / 2(1 + ν)');
+  if (A.RM.open) L.push('- **Resolution:** open p = ' + A.RM.open.p.toFixed(2) + (A.RM.closed ? ', closed p = ' + A.RM.closed.p.toFixed(2) : '') + ' (64³ → 128³ error ∝ width^−p)');
+  L.push('- **Poisson ÷ Lloyd seeds:** open ' + fmt(F.poisson.open) + ', closed ' + fmt(F.poisson.closed));
+  if (F.stretch.openM) L.push('- **Stretch:** Ez/Exy = s^' + F.stretch.openM.toFixed(2) + ' open, s^' + fmt(F.stretch.closedM) + ' closed');
+  if (F.plateau.length) L.push('- **Plateau ÷ open at equal ρ (128³):** ' + F.plateau.map(function (x) { return x.id + ' ' + fmt(x.f128); }).join(', '));
+  if (F.cells.length) L.push('- **Cell count (open 12 %, E ÷ law):** ' + F.cells.map(function (c) { return c.cells + ' cells ' + fmt(c.ratio); }).join(', '));
+  L.push('', '| run | topology | seeds | cells | ρ % | E/Es | source | ÷ law | ν |', '|---|---|---|---|---|---|---|---|---|');
+  A.ids.slice().sort().forEach(function (k) { var d = A.D[k]; L.push('| ' + [k, d.topo + (d.k ? ' k ' + d.k : ''), d.seed, d.cells, (100 * d.rho).toFixed(2), fmt(d.E), d.lattice ? 'not calibrated' : d.src, fmt(d.ratio), fmt(d.nu)].join(' | ') + ' |'); });
+  return L.join('\n') + '\n';
+}
+
+/* ════════════════════════════════════════════════════════════
+   Wiring
+   ════════════════════════════════════════════════════════════ */
+function loadFiles(list) {
+  var n = list.length, done = 0, errs = [];
+  Array.prototype.forEach.call(list, function (f) {
+    var rd = new FileReader();
+    rd.onload = function () { try { ingest(String(rd.result), f.name); } catch (e) { errs.push(e.message); } if (++done === n) { if (errs.length) alert(errs.join('\n')); render(); } };
+    rd.readAsText(f);
+  });
+}
+var drop = document.getElementById('drop'), fileIn = document.getElementById('file');
+document.getElementById('pick').onclick = function () { fileIn.click(); };
+fileIn.onchange = function () { loadFiles(fileIn.files); fileIn.value = ''; };
+['dragenter', 'dragover'].forEach(function (e) { document.addEventListener(e, function (ev) { ev.preventDefault(); drop.classList.add('hot'); }); });
+['dragleave', 'drop'].forEach(function (e) { document.addEventListener(e, function (ev) { ev.preventDefault(); if (e === 'drop' || ev.target === document.documentElement) drop.classList.remove('hot'); }); });
+document.addEventListener('drop', function (ev) { if (ev.dataTransfer && ev.dataTransfer.files.length) loadFiles(ev.dataTransfer.files); });
+document.getElementById('files').addEventListener('click', function (ev) {
+  var i = ev.target.getAttribute('data-i'); if (i == null) return;
+  var f = FILES[+i]; FILES.splice(+i, 1);
+  if (f.kind === 'results') { RESULTS = {}; var keep = FILES.slice(); FILES = []; alert('Removed ' + f.name + '. Load the other results files again to rebuild.'); FILES = keep.filter(function (x) { return x.kind !== 'results'; }); }
+  render();
+});
+var tip = document.getElementById('tip');
+document.addEventListener('mousemove', function (ev) {
+  var t = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-tip');
+  if (!t) { tip.style.display = 'none'; return; }
+  tip.innerHTML = t; tip.style.display = 'block';
+  var x = ev.clientX + 14, y = ev.clientY + 14, r = tip.getBoundingClientRect();
+  if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - 14;
+  if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - 14;
+  tip.style.left = x + 'px'; tip.style.top = y + 'px';
+});
+render();
+</script>
+</body>
+</html>
