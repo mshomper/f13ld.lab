@@ -40,6 +40,10 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.16.2
+
+**Crush: safer side-stress corrections.** On a very compliant design (a pi-TPMS at about 1/3,500 of the solid's stiffness) the cell's average stress is tiny next to the stresses inside its sheets, so single-precision noise is visible in the side stress, and the stiffness v0.16.1 learned from it could go bad — one Z crush reused a bad estimate on every retry and stalled in five failed solves. Now: every retry starts again from the elastic stiffness; a correction that at least doubles the side stress is half taken back and not learned from; no single correction moves the sides by more than the step's axial strain; and the attempt with the lowest side stress is kept (if it is within 2 %).
+
 ## What's new in v0.16.1
 
 **Crush: side stress now settles after yield.** The crush holds the sides of the cell stress-free while it squeezes one axis. That correction used the cell's elastic stiffness and allowed 4 tries; once a compliant design yields it is far softer sideways, the correction fell short, and steps were accepted with up to 19 % side stress left — partly confined, so the curve climbed faster than the elastic slope after yield (a pi-TPMS at the new soft void; the old stiff void had hidden it). Now the sideways stiffness is learned from each correction (Broyden secant update, carried from step to step), up to 8 corrections are allowed, and a step whose side stress is still above 2 % of the axial stress is cut back and retried. The console reports cut-back steps and warns if a step had to be accepted above 2 %.

@@ -493,6 +493,7 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
           var esc = trialAxis / eAxisPrev;
           for (var ex = 0; ex < nf0; ex++) epsBarFull[freeIdx[ex]] = ebFreePrev[ex] * esc;
         }
+        macroState.cap = Math.abs(trialAxis - eAxis);   /* v0.16.2 — per-correction lateral move limit */
         res = nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, freeIdx, Cbar_e, opts,
                                 { epTen: snapEp, alpha: snapAl }, macroState);
       }
@@ -503,6 +504,7 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
       var latBad = (control === 'stress') && res.converged && res.lateralRel > latAccept;
       if (res.converged && (!latBad || cut >= cutbackMax)) { ok = true; break; }
       if (latBad) lateralCutbacks++;
+      macroState.H = null;   /* v0.16.2 — retry from the elastic lateral compliance */
       /* cutback: restore history, halve the increment */
       for (var rs=0;rs<6;rs++){ ws.epTen[rs].set(snapEp[rs]); ws.eps[rs].set(snapEps[rs]); }
       ws.alpha.set(snapAl);
@@ -565,6 +567,7 @@ function nonlinearCrushCPU(recipe, N, axisV, opts) {
    Shared by the 16f oracle and 16g crushStress. */
 var NL_MACRO_MAX = 8;
 var NL_LATERAL_ACCEPT = 0.02;
+var NL_LATERAL_BACKTRACK = 2.0;   /* v0.16.2 — take half a correction back when it at least doubles the lateral stress (smaller rises are f32 noise) */
 function nlBroydenUpdate(H, x, xPrev, f, fPrev, n) {
   var dx = new Float64Array(n), df = new Float64Array(n), Hdf = new Float64Array(n), dxH = new Float64Array(n);
   var dxdx = 0, i, j;
@@ -579,6 +582,32 @@ function nlBroydenUpdate(H, x, xPrev, f, fPrev, n) {
   }
   H.set(Hn);
   return true;
+}
+
+/* v0.16.2 — one guarded lateral correction (shared by 16f and 16g).
+   st: { xPrev, fPrev, latPrev, lastDx, best, cap, H, broyden, n } — the anchor
+   is the last iterate that did not make the lateral stress worse.
+   - clearly worse than the anchor (> NL_LATERAL_BACKTRACK x): take back half of the last move (offset from the
+     anchor halves), no Broyden update (it would learn f32 noise);
+   - otherwise: Broyden update from the anchor, new anchor, dx = -H f, scaled
+     so no component exceeds st.cap (this step's axial strain increment).
+   Records the best (lowest lateral) iterate.  Returns the change to add to
+   the free strains. */
+function nlLateralStep(st, xCur, fCur, latRel) {
+  var n = st.n, dx = new Array(n), i, j;
+  if (!st.best || latRel < st.best.lat) st.best = { lat: latRel, x: xCur.slice() };
+  if (st.lastDx && latRel > NL_LATERAL_BACKTRACK * st.latPrev) {   /* clear overshoot only: small rises are f32 noise */
+    for (i = 0; i < n; i++) { dx[i] = -0.5 * st.lastDx[i]; st.lastDx[i] *= 0.5; }
+    return dx;
+  }
+  if (st.broyden && st.xPrev) nlBroydenUpdate(st.H, xCur, st.xPrev, fCur, st.fPrev, n);
+  st.xPrev = xCur.slice(); st.fPrev = fCur.slice(); st.latPrev = latRel;
+  var mx = 0;
+  for (i = 0; i < n; i++) { var s = 0; for (j = 0; j < n; j++) s += st.H[i * n + j] * fCur[j]; dx[i] = -s; if (Math.abs(dx[i]) > mx) mx = Math.abs(dx[i]); }
+  if (!(mx <= st.cap) && mx > 0) { var k = st.cap / mx; for (i = 0; i < n; i++) dx[i] *= k; }
+  if (!isFinite(mx)) for (i = 0; i < n; i++) dx[i] = 0;
+  st.lastDx = dx.slice();
+  return dx;
 }
 
 /* Uniaxial-stress macro step. Solves the free macro strain components so
@@ -603,26 +632,40 @@ function nlMacroStressStep(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, axisV, f
     for (var a=0;a<nf;a++) for (var b=0;b<nf;b++) Kff[a*nf+b] = Cbar_e[freeIdx[a]*6 + freeIdx[b]];
     macroState.H = invertSmall(Kff, nf);
   }
-  var H = macroState.H;
-
-  var last = null, xPrev = null, fPrev = null;
-  for (var mit=0; mit<macroMax; mit++) {
+  var latAccept = opts.lateralAccept != null ? opts.lateralAccept : NL_LATERAL_ACCEPT;
+  var st = { xPrev: null, fPrev: null, latPrev: Infinity, lastDx: null, best: null,
+             cap: macroState.cap > 0 ? macroState.cap : Infinity, H: macroState.H, broyden: broyden, n: nf };
+  var solveAt = function () {
     /* hold committed history at the previous load step through the macro loop */
     for (var hr=0; hr<6; hr++) ws.epTen[hr].set(histBase.epTen[hr]);
     ws.alpha.set(histBase.alpha);
-    var res = nlNewtonSolveCPU(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, opts);
+    var rr = nlNewtonSolveCPU(ws, solid, m, C_v, C0, Gamma, N, epsBarFull, opts);
+    if (rr.converged) {
+      var sn = 0, sref = Math.max(Math.abs(rr.sigma_bar[axisV]), 1e-6);
+      for (var f=0; f<nf; f++){ var sv = rr.sigma_bar[freeIdx[f]]; sn += sv*sv; }
+      rr.lateralRel = Math.sqrt(sn)/sref;
+    }
+    return rr;
+  };
+
+  var last = null;
+  for (var mit=0; mit<macroMax; mit++) {
+    var res = solveAt();
     last = res;
     res.macroIters = mit + 1;
     if (!res.converged) return res;
-    var sFree = [], xCur = []; var snorm = 0, sref = Math.max(Math.abs(res.sigma_bar[axisV]), 1e-6);
-    for (var f=0; f<nf; f++){ var sv = res.sigma_bar[freeIdx[f]]; sFree.push(sv); xCur.push(epsBarFull[freeIdx[f]]); snorm += sv*sv; }
-    res.lateralRel = Math.sqrt(snorm)/sref;
     if (res.lateralRel < macroTol) return res;
-    if (broyden && xPrev) nlBroydenUpdate(H, xCur, xPrev, sFree, fPrev, nf);
-    xPrev = xCur; fPrev = sFree;
     if (mit === macroMax - 1) break;   /* no un-solved correction after the last solve */
-    /* delta eps_free = -H * sFree */
-    for (var r=0;r<nf;r++){ var dd=0; for (var c=0;c<nf;c++) dd += H[r*nf+c]*sFree[c]; epsBarFull[freeIdx[r]] -= dd; }
+    var sFree = [], xCur = [];
+    for (var f2=0; f2<nf; f2++){ sFree.push(res.sigma_bar[freeIdx[f2]]); xCur.push(epsBarFull[freeIdx[f2]]); }
+    var dxL = nlLateralStep(st, xCur, sFree, res.lateralRel);
+    for (var r=0;r<nf;r++) epsBarFull[freeIdx[r]] += dxL[r];
+  }
+  /* keep the best attempt when the last one is over the limit (v0.16.2) */
+  if (last && last.converged && last.lateralRel > latAccept && st.best && st.best.lat <= latAccept) {
+    for (var rb=0; rb<nf; rb++) epsBarFull[freeIdx[rb]] = st.best.x[rb];
+    var rB = solveAt(); rB.macroIters = macroMax + 1;
+    if (rB.converged || !last) last = rB; else return rB;
   }
   return last;
 }
