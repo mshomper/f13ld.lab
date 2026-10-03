@@ -638,11 +638,14 @@ async function runRealSweep(N, runToken){
         renderDesignGrid();
 
         var baseUnits = doneUnits;
-        /* v0.16.0 — void scaled to this axis's linear stiffness (cap 1e-3,
-           the old fixed value); 1e-4 when no linear result is available. */
+        /* v0.16.0 — void scaled to the design's linear stiffness (cap 1e-3,
+           the old fixed value); 1e-4 when no linear result is available.
+           v0.17.1 — from the softest axis, so all three crush axes share one
+           void and one elastic setup (cached in axStore._macro). */
         var nlEs = (rcpN.material && rcpN.material.Es_MPa) || 110000;
         var rLin = dn.results && !dn.results._error ? dn.results : null;
-        var eLin = rLin ? 1000 * (axKey === 'xx' ? rLin.E11 : axKey === 'yy' ? rLin.E22 : rLin.E33) : 0;
+        var eLin = rLin ? 1000 * Math.min(rLin.E11 || Infinity, rLin.E22 || Infinity, rLin.E33 || Infinity) : 0;
+        if (!isFinite(eLin)) eLin = 0;
         var nlVoid = voidForStiffness(eLin, nlEs, NL_VOID_CONTRAST);
         var nlVoidScaled = nlVoid != null;
         if (!nlVoidScaled) nlVoid = 1e-4;
@@ -672,17 +675,37 @@ async function runRealSweep(N, runToken){
                          ' · ' + lbl + ' · step ' + stepIdx +
                          ' · ε=' + (eps * 100).toFixed(2) + '% · σ=' + sig.toFixed(1) + ' MPa');
         }; })(baseUnits, axLbl);
-        var nlSolver = null, nlErr = null, nlOut = null;
+        var nlErr = null, nlOut = null;
         nFresh.nonlinear++;
+        /* v0.17.1 — one crush attempt.  tight: NL_TIGHT_* field tolerances.
+           The elastic setup (macro stiffness) depends only on design, grid,
+           void and tolerance, so it is reused across axes (axStore._macro). */
+        var runCrush = async function(tight, axisKey, store, voidC, stepCb){
+          var s = new NonlinearSolverFull(nlN, nlfft);
+          try {
+            if (tight){ s.newtonTol = NL_TIGHT_NEWTON_TOL; s.cgTol = NL_TIGHT_CG_TOL; }
+            s.upload(rcpN, Object.assign({}, connOpts(), { voidContrast: voidC }));
+            var mk = 'v' + voidC + '|t' + (tight ? 1 : 0);
+            if (store._macro && store._macro[mk]) s._Cmacro = new Float64Array(store._macro[mk]);
+            var o = await s.crush(axisMap[axisKey], { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: stepCb, captureAlpha: true /* tie-up #5 — per-step plastic-strain field for the Nonlinear-tab scrubber */,
+                                                      tightOnFloor: !tight });
+            if (s._Cmacro){ store._macro = store._macro || {}; store._macro[mk] = Array.from(s._Cmacro); }
+            return o;
+          } finally { try { s.destroy(); } catch (e2){} }
+        };
+        var nlTight = !!axStore._tight;   /* a design that needed it once starts every later axis tight */
         try {
-          nlSolver = new NonlinearSolverFull(nlN, nlfft);
-          nlSolver.upload(rcpN, Object.assign({}, connOpts(), { voidContrast: nlVoid }));
-          nlOut = await nlSolver.crush(axisMap[axKey], { control: 'stress', nSteps: 16, epsTarget: NONLIN_STATE.cap, onStep: onNlStep, captureAlpha: true /* tie-up #5 — per-step plastic-strain field for the Nonlinear-tab scrubber */ });
+          nlOut = await runCrush(nlTight, axKey, axStore, nlVoid, onNlStep);
+          if (nlOut && nlOut.retryTight && !stale()){
+            axStore._tight = nlTight = true;
+            console.log('[run] ' + dn.id + ' ' + axKey + ': side-stress floor ' + (nlOut.lateralFloor * 100).toFixed(1) + '% — re-running the crush at the tighter solve tolerance (' + NL_TIGHT_NEWTON_TOL + ')');
+            paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · ' + axLbl + ' · tighter solve…');
+            nlOut = await runCrush(true, axKey, axStore, nlVoid, onNlStep);
+          }
         } catch (e){ nlErr = e; if (!stale()) console.error('[run] nonlinear solve failed for ' + dn.id + ' (' + axKey + '):', e); }
-        if (nlSolver){ try { nlSolver.destroy(); } catch (e2){} }
         if (stale()) return;
 
-        if (nlErr || !nlOut || nlOut.error || !isFinite(nlOut.sigma_y_eff)){
+        if (nlErr || !nlOut || nlOut.error || nlOut.retryTight || !isFinite(nlOut.sigma_y_eff)){
           axStore[axKey] = { error: (nlErr && nlErr.message) || (nlOut && nlOut.error) || 'failed', N: nlN, axis: axKey };
         } else {
           axStore[axKey] = {
@@ -698,6 +721,7 @@ async function runRealSweep(N, runToken){
             alphaMax: nlOut.alphaMax || 0,
             voidContrast: nlVoid, voidScaled: nlVoidScaled, Es_MPa: nlEs,
             lateralFloor: (nlOut.lateralFloor != null ? nlOut.lateralFloor : null),   /* v0.16.3 — side-stress precision floor (step 1) */
+            tightSolve: nlTight,   /* v0.17.1 — ran at NL_TIGHT_* */
             _sig: nlSig
           };
         }
