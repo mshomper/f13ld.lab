@@ -994,25 +994,48 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       }
       /* field predictor from the last two converged fields (snap = this step's start) */
       if (this._predictOn && step > 0 && eAxis > eAxisPP) this._fPredict((trial - eAxis) / (eAxis - eAxisPP));
-      var fieldDiverged = false, latRel = 0, xPrev = null, fPrev = null;
+      /* v0.16.2 — guarded lateral loop (see nlLateralStep, 16f):
+         (a) a correction that at least doubles the lateral stress is half taken
+             back and not learned from (Broyden on f32 noise overshot to 22 %);
+         (b) one correction moves no lateral strain by more than this step's
+             axial increment;
+         (c) the attempt with the lowest lateral stress is kept (re-solved
+             when it was not the last one) if it is within latAccept;
+         (d) every cutback restarts from the elastic compliance (a learned
+             compliance reused on every retry trapped a compliant pi-TPMS Z
+             crush in five field divergences). */
+      var fieldDiverged = false, latRel = 0, mit = 0;
       if (!broyden) Hff = new Float64Array(Sff);
-      for (var mit = 0; mit < macroMax; mit++) {
-        /* hold committed history at the previous load step through the macro loop */
+      var lat = { xPrev: null, fPrev: null, latPrev: Infinity, lastDx: null, best: null,
+                  cap: Math.max(Math.abs(trial - eAxis), 1e-6), H: Hff, broyden: broyden, n: nf };
+      var solveAt = async function (self) {
         var encB = d.createCommandEncoder();
-        es._copyPair(encB, { n: this.snapEpp_n, s: this.snapEpp_s }, { n: this.epp_n, s: this.epp_s });
+        es._copyPair(encB, { n: self.snapEpp_n, s: self.snapEpp_s }, { n: self.epp_n, s: self.epp_s });
         d.queue.submit([encB.finish()]);
-        res = await this.newtonSolve(eb);
+        return await self.newtonSolve(eb);
+      };
+      for (mit = 0; mit < macroMax; mit++) {
+        /* hold committed history at the previous load step through the macro loop */
+        res = await solveAt(this);
         if (!res.converged) { fieldDiverged = true; break; }
         var sn = 0, sref = Math.max(Math.abs(res.sigma_bar[axis]), 1e-6), fCur = [], xCur = [];
         for (var f = 0; f < nf; f++) { var sv = res.sigma_bar[freeIdx[f]]; fCur.push(sv); xCur.push(eb[freeIdx[f]]); sn += sv * sv; }
         latRel = Math.sqrt(sn) / sref;
         if (latRel < macroTol) break;   /* lateral stress ~ 0: macro converged */
-        if (broyden && xPrev) nlBroydenUpdate(Hff, xCur, xPrev, fCur, fPrev, nf);
-        xPrev = xCur; fPrev = fCur;
         if (mit === macroMax - 1) break;   /* no un-solved correction after the last solve */
-        for (var r = 0; r < nf; r++) {
-          var dd = 0; for (var c = 0; c < nf; c++) dd += Hff[r * nf + c] * fCur[c];
-          eb[freeIdx[r]] -= dd;
+        var dxL = nlLateralStep(lat, xCur, fCur, latRel);
+        for (var r = 0; r < nf; r++) eb[freeIdx[r]] += dxL[r];
+      }
+      if (mit >= macroMax) mit = macroMax - 1;
+      /* (c) keep the best attempt when the last one is over the limit */
+      if (!fieldDiverged && latRel > latAccept && lat.best && lat.best.lat <= latAccept) {
+        for (var rb = 0; rb < nf; rb++) eb[freeIdx[rb]] = lat.best.x[rb];
+        res = await solveAt(this);
+        if (!res.converged) fieldDiverged = true;
+        else {
+          var snB = 0, srefB = Math.max(Math.abs(res.sigma_bar[axis]), 1e-6);
+          for (var fb = 0; fb < nf; fb++) { var svB = res.sigma_bar[freeIdx[fb]]; snB += svB * svB; }
+          latRel = Math.sqrt(snB) / srefB;
         }
       }
       /* v0.16.1 — accept when the field Newton converged AND the lateral stress
@@ -1031,6 +1054,7 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       es._copyPair(encR, { n: this.snapEpp_n, s: this.snapEpp_s }, { n: this.epp_n, s: this.epp_s });
       d.queue.submit([encR.finish()]);
       this.stats.failedAttempts++;
+      Hff = new Float64Array(Sff);   /* (d) retry from the elastic lateral compliance */
       if (verbose) console.log('  [cutback] attempt ' + cut + (latBad ? ' (lateral)' : ' (field)') + ' failed; dStep ' + dStep.toFixed(6) + ' -> ' + (dStep * 0.5).toFixed(6));
       dStep *= 0.5; trial = eAxis + dStep; cut++;
     }
