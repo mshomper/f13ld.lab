@@ -218,7 +218,8 @@ var CURVE_STATE = { scale: 'abs' };   /* 'abs' (MPa) | 'norm' (σ / own σ_y) */
 /* Two-pass render: draw, measure the real canvas (legend rows wrap, header
    wraps on narrow panels), then redraw at exactly that size so the SVG fills
    the space at 1:1 and text is never scaled or stretched. */
-function renderMergedCurvePlot(host){
+/* v0.17.0 — SVG fallback; renderMergedCurvePlot (20b-curve-plotly.js) uses Plotly when it loads. */
+function renderMergedCurvePlotSVG(host){
   host.innerHTML = buildMergedCurvePlot();
   var cv = host.querySelector('.mp-canvas'), svg = cv && cv.querySelector('svg');
   if (!cv || !svg) return;

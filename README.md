@@ -40,6 +40,12 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 16³ — not the elastic grid) and to a user strain cap (default 5%). It is the slowest stage (sync-bound CG); per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.17.0
+
+**Interactive stress–strain plot.** The Nonlinear tab's comparison plot is now drawn with Plotly (basic bundle vendored in `vendor/`, MIT, loaded only when the tab first shows a curve; the previous SVG plot stays as the fallback). Hover reads every curve at that strain (σ and × own yield); drag to zoom, range slider underneath, double-click to reset, PNG export at 3×. **Stress** switch: MPa / log / ÷ own yield (opens on ÷ own yield when strengths differ more than 20×). **Focus** switch: X / Y / Z drive the preview cubes too, All shows every axis bold with each design's weakest yield and lowest buckling ratio labelled. Legend chips hide a design or one axis. Curves are spline-smoothed through the solver points. Off-scale buckling lines become tags above the plot.
+
+**Scrubber ↔ plot.** The crush scrubber is now one strain timeline for every cube, and an amber cursor on the plot follows it (and the auto-play). Hovering the plot scrubs the cubes to that strain; clicking pins it; Play resumes. Crush metric cards are now KPI cards (modulus and yield on the preview axis, weakest axis, buckling-to-yield, load capacity, warnings).
+
 ## What's new in v0.16.3
 
 **Crush: side-stress limit follows each design's precision.** For very compliant designs (around 1/3,000 of the solid's stiffness) the crush cannot resolve the side stress to 2 % at the GPU's single precision — a foam's first, purely elastic step stayed at 22.6 % after 8 corrections — and v0.16.1–2 then halved every step four times (~40 solves a step). Now the first step measures the design's own floor; later steps use max(2 %, 1.5 × floor), with at most one retry per step before the best attempt is accepted. v0.16.2's size cap and overshoot rule are removed (they stalled the foam). The console logs the floor; above 5 % the Nonlinear tab marks the curve **post-yield approximate** (metric card and legend). The elastic slope and yield onset hold either way.
