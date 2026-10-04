@@ -194,26 +194,46 @@ function sweepParamCatalog(recipe) {
        thickness too, so it falls back to bisection.  Count, regularity,
        Lloyd iterations and random seed regenerate the seeds (13d header). */
     var fg = recipe.foam || {}, sd = recipe.seeds || {}, fmode = fg.mode || 'plateau', sm = sd.mode || 'poisson';
-    var orgOn = typeof fg.organic === 'number' && fg.organic > 0;
-    add({ key: 'foam.thickness', label: 'Thickness (wall / strut half-width)', unit: '', def: 0.08,
-          target: orgOn ? 'monotone' : 'threshold', hint: [0.005, 1.0],
-          apply: [{ p: 'foam.thickness', k: 1 }], thresholdPath: 'foam.thickness' });
+    /* v0.17.3 — exact field (foam.field 2): thickness is still an exact
+       threshold (fillet, node and plateau swell don't scale with it); wet
+       foam has no thickness, its border radius sets the solid instead. */
+    var v2 = fg.field === 2, wet = v2 && fmode === 'wet';
+    var orgOn = !v2 && typeof fg.organic === 'number' && fg.organic > 0;
+    if (!wet)
+      add({ key: 'foam.thickness', label: 'Thickness (wall / strut half-width)', unit: '', def: 0.08,
+            target: orgOn ? 'monotone' : 'threshold', hint: [0.005, 1.0],
+            apply: [{ p: 'foam.thickness', k: 1 }], thresholdPath: 'foam.thickness' });
     if (fmode === 'plateau')
       add({ key: 'foam.plateau_k', label: 'Plateau k (junction mass)', unit: '', def: 0.05, target: 'monotone', hint: [0, 0.4],
             apply: [{ p: 'foam.plateau_k', k: 1 }] });
-    add({ key: 'foam.organic', label: 'Organic', unit: '', def: 0, target: 'monotone', hint: [0, 10], apply: [{ p: 'foam.organic', k: 1 }] });
+    if (!v2)
+      add({ key: 'foam.organic', label: 'Organic', unit: '', def: 0, target: 'monotone', hint: [0, 10], apply: [{ p: 'foam.organic', k: 1 }] });
+    if (wet)
+      add({ key: 'foam.border', label: 'Plateau border radius (wet)', unit: '', def: 0.4, target: 'monotone', hint: [0.05, 2],
+            apply: [{ p: 'foam.border', k: 1 }] });
+    if (v2 && !wet) {
+      add({ key: 'foam.fillet', label: 'Node fillet radius', unit: '', def: 0, target: 'monotone', hint: [0, 0.8], apply: [{ p: 'foam.fillet', k: 1 }] });
+      add({ key: 'foam.node', label: 'Node sphere (extra radius)', unit: '', def: 0, target: 'monotone', hint: [0, 0.5], apply: [{ p: 'foam.node', k: 1 }] });
+    }
     ['x', 'y', 'z'].forEach(function (a, i) {
       add({ key: 'stretch_' + a, label: 'Stretch ' + a, unit: '×', def: 1, target: null, hint: [0.3, 3],
             apply: [{ p: 'anisotropy.stretch.' + i, k: 1 }] });
     });
     add({ key: 'seeds.count', label: 'Cells per tile', unit: '', def: sd.count || 50, target: null, hint: [8, 400], integer: true, range: [25, 100, 4],
           apply: [{ p: 'seeds.count', k: 1 }] });
-    if (sm === 'poisson' || sm === 'lloyd')
+    var relaxed = ['lloyd', 'bimodal', 'mirror', 'cubic'].indexOf(sm) >= 0, lattice = ['weairePhelan', 'kelvin', 'fcc', 'c15'].indexOf(sm) >= 0;
+    if (['poisson', 'lloyd', 'bimodal', 'mirror', 'cubic'].indexOf(sm) >= 0)
       add({ key: 'seeds.regularity', label: 'Regularity', unit: '', def: 0.9, target: null, hint: [0.45, 1], apply: [{ p: 'seeds.regularity', k: 1 }] });
-    if (sm === 'lloyd')
-      add({ key: 'seeds.lloyd_iterations', label: 'Lloyd iterations', unit: '', def: 4, target: null, hint: [1, 12], integer: true, range: [1, 8, 4],
+    if (relaxed)
+      add({ key: 'seeds.lloyd_iterations', label: 'Lloyd iterations', unit: '', def: 4, target: null, hint: [1, sm === 'lloyd' ? 60 : 12], integer: true, range: [1, 8, 4],
             apply: [{ p: 'seeds.lloyd_iterations', k: 1 }] });
-    if (sm === 'poisson' || sm === 'lloyd' || sm === 'random')
+    if (sm === 'bimodal') {
+      add({ key: 'seeds.size_ratio', label: 'Two-size: size ratio', unit: '×', def: 2, target: null, hint: [1.1, 3], apply: [{ p: 'seeds.size_ratio', k: 1 }] });
+      add({ key: 'seeds.large_fraction', label: 'Two-size: large share', unit: '', def: 0.3, target: null, hint: [0.05, 0.95], apply: [{ p: 'seeds.large_fraction', k: 1 }] });
+    }
+    if (lattice)
+      add({ key: 'seeds.jitter', label: 'Lattice disorder', unit: '', def: 0, target: null, hint: [0, 0.5], apply: [{ p: 'seeds.jitter', k: 1 }] });
+    if (!lattice || (sd.jitter > 0))
       add({ key: 'seeds.rng_seed', label: 'Random seed (realization)', unit: '', def: 42, target: null, hint: [1, 10], integer: true, range: [1, 3, 3],
             apply: [{ p: 'seeds.rng_seed', k: 1 }] });
   } else if (fam === 'wave') {

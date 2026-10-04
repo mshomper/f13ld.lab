@@ -140,6 +140,7 @@ What changes for calibration:
 To recalibrate on the exact field:
 
 1. The sweep CSV now takes a `field` column; `2` builds the exact field and blank keeps the original (`62-sweep.js`, checked in `validate-foam.js` §8).
-2. The thicknesses in `foam_calibration_runs.csv`, `foam_plateau_runs.csv` and `foam_cellcount_runs.csv` were solved to hit their target solid fractions with the **original** field. For exact-field runs they need re-solving: add `field: 2` to the `foam` block in `make_runs.js`, `make_plateau_runs.js` and `make_cellcount_runs.js`, write a `field` column of `2`, and regenerate.
-3. Re-run the whole first pass on the exact field (not only the 27 capped rows in §10), so the refit doesn't mix the two fields, then the plateau and cell-count passes.
+2. The thicknesses in `foam_calibration_runs.csv`, `foam_plateau_runs.csv` and `foam_cellcount_runs.csv` were solved to hit their target solid fractions with the **original** field. The three generators now build the exact field by default (`FOAM_FIELD=1` rebuilds the originals) and write **`foam_calibration_runs_field2.csv`**, **`foam_plateau_runs_field2.csv`** and **`foam_cellcount_runs_field2.csv`** — same runs and targets, thicknesses re-solved, `field` column = 2. At the same solid fraction, open and plateau runs need about 7 % more thickness than before (A-open-8: 0.229 → 0.246); closed runs barely move.
+3. Re-run the whole first pass from `foam_calibration_runs_field2.csv` at the 1000-iteration cap (not only the 27 capped rows in §10), so the refit doesn't mix the two fields, then the plateau and cell-count `_field2` files. `foam_rerun_1000_runs.csv` is superseded.
+4. New in F13LD.foam v0.6.0 and not yet calibrated: wet foam, fillet / node, two-size mix, symmetric seeds, FCC / C15 and lattice disorder. The sweep CSV takes their columns (`border`, `fillet`, `node`, `size_ratio`, `large_fraction`, `jitter`; topology `wet`) when a pass for them is planned.
 
