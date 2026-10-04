@@ -17,13 +17,16 @@ vm.createContext(ctx);
 ['13-kernels.js', '13b-kernels-new.js', '13c-import-kernel.js', '13d-foam-kernel.js', '14-rasterizer.js', '14a-connectivity.js',
  '14c-stl-import.js', '14d-voxel-stats.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
 const L = (s) => vm.runInContext(s, ctx);
+/* v0.17.3 — FOAM_FIELD=2 (default) builds F13LD.foam v0.6.0's exact field and
+   writes <name>_field2.csv; FOAM_FIELD=1 rebuilds the original-field file. */
+const FIELD = process.env.FOAM_FIELD === '1' ? 1 : 2;
 
 const N_TARGET = 64;    /* the run grid: the build check then matches exactly; fits use each run's measured ρ */
 const rows = [];
 function run(id, set, purpose, o) {
   rows.push(Object.assign({ run_id: id, family: 'foam', set, purpose, seed_mode: 'lloyd', regularity: 0.9, lloyd_iterations: 4,
                             rng_seed: 1, plateau_k: '', organic: 0, stretch_x: 1, stretch_y: 1, stretch_z: 1, normalize: 'true',
-                            grid_N: 64, nu_s: 0.3, note: '' }, o));
+                            grid_N: 64, nu_s: 0.3, field: FIELD === 2 ? 2 : '', note: '' }, o));
 }
 const pct = (v) => Math.round(v * 100);
 const kTag = (k) => k === 0 ? 'open' : 'k' + k;
@@ -44,7 +47,7 @@ function recipeOf(r) {
     seeds: { mode: r.seed_mode, count: r.cells, regularity: r.regularity === '' ? 0.9 : r.regularity,
              lloyd_iterations: r.lloyd_iterations === '' ? 0 : r.lloyd_iterations, rng_seed: r.rng_seed === '' ? 42 : r.rng_seed },
     anisotropy: { enabled: true, stretch: [r.stretch_x, r.stretch_y, r.stretch_z] },
-    foam: { mode: r.topology, thickness: 0.1, plateau_k: r.plateau_k === '' ? null : r.plateau_k, organic: 0, normalize: true },
+    foam: { mode: r.topology, thickness: 0.1, plateau_k: r.plateau_k === '' ? null : r.plateau_k, organic: 0, normalize: true, field: FIELD === 2 ? 2 : undefined },
     geometry: { mode: 'solid', cellSizeMm: 5, cellMult: 1 } };
 }
 const t0 = Date.now();
@@ -66,9 +69,9 @@ rows.forEach((r, i) => {
 process.stderr.write('\n' + rows.length + ' runs, ' + Math.round((Date.now() - t0) / 1000) + ' s\n');
 
 const cols = ['run_id', 'family', 'set', 'purpose', 'seed_mode', 'cells', 'regularity', 'lloyd_iterations', 'rng_seed', 'topology',
-              'thickness', 'plateau_k', 'organic', 'stretch_x', 'stretch_y', 'stretch_z', 'normalize', 'grid_N', 'nu_s',
+              'thickness', 'plateau_k', 'organic', 'stretch_x', 'stretch_y', 'stretch_z', 'normalize', 'field', 'grid_N', 'nu_s',
               'expected_vf_pct', 'target_vf_pct', 'feature_vox_64', 'feature_vox_128', 'note'];
 const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-fs.writeFileSync(path.join(__dirname, 'foam_plateau_runs.csv'),
+fs.writeFileSync(path.join(__dirname, 'foam_plateau_runs' + (FIELD === 2 ? '_field2' : '') + '.csv'),
   [cols.join(',')].concat(rows.map(r => cols.map(c => esc(r[c])).join(','))).join('\n') + '\n');
-console.log('wrote foam_plateau_runs.csv (' + rows.length + ' runs)');
+console.log('wrote foam_plateau_runs' + (FIELD === 2 ? '_field2' : '') + '.csv (' + rows.length + ' runs)');

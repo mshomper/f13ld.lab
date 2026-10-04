@@ -231,13 +231,17 @@ function sweepRunFromCsvRow(r) {
      seed_mode (poisson | lloyd | random | kelvin | weairePhelan), cells,
      regularity, lloyd_iterations, rng_seed, topology (open | closed |
      plateau), thickness, plateau_k, organic, stretch_x/y/z, normalize,
+     field (2 = F13LD.foam v0.6.0's exact field; blank = the original),
+     fillet, node, border (exact field only), size_ratio, large_fraction
+     (seed_mode bimodal), jitter (lattices),
      grid_N, nu_s, expected_vf_pct, set, purpose, note. */
 function sweepFoamRunFromCsvRow(r, id) {
   var sm = String(r.seed_mode || 'lloyd').trim(), topo = String(r.topology || 'plateau').trim().toLowerCase();
   if (FoamSeeds.MODES.indexOf(sm) < 0) throw new Error(id + ': unknown seed_mode "' + sm + '"');
-  if (['open', 'closed', 'plateau'].indexOf(topo) < 0) throw new Error(id + ': unknown topology "' + r.topology + '"');
+  if (['open', 'closed', 'plateau', 'wet'].indexOf(topo) < 0) throw new Error(id + ': unknown topology "' + r.topology + '"');
+  if (topo === 'wet' && sweepNum(r.field) !== 2) throw new Error(id + ': wet foam needs field 2 (the exact field)');
   var t = sweepNum(r.thickness), cells = sweepNum(r.cells);
-  if (t == null || !(t > 0)) throw new Error(id + ': foam run needs a thickness above 0');
+  if (topo !== 'wet' && (t == null || !(t > 0))) throw new Error(id + ': foam run needs a thickness above 0');
   if (cells == null || cells < 1) throw new Error(id + ': foam run needs cells');
   var sx = sweepNum(r.stretch_x), sy = sweepNum(r.stretch_y), sz = sweepNum(r.stretch_z);
   var N = sweepNum(r.grid_N) || 64;
@@ -245,8 +249,16 @@ function sweepFoamRunFromCsvRow(r, id) {
   var seeds = { mode: sm, count: Math.round(cells), regularity: sweepNum(r.regularity) != null ? sweepNum(r.regularity) : 0.9,
                 lloyd_iterations: sweepNum(r.lloyd_iterations) != null ? Math.round(sweepNum(r.lloyd_iterations)) : (sm === 'lloyd' ? 4 : 0),
                 rng_seed: sweepNum(r.rng_seed) != null ? Math.round(sweepNum(r.rng_seed)) : 42 };
+  if (sweepNum(r.size_ratio) != null) seeds.size_ratio = sweepNum(r.size_ratio);
+  if (sweepNum(r.large_fraction) != null) seeds.large_fraction = sweepNum(r.large_fraction);
+  if (sweepNum(r.jitter) != null) seeds.jitter = sweepNum(r.jitter);
   var foam = { mode: topo, thickness: t, plateau_k: topo === 'plateau' ? (sweepNum(r.plateau_k) != null ? sweepNum(r.plateau_k) : 0.05) : null,
                organic: sweepNum(r.organic) || 0, normalize: !/^(false|0|no|off)$/i.test(String(r.normalize || 'true').trim()) };
+  if (sweepNum(r.field) === 2) {
+    foam.field = 2;
+    ['fillet', 'node', 'border'].forEach(function (k) { if (sweepNum(r[k]) != null) foam[k] = sweepNum(r[k]); });
+  }
+  if (topo === 'wet' && !(t > 0)) foam.thickness = 0.08;   /* unused by wet foam */
   return {
     id: id, tier: r.tier || '', set: r.set || '', purpose: r.purpose || '', note: r.note || '',
     label: 'foam · ' + sm + ' · ' + topo, shift: '',
