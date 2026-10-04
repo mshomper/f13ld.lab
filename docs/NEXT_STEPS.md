@@ -1,6 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
-**As of:** v0.17.2 · 2026-10-03 · three-axis crush, design-scaled void, rebuilt crush side-stress loop, Plotly stress–strain plot; foam laws provisional (27 calibration runs to re-run at the 1000-iteration cap)
+**As of:** v0.17.3 · 2026-10-04 · three-axis crush, design-scaled void, rebuilt crush side-stress loop, Plotly stress–strain plot, F13LD.foam exact field + v0.6.0 foams; foam laws provisional (whole first pass to re-run on the exact field at the 1000-iteration cap)
+**Suite on main (2026-10-04):** lab v0.17.3 · F13LD.foam v0.6.0 · F13LD.mesh v0.9.3 (fast weld export — see mesh `docs/SESSION_RECAP_2026-10-04.md`; no lab impact)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-03.md`](SESSION_RECAP_2026-10-03.md) (previous: [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md), [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
@@ -31,25 +32,34 @@
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
 | **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
 | **v0.17.2** | Tight crush = Newton tolerance only (NL_TIGHT_CG_TOL = null), retry reuses the first attempt's elastic setup (cache keyed by void + cgTol); foam: floor 0.3 %, ~45 s per axis (was setup 85.5 s). Nonlinear-tab cubes pause while a run is solving |
+| **v0.17.3** | F13LD.foam v0.6.0 exact field (`geometry.field: 2`, `buildFoamSDF2`, byte-identical in lab / mesh / foam); v0.6.0 foams (wet Plateau borders, fillet / node, two-size mix, mirror / cubic symmetric seeds, FCC / C15 + disorder); sweep CSV `field`, `fillet`, `node`, `border`, `size_ratio`, `large_fraction`, `jitter`; calibration generators write `_field2` run lists; `validate-foam.js` §8. Older foam recipes build exactly as before. (Built in a separate session; `FOAM_CALIBRATION.md` §11) |
 
 ---
 
-## 1. PICK UP HERE (2026-10-03)
+## 1. PICK UP HERE (2026-10-04)
 
 Do these in order; 1–3 are on Matt's GPU, the rest are dev work to propose first.
 
-1. **Verify v0.17.2 on the RTX machine** (nothing below has run on real hardware yet — recap §5). Reload, check the header says v0.17.2, clear cached crushes (`for (const k in NONLIN_BY_DESIGN) delete NONLIN_BY_DESIGN[k]; for (const k in NONLIN_AXES) delete NONLIN_AXES[k];`), then:
+1. **Verify v0.17.2's crush changes on the RTX machine** (now in v0.17.3; nothing below has run on real hardware yet — recap §5). Reload, check the header says v0.17.3, clear cached crushes (`for (const k in NONLIN_BY_DESIGN) delete NONLIN_BY_DESIGN[k]; for (const k in NONLIN_AXES) delete NONLIN_AXES[k];`), then:
    - **Poisson-disk foam, Crush axis = All.** Expect X: `[crush] lateral precision floor ~27 % … restarting at the tighter tolerance`, then `[run] … reusing the elastic setup` and a tight run (floor ~0.3 %); Y and Z start tight with `elastic-macro setup` near 0 ms; no "post-yield approximate"; ~2 min total (X ~47 s, Y and Z ~35 s each). The cubes should hold still while it solves. Report the floor lines and the total time.
    - **pi-TPMS (gyroid × Fischer-Koch S), All.** Expect floor ~0.4 %, ~1.2 s per axis, curves bending below the elastic slope after yield, card E ≈ crush E0 (~30–32 MPa).
    - **The new plot**: scales, Focus X/Y/Z/All, legend chips, hover-scrub of the cubes, click-to-pin, zoom box, PNG export. Note anything to push further or pull back.
-2. **Foam calibration re-run at the 1000-iteration cap** ([`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §10). Sweep → CSV → `docs/foam-calibration/foam_rerun_1000_runs.csv` (27 runs) with the §1 settings (Standard, void 1e-6, 64 ↔ 128 pair, order 2). Also run `foam_cellcount_runs.csv` (6) and, if time allows, re-run `foam_plateau_runs.csv` (19). Load results into `foam-fit.html` **old file first, re-runs after** (later run ids replace earlier ones) and export the fit JSON + summary.
-3. **Refit and decide** (with Claude, from the fit page output): updated open / plateau laws; whether the open law needs a cell-count term or the ±7 % cell-count band can go. Then **F13LD.foam v0.5.1**: paste the new constants into its `FOAM_CAL` block, update its README numbers.
+2. **Foam calibration on the exact field, at the 1000-iteration cap** ([`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §11 — replaces the 27-run re-run of §10). Sweep → CSV, with the §1 settings (Standard, void 1e-6, 64 ↔ 128 pair, order 2):
+   - `docs/foam-calibration/foam_calibration_runs_field2.csv` (48 runs, the whole first pass);
+   - then `foam_plateau_runs_field2.csv` (19) and `foam_cellcount_runs_field2.csv` (6).
+
+   Load **only** `_field2` results into `foam-fit.html` (a fresh study, so the two fields don't mix) and export the fit JSON + summary.
+3. **Refit and decide** (with Claude, from the fit page output): open / closed / plateau laws on the exact field; whether the open law needs a cell-count term or the ±7 % cell-count band can go. Then **F13LD.foam v0.6.1**: paste the new constants into its `FOAM_CAL` block, drop the "fitted on the previous field" note on open / plateau estimates, update its README numbers (F13LD.foam `docs/NEXT_STEPS.md`).
 4. **PI-TPMS paper** (§1c) — Figure 6, verification table, Section 5 text. The v0.16–v0.17 changes do not touch sweep numbers (sweeps keep their own void 1e-6 and precision preset; the production pass ran at High, 1000 iterations).
 5. **Dev cycle** — §1a.
 
 ## 1-foam. Foam stiffness calibration — laws provisional until the re-run
 
-Laws (open 0.724 ρ^1.93, closed 0.304 ρ + 0.456 ρ², plateau factor 1 + 0.118(1 − e^(−k/0.111)), G = E/2(1+ν), stretch and Poisson-seed factors) are in [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §6–7 and live in F13LD.foam v0.5.0 (§9). **27 of the 48 runs stopped at the old 300-iteration cap** (open / plateau 18–35 % on both grids, closed 12–18 % at 64³, set D), and a stopped solve reads stiff, so the open law above 18 % may be high. Re-run, refit and update F13LD.foam per §1 items 2–3.
+Laws (open 0.724 ρ^1.93, closed 0.304 ρ + 0.456 ρ², plateau factor 1 + 0.118(1 − e^(−k/0.111)), G = E/2(1+ν), stretch and Poisson-seed factors) are in [`FOAM_CALIBRATION.md`](FOAM_CALIBRATION.md) §6–7 and live in F13LD.foam (§9). Two reasons they're provisional:
+- **27 of the 48 runs stopped at the old 300-iteration cap** (open / plateau 18–35 % on both grids, closed 12–18 % at 64³, set D), and a stopped solve reads stiff, so the open law above 18 % may be high.
+- **They were fitted on the original field.** F13LD.foam v0.6.0 builds new foams on the exact field, which makes open / plateau struts thinner near the nodes: about 13–17 % less solid at the same thickness (§11).
+
+Re-run on the exact field, refit and update F13LD.foam per §1 items 2–3. The v0.6.0 foams (wet, fillet / node, two-size, symmetric seeds, FCC / C15, disorder) are not calibrated yet. A pass for them is a later decision; the sweep CSV already takes their columns.
 
 ## 1a. Next dev cycle — pick up (in suggested order; propose before building)
 
@@ -199,6 +209,10 @@ Also:
 - Seed the random matrices in the 16c E4 self-test (flaky).
 - `validate-willot.js` needs a missing `_willot.js` and power-of-two grids.
 - Refresh the PHASE docs.
+- **Old branches on GitHub** (safe to delete, Matt's call): 23 besides `main` (`gh api repos/mshomper/f13ld.lab/branches` lists them).
+  - 22 are fully merged.
+  - `release/v0.12.1` has one unmerged commit, an older draft of the licence files. Main has the newer version (name "Matthew", v0.13.0).
+- **`CITATION.cff` still says version 0.13.0.** Bump it with each release (add it to the version-bump list in §4).
 
 ---
 

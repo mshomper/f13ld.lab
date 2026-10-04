@@ -132,6 +132,8 @@ The calibration ran on the sweep's Standard preset, then capped at 300 iteration
 
 ## 6. Repo state
 
+> **Update 2026-10-04:** lab main is v0.17.3 (`c509d4f`: v0.17.2 from this session, then F13LD.foam's exact field from a separate session); foam main is v0.6.0 (`d565cfa`); mesh main is v0.9.3 (`bc72aee`). The foam re-run plan moved to `FOAM_CALIBRATION.md` §11; current pick-up list: `NEXT_STEPS.md` §1.
+
 - lab main = `6e35e85` (v0.17.1); PRs #1–#10 merged this session. Branches left on GitHub from this session: `foam-plateau-cellcount`, `v0.14.0-foam` … `v0.17.1-crush-tight` (all merged; safe to delete).
 - foam main = `c80b382` (v0.5.0).
 - New lab files: `13d-foam-kernel.js`, `16i-elastic-fast.js`, `20b-curve-plotly.js`, `validate-foam.js`, `vendor/plotly-basic-2.35.2.min.js` + `vendor/plotly-LICENSE.txt`, `docs/foam-calibration/*`, `docs/FOAM_CALIBRATION.md`.
