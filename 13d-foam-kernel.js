@@ -4,8 +4,10 @@
    (closed cell faces, open cell edges, plateau junctions).
 
    Ported VERBATIM from F13LD.mesh worker/m25-sdf-foam.js (mesh
-   v0.9.1): the FoamSeeds block and buildFoamSDF below are byte-for-
-   byte copies.  FoamSeeds is now in THREE places — F13LD.foam
+   v0.9.2): the FoamSeeds block, buildFoamSDF and buildFoamSDF2 below
+   are byte-for-byte copies.  v0.17.3: recipes with geometry.field === 2
+   (F13LD.foam v0.6.0+) build with buildFoamSDF2, the exact distance to
+   the cell walls / edges; recipes without it build exactly as before.  FoamSeeds is now in THREE places — F13LD.foam
    (index.html), F13LD.mesh and here — and validate-foam.js checks the
    three match.  Edit all three together and bump FoamSeeds.VERSION.
 
@@ -328,7 +330,7 @@ const FoamSeeds = (function(){
 // ==== BEGIN verbatim mesh port (m25-sdf-foam.js foamSeedsFromRecipe + buildFoamSDF) ====
 function foamSeedsFromRecipe(json){
   const sd=json.seeds||{};
-  if(Array.isArray(sd.positions) && sd.positions.length>=12){
+  if(Array.isArray(sd.positions) && sd.positions.length>=3){
     const out=[];
     for(let i=0;i+2<sd.positions.length;i+=3) out.push([sd.positions[i],sd.positions[i+1],sd.positions[i+2]]);
     return out;
@@ -340,6 +342,7 @@ function foamSeedsFromRecipe(json){
 }
 
 function buildFoamSDF(json){
+  if(json.geometry&&json.geometry.field===2) return buildFoamSDF2(json);
   const seeds=foamSeedsFromRecipe(json);
   const N=seeds.length;
   const g=json.geometry||{};
@@ -418,6 +421,141 @@ function buildFoamSDF(json){
     const gz=(RZ[j2]*iz2*aj-RZ[0]*iz2*a1)*0.5;
     const gm=Math.sqrt(gx*gx+gy*gy+gz*gz);
     return base/Math.max(gm,0.05)-T-E;
+  };
+}
+
+// ── FoamField/2 (F13LD.foam v0.6.0) — exact distance to the cell walls/edges ─
+// Recipes with geometry.field === 2 build here; every other recipe keeps the
+// field above unchanged. For a point p in the cell of its nearest seed s₁:
+//   wall distance  = min over neighbours j of the distance to the bisector
+//                    plane of s₁, sⱼ:  (|p−sⱼ|²ₘ − |p−s₁|²ₘ) / (2|M(sⱼ−s₁)|)
+//   strut distance = distance to the cell's edges: the nearest point on a line
+//                    where two planes meet, or a vertex where three meet,
+//                    kept only if it lies inside every other plane.
+// |·|ₘ is the stretched metric M = diag(1/stretch²); its bisectors are still
+// planes in real space, so both distances are true Euclidean millimetres.
+// The 8 nearest seeds are searched over the seeds and their periodic copies,
+// so a cell may border its own copy (few seeds, single-cube lattices).
+// Solid where < 0:  closed: wall − t − E   open/plateau: strut − t − E
+// E (plateau swell, organic bulge) is the same as above, from metric dᵢ.
+function buildFoamSDF2(json){
+  const seeds=foamSeedsFromRecipe(json);
+  const N=seeds.length;
+  const g=json.geometry||{};
+  const an=json.anisotropy||{};
+  const st=(an.enabled&&Array.isArray(an.stretch)&&an.stretch.length===3)?an.stretch.map(v=>(isFinite(v)&&v>0)?v:1):[1,1,1];
+  const mx=1/(st[0]*st[0]), my=1/(st[1]*st[1]), mz=1/(st[2]*st[2]);
+  const mode=g.mode==='open'||g.mode==='closed'?g.mode:'plateau';
+  const T=(typeof g.thickness==='number'&&g.thickness>0)?g.thickness:0.08;
+  const Kp=(mode==='plateau'&&typeof g.plateau_k==='number')?g.plateau_k:0;
+  const O=(typeof g.organic==='number'&&g.organic>0)?g.organic:0;
+  const oAmp=O*2.0, oReach=0.10+Math.pow(O,0.6)*0.25;
+  const L=10, H=5, K=8;
+
+  // Seeds plus every periodic copy within `pad` of the tile, binned on a
+  // plain (non-wrapping) grid over the padded box.
+  const s0=FoamSeeds.meanSpacing(N), smax=Math.max(st[0],st[1],st[2]);
+  const pad=Math.min(L,3*s0*smax), B=H+pad;
+  const PX=[], PY=[], PZ=[];
+  for(let a=-1;a<=1;a++) for(let b=-1;b<=1;b++) for(let c=-1;c<=1;c++)
+    for(let i=0;i<N;i++){
+      const x=seeds[i][0]+a*L, y=seeds[i][1]+b*L, z=seeds[i][2]+c*L;
+      if(x>=-B&&x<=B&&y>=-B&&y<=B&&z>=-B&&z<=B){PX.push(x);PY.push(y);PZ.push(z);}
+    }
+  const M=PX.length;
+  const G=Math.max(1,Math.min(48,Math.round(2*B/s0))), cs=2*B/G, nC=G*G*G;
+  const cI=v=>Math.min(G-1,Math.max(0,Math.floor((v+B)/cs)));
+  const cellOf=new Int32Array(M), start=new Int32Array(nC+1);
+  for(let i=0;i<M;i++){const c=cI(PX[i])+G*(cI(PY[i])+G*cI(PZ[i]));cellOf[i]=c;start[c+1]++;}
+  for(let c=0;c<nC;c++) start[c+1]+=start[c];
+  const fill=start.slice(0,nC), SX=new Float64Array(M), SY=new Float64Array(M), SZ=new Float64Array(M);
+  for(let i=0;i<M;i++){const k=fill[cellOf[i]]++;SX[k]=PX[i];SY[k]=PY[i];SZ[k]=PZ[i];}
+  const rm=cs/smax;   // metric radius a ring of R cells is guaranteed to cover, per R
+
+  // 8 nearest: squared metric distance + real displacement p − s of each.
+  const D=new Float64Array(K), VX=new Float64Array(K), VY=new Float64Array(K), VZ=new Float64Array(K);
+  function consider(k,px,py,pz){
+    const vx=px-SX[k], vy=py-SY[k], vz=pz-SZ[k];
+    const d=vx*vx*mx+vy*vy*my+vz*vz*mz;
+    if(d>=D[K-1]) return;
+    let j=K-1;
+    while(j>0&&D[j-1]>d){D[j]=D[j-1];VX[j]=VX[j-1];VY[j]=VY[j-1];VZ[j]=VZ[j-1];j--;}
+    D[j]=d;VX[j]=vx;VY[j]=vy;VZ[j]=vz;
+  }
+  function nearestK(px,py,pz){
+    const c0=cI(px), c1=cI(py), c2=cI(pz);
+    D.fill(Infinity);
+    for(let R=0;R<G;R++){   // add the shell of cells at ring R
+      for(let a=-R;a<=R;a++){const qx=c0+a; if(qx<0||qx>=G) continue;
+        for(let b=-R;b<=R;b++){const qy=c1+b; if(qy<0||qy>=G) continue;
+          const side=a===-R||a===R||b===-R||b===R, de=(side||R===0)?1:2*R;
+          for(let e=-R;e<=R;e+=de){const qz=c2+e; if(qz<0||qz>=G) continue;
+            const c=qx+G*(qy+G*qz);
+            for(let k=start[c];k<start[c+1];k++) consider(k,px,py,pz);
+          }}}
+      if(Math.sqrt(D[K-1])<=R*rm) return;
+    }
+  }
+
+  // Cell planes in a frame centred on p: inside where n·x ≤ c (c ≥ 0 = distance).
+  const NX=new Float64Array(K), NY=new Float64Array(K), NZ=new Float64Array(K), C=new Float64Array(K), ord=new Int32Array(K);
+  function planes(){
+    for(let j=1;j<K;j++){
+      const ax=(VX[0]-VX[j])*mx, ay=(VY[0]-VY[j])*my, az=(VZ[0]-VZ[j])*mz;
+      const l=Math.sqrt(ax*ax+ay*ay+az*az)||1e-12;
+      NX[j]=ax/l; NY[j]=ay/l; NZ[j]=az/l; C[j]=(D[j]-D[0])/(2*l);
+    }
+  }
+  function inside(x,y,z,s0,s1,s2){
+    for(let j=1;j<K;j++){
+      if(j===s0||j===s1||j===s2) continue;
+      if(NX[j]*x+NY[j]*y+NZ[j]*z>C[j]+1e-9) return false;
+    }
+    return true;
+  }
+  function wallDist(){let m=Infinity;for(let j=1;j<K;j++) if(C[j]<m) m=C[j];return m;}
+  function vertexDist(a,b,c){
+    const bx=NY[b]*NZ[c]-NZ[b]*NY[c], by=NZ[b]*NX[c]-NX[b]*NZ[c], bz=NX[b]*NY[c]-NY[b]*NX[c];
+    const det=NX[a]*bx+NY[a]*by+NZ[a]*bz;
+    if(Math.abs(det)<1e-12) return Infinity;
+    const cx=NY[c]*NZ[a]-NZ[c]*NY[a], cy=NZ[c]*NX[a]-NX[c]*NZ[a], cz=NX[c]*NY[a]-NY[c]*NX[a];
+    const ax=NY[a]*NZ[b]-NZ[a]*NY[b], ay=NZ[a]*NX[b]-NX[a]*NZ[b], az=NX[a]*NY[b]-NY[a]*NX[b];
+    const x=(C[a]*bx+C[b]*cx+C[c]*ax)/det, y=(C[a]*by+C[b]*cy+C[c]*ay)/det, z=(C[a]*bz+C[b]*cz+C[c]*az)/det;
+    return inside(x,y,z,a,b,c)?Math.sqrt(x*x+y*y+z*z):Infinity;
+  }
+  // Planes sorted by distance prune the search: a line on planes a, b is at
+  // least max(c_a, c_b) away, a vertex at least the largest of its three.
+  function strutDist(cap){
+    for(let j=1;j<K;j++) ord[j]=j;
+    for(let i=2;i<K;i++){const v=ord[i];let j=i;while(j>1&&C[ord[j-1]]>C[v]){ord[j]=ord[j-1];j--;}ord[j]=v;}
+    let best=cap;
+    for(let ib=2;ib<K;ib++){const b=ord[ib]; if(C[b]>=best) break;
+      for(let ia=1;ia<ib;ia++){const a=ord[ia];
+        const cab=NX[a]*NX[b]+NY[a]*NY[b]+NZ[a]*NZ[b], det=1-cab*cab;
+        if(det<1e-12) continue;
+        const al=(C[a]-C[b]*cab)/det, be=(C[b]-C[a]*cab)/det, d2=al*C[a]+be*C[b];
+        if(d2<best*best&&inside(al*NX[a]+be*NX[b],al*NY[a]+be*NY[b],al*NZ[a]+be*NZ[b],a,b,-1)) best=Math.sqrt(d2);
+      }}
+    for(let ic=3;ic<K;ic++){const c=ord[ic]; if(C[c]>=best) break;
+      for(let ib=2;ib<ic;ib++) for(let ia=1;ia<ib;ia++){const v=vertexDist(ord[ia],ord[ib],c); if(v<best) best=v;}}
+    return best;
+  }
+  const smooth=(e0,e1,x)=>{const t=Math.min(1,Math.max(0,(x-e0)/(e1-e0)));return t*t*(3-2*t);};
+  // Far from the struts only the sign matters: past `cap` the strut distance
+  // is clamped, which keeps it a safe under-estimate (still 1-Lipschitz).
+  const cap=T*(1+oAmp)+Kp+0.5;
+
+  return p=>{
+    const px=((p[0]+H)%L+L)%L-H, py=((p[1]+H)%L+L)%L-H, pz=((p[2]+H)%L+L)%L-H;
+    nearestK(px,py,pz);
+    planes();
+    let E=0;
+    if(Kp>0||oAmp>0){
+      const d1=Math.sqrt(D[0]), d3=Math.sqrt(D[2]), d4=Math.sqrt(D[3]);
+      if(Kp>0) E+=Kp*(1-smooth(0,0.35,d3-d1));
+      if(oAmp>0) E+=oAmp*T*Math.pow(1-smooth(0,oReach,d4-d1),1.4);
+    }
+    return (mode==='closed'?wallDist():strutDist(cap))-T-E;
   };
 }
 

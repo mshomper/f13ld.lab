@@ -126,3 +126,20 @@ Uses §6–7: ρ measured by point-sampling the exact field at 64³ (worker thre
 The first pass (§6) used the sweep's Standard preset, which then stopped each load case at 300 iterations. 27 of the 48 runs hit that cap: every open and plateau foam at 18–35 % on both grids, the 12–18 % closed foams at 64³ (their 128³ solves, which §6 uses, mostly converged), and the stretched (set D) foams. The solver starts from a uniform strain and works down, so a stopped solve reads **stiff**; the open law above 18 % may be high.
 
 v0.16.0 raises Standard to 1000 iterations (tolerance unchanged, 1e-4) and the export records `cg_maxiter`. [`foam-calibration/foam_rerun_1000_runs.csv`](foam-calibration/foam_rerun_1000_runs.csv) holds the 27 rows, unchanged from `foam_calibration_runs.csv`; run them with the §1 settings (void 1e-6). In the fit page, drop the old results file **first** and the re-run results **after** — a run id loaded later replaces the earlier row. The plateau (§7) and cell-count (§8) files can be re-run as they are; they pick up the new cap automatically.
+
+## 11. Exact field (F13LD.foam v0.6.0) — re-runs on hold until it merges
+
+F13LD.foam v0.6.0 builds every new foam with an exact distance field (`geometry.field: 2`; `buildFoamSDF2` in `13d-foam-kernel.js`, byte-identical in F13LD.mesh and F13LD.foam). Recipes without `field` — including every run in this document — still build the original field exactly, so §6–§9 reproduce as before.
+
+What changes for calibration:
+
+- **Open and plateau foams:** the original field's struts ran thicker near the nodes. At the same thickness the exact field is about 13–17 % less solid (50-cell Lloyd open foam at t = 0.12: 3.7 % → 3.2 %). The laws are fitted against measured ρ, so they still apply roughly, but the node geometry they were fitted on is gone. F13LD.foam v0.6.0 marks open and plateau estimates "fitted on the previous field" with a wider range.
+- **Closed foams:** walls were already within about 2 % of the true thickness where the surface sits, so the closed law carries over.
+- **Few cells:** the exact field searches the seeds' periodic copies, so tiles with very few cells (down to one Kelvin cube, 2 seeds) are correct. The original field could miss a cell's walls with its own copy at low counts.
+
+To recalibrate on the exact field:
+
+1. The sweep CSV now takes a `field` column; `2` builds the exact field and blank keeps the original (`62-sweep.js`, checked in `validate-foam.js` §8).
+2. The thicknesses in `foam_calibration_runs.csv`, `foam_plateau_runs.csv` and `foam_cellcount_runs.csv` were solved to hit their target solid fractions with the **original** field. For exact-field runs they need re-solving: add `field: 2` to the `foam` block in `make_runs.js`, `make_plateau_runs.js` and `make_cellcount_runs.js`, write a `field` column of `2`, and regenerate.
+3. Re-run the whole first pass on the exact field (not only the 27 capped rows in §10), so the refit doesn't mix the two fields, then the plateau and cell-count passes.
+

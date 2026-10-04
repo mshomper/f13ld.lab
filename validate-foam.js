@@ -19,6 +19,10 @@
      6. Non-periodic foam is refused with an explanation
      7. Sweep: foam parameters listed; thickness targets solid fraction
         exactly; cell count regenerates the seeds; stretch applies
+     8. Exact field (geometry.field = 2, F13LD.foam v0.6.0): lab == mesh;
+        walls and struts match a brute-force reference over every periodic
+        copy; tiles seamlessly; few-seed tiles (one Kelvin / Weaire–Phelan
+        cube, 8 Lloyd seeds) and stretch; sweep CSV `field` column
    ============================================================ */
 const fs = require('fs'), vm = require('vm'), path = require('path');
 const ctx = { console, Math, JSON, Float32Array, Float64Array, Uint8Array, Int32Array, Uint32Array, Array, Object,
@@ -79,7 +83,8 @@ function foamExport(o) {
              generator: 'FoamSeeds/' + FS.VERSION, positions },
     anisotropy: { enabled: !!o.stretch, stretch: o.stretch || [1, 1, 1] },
     geometry: { mode: o.topo, thickness: o.t, plateau_k: o.topo === 'plateau' ? (o.k != null ? o.k : 0.05) : null,
-                organic: o.organic || 0, normalize: o.normalize !== false, tile_mm: o.tile_mm || null }
+                organic: o.organic || 0, normalize: o.normalize !== false, tile_mm: o.tile_mm || null,
+                field: o.field }
   };
 }
 
@@ -94,7 +99,10 @@ if (haveMesh) {
     { name: 'plateau k 0.08 + organic 1.5', mode: 'lloyd', count: 40, regularity: 0.9, lloyd: 3, topo: 'plateau', t: 0.1, k: 0.08, organic: 1.5 },
     { name: 'open · stretch 1,1,1.6', mode: 'lloyd', count: 50, regularity: 0.9, lloyd: 4, topo: 'open', t: 0.12, stretch: [1, 1, 1.6] },
     { name: 'Kelvin closed', mode: 'kelvin', count: 54, topo: 'closed', t: 0.07 },
-    { name: 'Weaire–Phelan open, un-normalized', mode: 'weairePhelan', count: 64, topo: 'open', t: 0.15, normalize: false }
+    { name: 'Weaire–Phelan open, un-normalized', mode: 'weairePhelan', count: 64, topo: 'open', t: 0.15, normalize: false },
+    { name: 'exact field · open Lloyd 50', mode: 'lloyd', count: 50, regularity: 0.9, lloyd: 4, topo: 'open', t: 0.12, field: 2 },
+    { name: 'exact field · plateau + organic, stretch', mode: 'lloyd', count: 40, regularity: 0.9, lloyd: 3, topo: 'plateau', t: 0.1, k: 0.08, organic: 1.5, stretch: [1, 1, 1.6], field: 2 },
+    { name: 'exact field · Kelvin one cube, closed', mode: 'kelvin', count: 2, topo: 'closed', t: 0.1, field: 2 }
   ];
   let rs = 12345; const rnd = () => (rs = (rs * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
   for (const c of cases) {
@@ -176,6 +184,82 @@ console.log('\n7. Sweep parameters');
   const sz = L('sweepSpecByKey(__rec, "stretch_z")'); ctx.__sz = sz;
   const r3 = JSON.parse(JSON.stringify(rec)); ctx.__r3 = r3; L('sweepParamSet(__r3, __sz, 1.8)');
   check('stretch z applies', r3.anisotropy.enabled && r3.anisotropy.stretch[2] === 1.8 && L('sweepVoxelFraction(__r3, 48)') !== vf50);
+}
+
+console.log('\n8. Exact field (field 2)');
+{
+  /* Brute-force reference: every seed's 27 periodic copies, nearest 20 as
+     planes, every edge line / vertex tested — no grid, no pruning. */
+  function reference(json) {
+    const S = L('foamSeedsFromRecipe')(json), an = json.anisotropy || {};
+    const st = an.enabled ? an.stretch : [1, 1, 1], m = st.map(v => 1 / (v * v));
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    return (p) => {
+      const c = [];
+      for (const s of S) for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let e = -1; e <= 1; e++) {
+        const v = [p[0] - s[0] - 10 * a, p[1] - s[1] - 10 * b, p[2] - s[2] - 10 * e];
+        c.push({ v, d: v[0] * v[0] * m[0] + v[1] * v[1] * m[1] + v[2] * v[2] * m[2] });
+      }
+      c.sort((x, y) => x.d - y.d);
+      const P = [];
+      for (let j = 1; j < Math.min(20, c.length); j++) {
+        const w = [0, 1, 2].map(i => (c[0].v[i] - c[j].v[i]) * m[i]), l = Math.hypot(...w);
+        P.push({ n: w.map(x => x / l), c: (c[j].d - c[0].d) / (2 * l) });
+      }
+      const ins = (x, sk) => P.every((q, i) => sk.includes(i) || dot(q.n, x) <= q.c + 1e-9);
+      let edge = Infinity;
+      for (let a = 0; a < P.length; a++) for (let b = a + 1; b < P.length; b++) {
+        const A = P[a], B = P[b], cab = dot(A.n, B.n), det = 1 - cab * cab;
+        if (det < 1e-12) continue;
+        const al = (A.c - B.c * cab) / det, be = (B.c - A.c * cab) / det;
+        const x = [0, 1, 2].map(i => al * A.n[i] + be * B.n[i]);
+        if (ins(x, [a, b])) edge = Math.min(edge, Math.hypot(...x));
+        for (let k = b + 1; k < P.length; k++) {
+          const C = P[k], nb = cr(B.n, C.n), nc = cr(C.n, A.n), na = cr(A.n, B.n), d = dot(A.n, nb);
+          if (Math.abs(d) < 1e-12) continue;
+          const y = [0, 1, 2].map(i => (A.c * nb[i] + B.c * nc[i] + C.c * na[i]) / d);
+          if (ins(y, [a, b, k])) edge = Math.min(edge, Math.hypot(...y));
+        }
+      }
+      return { wall: Math.min(...P.map(q => q.c)), edge };
+    };
+  }
+  const cases = [
+    { name: 'open · Lloyd 60', mode: 'lloyd', count: 60, regularity: 0.9, lloyd: 4, topo: 'open', t: 0.1 },
+    { name: 'closed · Poisson 60', mode: 'poisson', count: 60, regularity: 0.85, topo: 'closed', t: 0.06 },
+    { name: 'open · stretch 1, 1, 1.6', mode: 'lloyd', count: 40, regularity: 0.9, lloyd: 4, topo: 'open', t: 0.1, stretch: [1, 1, 1.6] },
+    { name: 'closed · stretch 1.4, 1, 0.8', mode: 'poisson', count: 40, regularity: 0.9, topo: 'closed', t: 0.08, stretch: [1.4, 1, 0.8] },
+    { name: 'open · Lloyd 8', mode: 'lloyd', count: 8, regularity: 0.9, lloyd: 4, topo: 'open', t: 0.2 },
+    { name: 'closed · Kelvin one cube (2 seeds)', mode: 'kelvin', count: 2, topo: 'closed', t: 0.1 },
+    { name: 'open · Kelvin one cube (2 seeds)', mode: 'kelvin', count: 2, topo: 'open', t: 0.15 },
+    { name: 'closed · Weaire–Phelan one cube (8 seeds)', mode: 'weairePhelan', count: 8, topo: 'closed', t: 0.1 }
+  ];
+  let rs = 777; const rnd = () => (rs = (rs * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (const c of cases) {
+    const json = foamExport(Object.assign({ field: 2 }, c));
+    const f = L('buildFoamSDF')(json), ref = reference(json), closed = c.topo === 'closed';
+    let maxErr = 0, n = 0, maxTile = 0;
+    for (let i = 0; i < 20000 && n < 300; i++) {
+      const p = [-5 + 10 * rnd(), -5 + 10 * rnd(), -5 + 10 * rnd()];
+      const r = ref(p), want = closed ? r.wall : r.edge;
+      if (Math.abs(want - c.t) > 0.15) continue;   /* near the surface, where the shape is decided */
+      n++; maxErr = Math.max(maxErr, Math.abs(f(p) + c.t - want));
+      const q = p.slice(); q[i % 3] += 10 * (1 + i % 2); maxTile = Math.max(maxTile, Math.abs(f(q) - f(p)));
+    }
+    check(c.name, n > 20 && maxErr < 1e-9 && maxTile < 1e-12, 'max |Δ| vs reference ' + maxErr.toExponential(1) + ' over ' + n + ' points, tile seam ' + maxTile.toExponential(1));
+  }
+  /* field 2 is opt-in: the same recipe without it builds the original field */
+  const j1 = foamExport({ mode: 'lloyd', count: 50, regularity: 0.9, lloyd: 4, topo: 'open', t: 0.12 });
+  const j2 = foamExport({ mode: 'lloyd', count: 50, regularity: 0.9, lloyd: 4, topo: 'open', t: 0.12, field: 2 });
+  const f1 = L('buildFoamSDF')(j1), f2 = L('buildFoamSDF')(j2);
+  let differ = 0; for (let i = 0; i < 500; i++) { const p = [-5 + 10 * rnd(), -5 + 10 * rnd(), -5 + 10 * rnd()]; if (f1(p) !== f2(p)) differ++; }
+  check('recipes without field 2 keep the original field', differ > 400, differ + ' / 500 points differ between the two');
+  /* sweep CSV rows can ask for the exact field */
+  if (typeof ctx.sweepFoamRunFromCsvRow !== 'function') vm.runInContext(fs.readFileSync(path.join(__dirname, '62-sweep.js'), 'utf8'), ctx, { filename: '62-sweep.js' });
+  const row = L('sweepFoamRunFromCsvRow')({ seed_mode: 'lloyd', cells: '27', topology: 'open', thickness: '0.1', field: '2' }, 'r1');
+  const row0 = L('sweepFoamRunFromCsvRow')({ seed_mode: 'lloyd', cells: '27', topology: 'open', thickness: '0.1' }, 'r0');
+  check('sweep CSV: field column selects the exact field', row.recipe.foam.field === 2 && row0.recipe.foam.field === undefined);
 }
 
 console.log('\n' + (fails ? fails + ' FAILED' : 'all passed') + (skips ? ' (' + skips + ' skipped)' : ''));

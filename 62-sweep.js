@@ -231,6 +231,7 @@ function sweepRunFromCsvRow(r) {
      seed_mode (poisson | lloyd | random | kelvin | weairePhelan), cells,
      regularity, lloyd_iterations, rng_seed, topology (open | closed |
      plateau), thickness, plateau_k, organic, stretch_x/y/z, normalize,
+     field (2 = F13LD.foam v0.6.0's exact field; blank = the original),
      grid_N, nu_s, expected_vf_pct, set, purpose, note. */
 function sweepFoamRunFromCsvRow(r, id) {
   var sm = String(r.seed_mode || 'lloyd').trim(), topo = String(r.topology || 'plateau').trim().toLowerCase();
@@ -247,6 +248,7 @@ function sweepFoamRunFromCsvRow(r, id) {
                 rng_seed: sweepNum(r.rng_seed) != null ? Math.round(sweepNum(r.rng_seed)) : 42 };
   var foam = { mode: topo, thickness: t, plateau_k: topo === 'plateau' ? (sweepNum(r.plateau_k) != null ? sweepNum(r.plateau_k) : 0.05) : null,
                organic: sweepNum(r.organic) || 0, normalize: !/^(false|0|no|off)$/i.test(String(r.normalize || 'true').trim()) };
+  if (sweepNum(r.field) === 2) foam.field = 2;
   return {
     id: id, tier: r.tier || '', set: r.set || '', purpose: r.purpose || '', note: r.note || '',
     label: 'foam · ' + sm + ' · ' + topo, shift: '',
