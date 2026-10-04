@@ -209,10 +209,9 @@ Also:
 - Seed the random matrices in the 16c E4 self-test (flaky).
 - `validate-willot.js` needs a missing `_willot.js` and power-of-two grids.
 - Refresh the PHASE docs.
-- **Old branches on GitHub** (safe to delete, Matt's call): 23 besides `main` (`gh api repos/mshomper/f13ld.lab/branches` lists them).
-  - 22 are fully merged.
-  - `release/v0.12.1` has one unmerged commit, an older draft of the licence files. Main has the newer version (name "Matthew", v0.13.0).
-- **`CITATION.cff` still says version 0.13.0.** Bump it with each release (add it to the version-bump list in §4).
+- **Old branches on GitHub: Matt approved deleting all of them (2026-10-04).** Claude sessions can't delete branches (the proxy blocks it), so Matt deletes them himself.
+  - Every branch except `main` is merged. `release/v0.12.1` is an older draft of the licence files; main has the newer version.
+  - Settings → General → Pull Requests → "Automatically delete head branches" keeps future merges clean.
 
 ---
 
@@ -248,7 +247,7 @@ Also:
 - Recipes without normalization flags default to normalization OFF.
 - Click-test on the raw.githack branch preview before merging.
 - **Never use the words "genuine" / "genuinely."**
-- **Version bump** on significant changes: `index.html` header, `99-init.js` banner, README "What's new", §0 table here.
+- **Version bump** on significant changes: `index.html` header, `99-init.js` banner, README "What's new", §0 table here, and `CITATION.cff` (`version` + `date-released`; Matt, 2026-10-04).
 - **Commits / PRs:** `Co-Authored-By: Claude …` is fine; no claude.ai session links anywhere in the repo. GitHub GraphQL is blocked from Claude sessions — open and merge PRs with `gh api` (REST).
 - **Vendored code** lives in `vendor/` with its licence file (Plotly basic 2.35.2, MIT). Plotly 2.35: no layout transitions with `fillgradient` traces (throws).
 - **Heavy analyses run on Matt's machine** (give him a tool or a page), not on the VM.
