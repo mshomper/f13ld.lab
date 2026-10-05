@@ -211,6 +211,10 @@ function sweepParamCatalog(recipe) {
     if (wet)
       add({ key: 'foam.border', label: 'Plateau border radius (wet)', unit: '', def: 0.4, target: 'monotone', hint: [0.05, 2],
             apply: [{ p: 'foam.border', k: 1 }] });
+    /* v0.17.4 — wet: minimum edge width (F13LD.foam v0.7.0 cusp trim) */
+    if (wet)
+      add({ key: 'foam.edge_min', label: 'Minimum edge width (wet)', unit: '', def: 0, target: 'monotone', hint: [0, 0.3],
+            apply: [{ p: 'foam.edge_min', k: 1 }] });
     if (v2 && !wet) {
       add({ key: 'foam.fillet', label: 'Node fillet radius', unit: '', def: 0, target: 'monotone', hint: [0, 0.8], apply: [{ p: 'foam.fillet', k: 1 }] });
       add({ key: 'foam.node', label: 'Node sphere (extra radius)', unit: '', def: 0, target: 'monotone', hint: [0, 0.5], apply: [{ p: 'foam.node', k: 1 }] });

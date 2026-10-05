@@ -1,5 +1,8 @@
 # F13LD.lab — Next Steps (session handoff)
 
+
+> **2026-10-05 · v0.17.4** — wet foam field changed with F13LD.foam v0.7.0: it now includes the neighbouring bubbles (no jumps across cell faces) and honours `foam.edge_min` (cusp trim; sweepable, CSV column `edge_min`). Wet-foam lab results from before v0.17.4 were computed on the old field; re-run them if they feed a fit.
+
 **As of:** v0.17.3 · 2026-10-04 · three-axis crush, design-scaled void, rebuilt crush side-stress loop, Plotly stress–strain plot, F13LD.foam exact field + v0.6.0 foams; foam laws provisional (whole first pass to re-run on the exact field at the 1000-iteration cap)
 **Suite on main (2026-10-04):** lab v0.17.3 · F13LD.foam v0.6.0 · F13LD.mesh v0.9.3 (fast weld export — see mesh `docs/SESSION_RECAP_2026-10-04.md`; no lab impact)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-03.md`](SESSION_RECAP_2026-10-03.md) (previous: [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md), [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))

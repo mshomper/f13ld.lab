@@ -747,8 +747,10 @@ function buildFoamSDF(json){
 // The 8 nearest seeds are searched over the seeds and their periodic copies.
 // Solid where < 0:
 //   closed : wall − t          open : edge − t          plateau : edge − t − E
-//   wet    : border − dist(p, cell shrunk by border) + 0.02·border
-//            (Plateau borders: the space left between rounded cells)
+//   wet    : 0.02·border − smin_EK(eᵣ), eᵣ = dist(p, bubble r) for p's cell
+//            and its 3 nearest neighbours; bubble = cell shrunk by the border
+//            and grown back (Plateau borders: the space left between rounded
+//            cells). EK = edge_min/(2 − √2) closes gaps narrower than edge_min.
 // fillet k blends neighbouring walls / edges with a circular fillet of radius
 // k; node n adds a sphere of radius t + n at every vertex, blended the same way.
 // E (plateau swell) = k_p·(1 − smoothstep(0, 0.35, d₃ − d₁)), dᵢ = power distance.
@@ -765,6 +767,9 @@ function buildFoamSDF2(json){
   const FK=(mode!=='wet'&&typeof g.fillet==='number'&&g.fillet>0)?g.fillet:0;
   const NR=(mode!=='wet'&&typeof g.node==='number'&&g.node>0)?g.node:0;
   const BR=(typeof g.border==='number'&&g.border>0)?g.border:0.3;
+  // wet: minimum edge width — gaps between bubbles narrower than this close up
+  const EW=(mode==='wet'&&typeof g.edge_min==='number'&&g.edge_min>0)?g.edge_min:0;
+  const EK=EW/(2-Math.SQRT2);   // circular blend radius that closes gaps < EW
   const L=10, H=5, K=8;
   // Weights → a non-negative offset per seed (wmax − wᵢ), which leaves the
   // cells unchanged and keeps every power distance ≥ the metric distance.
@@ -916,7 +921,33 @@ function buildFoamSDF2(json){
     }
     return m;
   }
-  // Wet: distance from p to the cell shrunk by the border radius (0 inside it),
+  // Wet: −(smooth) distance to the nearest bubble, solid where < 0. A bubble
+  // is its cell shrunk by the border, then grown back by it; eᵣ = distance
+  // from p to bubble r. p's own bubble decides the sign, but the neighbours'
+  // bubbles are needed for the value: without them the field jumps across
+  // every cell face and the mesher staircases the surface there. The eᵣ are
+  // blended with a circular fillet of radius EK, which closes every gap
+  // narrower than EW (the cusp tips) and rounds what is left.
+  const WL=[];
+  function swap0(r){
+    let t=D[0];D[0]=D[r];D[r]=t; t=VX[0];VX[0]=VX[r];VX[r]=t;
+    t=VY[0];VY[0]=VY[r];VY[r]=t; t=VZ[0];VZ[0]=VZ[r];VZ[r]=t;
+  }
+  function wetField(){
+    planes(BR);
+    let m=Math.min(shrunkDist(),BR+1)-BR;
+    WL.length=0; WL.push(m);
+    for(let r=1;r<4;r++){
+      // bubble r lies beyond the bisector with seed r, so it is at least cᵣ away
+      const ax=(VX[0]-VX[r])*mx, ay=(VY[0]-VY[r])*my, az=(VZ[0]-VZ[r])*mz;
+      const cr=(D[r]-D[0])/(2*(Math.sqrt(ax*ax+ay*ay+az*az)||1e-12));
+      if(cr>=m+EK) continue;
+      swap0(r); planes(BR); const e=Math.min(shrunkDist(),BR+1)-BR; swap0(r);
+      WL.push(e); if(e<m) m=e;
+    }
+    return -smin(WL,EK)+0.02*BR;
+  }
+  // Distance from p to the cell shrunk by the border radius (0 inside it),
   // over its faces, edges and vertices.
   function shrunkDist(){
     let out=false;
@@ -943,10 +974,7 @@ function buildFoamSDF2(json){
   return p=>{
     const px=((p[0]+H)%L+L)%L-H, py=((p[1]+H)%L+L)%L-H, pz=((p[2]+H)%L+L)%L-H;
     nearestK(px,py,pz);
-    if(mode==='wet'){
-      planes(BR);
-      return BR-Math.min(shrunkDist(),BR+1)+0.02*BR;
-    }
+    if(mode==='wet') return wetField();
     planes(0);
     let E=0;
     if(Kp>0) E=Kp*(1-smooth(0,0.35,Math.sqrt(D[2])-Math.sqrt(D[0])));
