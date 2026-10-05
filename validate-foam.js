@@ -89,7 +89,7 @@ function foamExport(o) {
     anisotropy: { enabled: !!o.stretch, stretch: o.stretch || [1, 1, 1] },
     geometry: { mode: o.topo, thickness: o.t, plateau_k: o.topo === 'plateau' ? (o.k != null ? o.k : 0.05) : null,
                 organic: o.organic || 0, normalize: o.normalize !== false, tile_mm: o.tile_mm || null,
-                field: o.field, fillet: o.fillet, node: o.node, border: o.border }
+                field: o.field, fillet: o.fillet, node: o.node, border: o.border, edge_min: o.edge_min }
   };
 }
 
@@ -209,10 +209,37 @@ console.log('\n8. Exact field (field 2)');
         c.push({ v, d: v[0] * v[0] * m[0] + v[1] * v[1] * m[1] + v[2] * v[2] * m[2] + (W ? wmax - W[i] : 0) });
       } });
       c.sort((x, y) => x.d - y.d);
-      const shift = g.mode === 'wet' ? g.border : 0, P = [];
-      for (let j = 1; j < Math.min(20, c.length); j++) {
-        const w = [0, 1, 2].map(i => (c[0].v[i] - c[j].v[i]) * m[i]), l = Math.hypot(...w);
-        P.push({ n: w.map(x => x / l), c: (c[j].d - c[0].d) / (2 * l) - shift });
+      /* wet: distance to every nearby cell's bubble (its cell shrunk by the
+         border, grown back), blended with the circular fillet EK */
+      if (g.mode === 'wet') {
+        const EK = (g.edge_min > 0 ? g.edge_min : 0) / (2 - Math.SQRT2), es = [];
+        for (let r = 0; r < 6; r++) {
+          const o = c.filter((_, j) => j !== r).slice(0, 19);
+          const W2 = cellAround(c[r], o, g.border);
+          es.push(Math.min(W2.shrunk(), g.border + 1) - g.border);
+        }
+        es.sort((a, b) => a - b);
+        let mm = es[0];
+        if (EK > 0) for (let i = 1; i < es.length && es[i] < mm + EK; i++) { const h = Math.max(EK - Math.abs(mm - es[i]), 0) / EK; mm = Math.min(mm, es[i]) - EK * 0.5 * (1 + h - Math.sqrt(1 - h * (h - 2))); }
+        return { wet: -mm + 0.02 * g.border };
+      }
+      const cell = cellAround(c[0], c.slice(1, 20), 0), P = cell.P, V = cell.V, E = cell.E, ins = cell.ins;
+      const faceDist = j => { const q = P[j], x = q.n.map(t => t * q.c); if (ins(x, [j])) return q.c;
+        let d = Infinity; for (const k in E) { const [a, b] = k.split(',').map(Number); if (a === j || b === j) d = Math.min(d, E[k]); } return d; };
+      const blend = (mem) => { if (g.node > 0) V.forEach(v => mem.push(v - g.node)); mem.sort((a, b) => a - b);
+        let mm = mem[0]; const k = g.fillet || 0;
+        if (k > 0) for (let i = 1; i < mem.length && mem[i] < mm + k; i++) { const h = Math.max(k - Math.abs(mm - mem[i]), 0) / k; mm = Math.min(mm, mem[i]) - k * 0.5 * (1 + h - Math.sqrt(1 - h * (h - 2))); }
+        return mm; };
+      return { wall: blend(P.map((q, j) => faceDist(j)).filter(isFinite)), edge: blend(Object.values(E)) };
+    };
+    /* The cell of seed copy s0 against the copies `others`, planes shifted in
+       by `shift`: its planes, vertices, edge-line distances, and the distance
+       from p to it (0 inside). */
+    function cellAround(s0, others, shift) {
+      const P = [];
+      for (const sj of others) {
+        const w = [0, 1, 2].map(i => (s0.v[i] - sj.v[i]) * m[i]), l = Math.hypot(...w);
+        P.push({ n: w.map(x => x / l), c: (sj.d - s0.d) / (2 * l) - shift });
       }
       const ins = (x, sk) => P.every((q, i) => sk.includes(i) || dot(q.n, x) <= q.c + 1e-9);
       const V = [], E = {};
@@ -230,20 +257,15 @@ console.log('\n8. Exact field (field 2)');
         const al = (A.c - B.c * cab) / det, be = (B.c - A.c * cab) / det, x = [0, 1, 2].map(i => al * A.n[i] + be * B.n[i]);
         if (ins(x, [a, b])) E[a + ',' + b] = Math.hypot(...x);
       }
-      const faceDist = j => { const q = P[j], x = q.n.map(t => t * q.c); if (ins(x, [j])) return q.c;
-        let d = Infinity; for (const k in E) { const [a, b] = k.split(',').map(Number); if (a === j || b === j) d = Math.min(d, E[k]); } return d; };
-      if (g.mode === 'wet') {
-        let best = 0;
-        if (!P.every(q => q.c >= 0)) { best = Infinity; P.forEach((q, j) => { const x = q.n.map(t => t * q.c); if (ins(x, [j])) best = Math.min(best, Math.abs(q.c)); });
-          for (const k in E) best = Math.min(best, E[k]); }
-        return { wet: g.border - Math.min(best, g.border + 1) + 0.02 * g.border };
-      }
-      const blend = (mem) => { if (g.node > 0) V.forEach(v => mem.push(v - g.node)); mem.sort((a, b) => a - b);
-        let mm = mem[0]; const k = g.fillet || 0;
-        if (k > 0) for (let i = 1; i < mem.length && mem[i] < mm + k; i++) { const h = Math.max(k - Math.abs(mm - mem[i]), 0) / k; mm = Math.min(mm, mem[i]) - k * 0.5 * (1 + h - Math.sqrt(1 - h * (h - 2))); }
-        return mm; };
-      return { wall: blend(P.map((q, j) => faceDist(j)).filter(isFinite)), edge: blend(Object.values(E)) };
-    };
+      const shrunk = () => {
+        if (P.every(q => q.c >= 0)) return 0;
+        let best = Infinity; P.forEach((q, j) => { const x = q.n.map(t => t * q.c); if (ins(x, [j])) best = Math.min(best, Math.abs(q.c)); });
+        for (const k in E) best = Math.min(best, E[k]);
+        for (const v of V) best = Math.min(best, v);
+        return best;
+      };
+      return { P, V, E, ins, shrunk };
+    }
   }
   const cases = [
     { name: 'open · Lloyd 60', mode: 'lloyd', count: 60, regularity: 0.9, lloyd: 4, topo: 'open', t: 0.1 },
@@ -258,6 +280,9 @@ console.log('\n8. Exact field (field 2)');
     { name: 'closed · fillet 0.3, stretch', mode: 'poisson', count: 40, regularity: 0.9, topo: 'closed', t: 0.07, fillet: 0.3, stretch: [1.3, 1, 1] },
     { name: 'wet · border 0.4', mode: 'lloyd', count: 50, regularity: 0.9, lloyd: 4, topo: 'wet', t: 0.1, border: 0.4 },
     { name: 'wet · Kelvin one cube, border 1.0', mode: 'kelvin', count: 2, topo: 'wet', t: 0.1, border: 1.0 },
+    { name: 'wet · border 0.6, edge 0.05', mode: 'lloyd', count: 50, regularity: 0.9, lloyd: 4, topo: 'wet', t: 0.1, border: 0.6, edge_min: 0.05 },
+    { name: 'wet · two-size mix, border 0.5, edge 0.03', mode: 'bimodal', count: 40, regularity: 0.9, lloyd: 2, topo: 'wet', t: 0.1, border: 0.5, size_ratio: 2, large_fraction: 0.3, edge_min: 0.03 },
+    { name: 'wet · stretch 1, 1, 1.4, edge 0.04', mode: 'lloyd', count: 40, regularity: 0.9, lloyd: 4, topo: 'wet', t: 0.1, border: 0.5, stretch: [1, 1, 1.4], edge_min: 0.04 },
     { name: 'open · two-size mix (weights) + fillet', mode: 'bimodal', count: 40, regularity: 0.9, lloyd: 2, topo: 'open', t: 0.1, size_ratio: 2, large_fraction: 0.3, fillet: 0.15 },
     { name: 'closed · two-size mix (weights)', mode: 'bimodal', count: 40, regularity: 0.9, lloyd: 2, topo: 'closed', t: 0.07, size_ratio: 2.5, large_fraction: 0.2 },
     { name: 'open · cubic-symmetric', mode: 'cubic', count: 48, regularity: 0.9, lloyd: 2, topo: 'open', t: 0.12 },
@@ -291,6 +316,8 @@ console.log('\n8. Exact field (field 2)');
   check('sweep CSV: field column selects the exact field', row.recipe.foam.field === 2 && row0.recipe.foam.field === undefined);
   const roww = L('sweepFoamRunFromCsvRow')({ seed_mode: 'bimodal', cells: '30', topology: 'wet', border: '0.5', field: '2', size_ratio: '2', large_fraction: '0.3' }, 'r2');
   check('sweep CSV: wet foam, border and two-size columns', roww.recipe.foam.mode === 'wet' && roww.recipe.foam.border === 0.5 && roww.recipe.seeds.size_ratio === 2);
+  const rowe = L('sweepFoamRunFromCsvRow')({ seed_mode: 'lloyd', cells: '30', topology: 'wet', border: '0.6', edge_min: '0.04', field: '2' }, 'r3');
+  check('sweep CSV: wet edge_min column', rowe.recipe.foam.edge_min === 0.04);
 }
 
 console.log('\n9. Seed modes (FoamSeeds v2)');

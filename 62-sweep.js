@@ -232,7 +232,7 @@ function sweepRunFromCsvRow(r) {
      regularity, lloyd_iterations, rng_seed, topology (open | closed |
      plateau), thickness, plateau_k, organic, stretch_x/y/z, normalize,
      field (2 = F13LD.foam v0.6.0's exact field; blank = the original),
-     fillet, node, border (exact field only), size_ratio, large_fraction
+     fillet, node, border, edge_min (exact field only), size_ratio, large_fraction
      (seed_mode bimodal), jitter (lattices),
      grid_N, nu_s, expected_vf_pct, set, purpose, note. */
 function sweepFoamRunFromCsvRow(r, id) {
@@ -256,7 +256,7 @@ function sweepFoamRunFromCsvRow(r, id) {
                organic: sweepNum(r.organic) || 0, normalize: !/^(false|0|no|off)$/i.test(String(r.normalize || 'true').trim()) };
   if (sweepNum(r.field) === 2) {
     foam.field = 2;
-    ['fillet', 'node', 'border'].forEach(function (k) { if (sweepNum(r[k]) != null) foam[k] = sweepNum(r[k]); });
+    ['fillet', 'node', 'border', 'edge_min'].forEach(function (k) { if (sweepNum(r[k]) != null) foam[k] = sweepNum(r[k]); });
   }
   if (topo === 'wet' && !(t > 0)) foam.thickness = 0.08;   /* unused by wet foam */
   return {
