@@ -1,6 +1,8 @@
 # F13LD.lab — Next Steps (session handoff)
 
 
+> **2026-10-06 · v0.18.0** — viewer: design cards use the shared F13LD shading (`20c-f13-shade.js`, same block as every F13LD tool) in each design's family color, with a shared "◐ view" menu in the VIEW strip; stress/buckling colormaps keep neutral lighting. Geometry texture is now R16F (was R8) and foam/noise/grain refine to 96³/96³/80³ in the background after the 48³ preview (display only — the solver voxelizes separately).
+>
 > **2026-10-05 · v0.17.4** — wet foam field changed with F13LD.foam v0.7.0: it now includes the neighbouring bubbles (no jumps across cell faces) and honours `foam.edge_min` (cusp trim; sweepable, CSV column `edge_min`). Wet-foam lab results from before v0.17.4 were computed on the old field; re-run them if they feed a fit.
 
 **As of:** v0.17.3 · 2026-10-04 · three-axis crush, design-scaled void, rebuilt crush side-stress loop, Plotly stress–strain plot, F13LD.foam exact field + v0.6.0 foams; foam laws provisional (whole first pass to re-run on the exact field at the 1000-iteration cap)

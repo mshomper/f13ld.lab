@@ -13,7 +13,7 @@
      hidden cache div, and the design grid moves it into the
      active tile via appendChild.
 
-   • The 3D field texture (R8, REPEAT-wrapped) holds the raw
+   • The 3D field texture (R16F, REPEAT-wrapped) holds the raw
      scalar field f(x,y,z) BEFORE topology is applied.  The
      fragment shader applies isoLevel/thickness/halfInvert/pipeR
      via uniforms — switching topology never requires a re-bake.
@@ -106,6 +106,8 @@ function buildLabRaymarcherFS(stepCount) {
        untinted default; stress/buckling colormap branches ignore it. */
     'uniform vec3 uTint;',
     'uniform float uTintStrength;',
+    /* Shared F13LD shading: body color = the design's family color. */
+    'uniform vec3 uBodyColor;',
     /* #6 fix — macro-stretch amplitude, decoupled from the corrector-normalized
        uDeformAmp.  Sentinel <0 = fall back to uDeformAmp (Deform/Buckle keep
        their current behavior); the nonlinear crush sets a bounded value so the
@@ -394,12 +396,16 @@ function buildLabRaymarcherFS(stepCount) {
     '    implicit(p+vec3(0,0,e)) - implicit(p-vec3(0,0,e))));',
     '}',
 
-    /* Iridescent palette — same coefficients as F13LD.grain */
-    'vec3 palette(float t) {',
-    '  vec3 a = vec3(0.55,0.57,0.42), b = vec3(0.43,0.42,0.30),',
-    '       c = vec3(1.0,1.0,1.0),    d = vec3(0.02,0.0,0.05);',
-    '  return clamp(a + b*cos(6.28318*(c*t + d)), 0.0, 1.0);',
+    /* Shared F13LD viewer shading (20c-f13-shade.js).  f13Map = the SDF
+       scaled by the local field gradient at the hit (f13G), clipped to the
+       visible cell box. */
+    'float f13G;',
+    'float f13Map(vec3 p) {',
+    '  vec3 qe = abs(p) - getExtent();',
+    '  float b = length(max(qe, vec3(0.0))) + min(max(qe.x, max(qe.y, qe.z)), 0.0);',
+    '  return max(implicit(p) / f13G, b);',
     '}',
+    F13_SHADE_GLSL,
 
     'void main() {',
     '  vec2 uv = (gl_FragCoord.xy - res*0.5) / min(res.x, res.y);',
@@ -456,11 +462,16 @@ function buildLabRaymarcherFS(stepCount) {
     '    } else { fragColor = vec4(bgCol, 1.0); return; }',
     '  }',
 
-    /* Lighting — common diffuse contribution shared by both shading paths */
-    '  vec3 l1 = normalize(vec3(1.0,1.8,2.0));',
-    '  vec3 l2 = normalize(vec3(-0.8,-0.3,0.6));',
-    '  float l3fill = max(dot(n, normalize(vec3(-0.5,-1.0,-1.5))), 0.0) * 0.3;',
-    '  float diff = 0.35 + max(dot(n, l1), 0.0)*0.7 + max(dot(n, l2), 0.0)*0.25 + l3fill;',
+    /* Lighting distance scale for occlusion/shadows: local SDF gradient at the hit. */
+    '  if (hit) {',
+    '    float ge = uNrmStep;',
+    '    vec3 gg = vec3(implicit(pos+vec3(ge,0,0)) - implicit(pos-vec3(ge,0,0)),',
+    '                   implicit(pos+vec3(0,ge,0)) - implicit(pos-vec3(0,ge,0)),',
+    '                   implicit(pos+vec3(0,0,ge)) - implicit(pos-vec3(0,0,ge))) / (2.0*ge);',
+    '    f13G = clamp(length(gg), 0.05, max(uLipschitz, 0.05));',
+    '  } else { f13G = max(uLipschitz, 0.05); }',
+    '  vec3 ext3 = getExtent();',
+    '  float f13TMax = 1.6 * max(ext3.x, max(ext3.y, ext3.z));',
 
     /* A.3 — Surface shading: stress mode applies cividis(σ_VM) with
        diffuse-only lighting (no specular/rim) so the colormap reads
@@ -488,22 +499,13 @@ function buildLabRaymarcherFS(stepCount) {
     /* A.3.3 — gamma correction: t -> t^γ.  γ<1 brightens the low end of the
        colormap, γ=1 is linear (used in shared mode for cross-comparison). */
     '    sv = pow(clamp(sv, 0.0, 1.0), uStressGamma);',
-    '    if (uBuckleMap > 0.5) {',
-    '      col = turbo(sv) * (0.4 + 0.6 * diff);',
-    '    } else {',
-    '      col = cividis(sv) * diff;',
-    '    }',
+    /* Data colors keep neutral lighting (no warm/cool tint, no tone curve)
+       so the colormap stays readable against its legend. */
+    '    vec3 dataCol = (uBuckleMap > 0.5) ? turbo(sv) : cividis(sv);',
+    '    col = f13ShadeData(dataCol, pos, n, rd, rot, H*0.3, uNrmStep, f13TMax);',
     '  } else {',
-    '    float dy = dot(n, vec3(0.0,1.0,0.0));',
-    '    float dz = dot(n, vec3(0.0,0.0,1.0));',
-    '    float hue = dy*dy*0.33 + dz*dz*0.67;',
-    '    vec3 iridBase = palette(hue);',
-    '    iridBase = mix(iridBase, uTint, uTintStrength);',
-    '    float spec1 = pow(max(dot(reflect(-l1, n), -rd), 0.0), 120.0) * 0.7;',
-    '    float spec2 = pow(max(dot(reflect(-l1, n), -rd), 0.0),  20.0) * 0.2;',
-    '    float rim   = pow(1.0 - max(dot(n, -rd), 0.0), 2.5) * 0.8;',
-    '    vec3 green = vec3(0.784, 0.961, 0.259);',
-    '    col = iridBase*diff + vec3(1.0)*spec1 + green*spec2*0.6 + green*rim*0.45;',
+    /* Geometry / deformed views: family body color; cap hits are cut faces. */
+    '    col = f13Shade(uBodyColor, pos, n, rd, rot, !hit, H*0.3, uNrmStep, f13TMax);',
     '  }',
     '  col = mix(bgCol, col, exp(-t * 0.010));',
     '  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);',
@@ -715,7 +717,8 @@ function LabRaymarcher() {
     deformSign: 1.0,               /* #6 — +1 tension / -1 compression (crush) */
     macroAmp: -1.0,                /* #6 fix — <0 = use deformAmp (default); >=0 = bounded macro stretch */
     tint: [1, 1, 1],               /* #7 — per-design surface tint (geom/deform) */
-    tintStrength: 0.0
+    tintStrength: 0.0,
+    bodyColor: [0.78, 0.73, 0.67]  /* family color, set at bake (shared F13LD shading) */
   };
 
   /* 4b — Maximum |u'| component encountered at upload time, in world units
@@ -790,7 +793,9 @@ LabRaymarcher.prototype._compileShader = function() {
    /* 4b — texture resolution for cubic kernel offsets */
    'uTexN',
    /* #6 crush sign · #7 per-design surface tint */
-   'uDeformSign','uTint','uTintStrength','uMacroAmp'].forEach(function(name){
+   'uDeformSign','uTint','uTintStrength','uMacroAmp',
+   /* shared F13LD shading */
+   'uBodyColor'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -878,14 +883,73 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
   var params = KERNELS[family].parseRecipe(recipe);
   var args   = resolveBuildArgs(recipe);
 
-  /* N=48 is a good balance: ~30-400ms bake, 110KB texture, sharp visuals */
+  /* N=48 first: a quick preview.  Foam/noise/grain then refine to a finer
+     grid in the background (LAB_GEOM_N_FINE) so thin struts and sheets show. */
   var N = 48;
 
   var t0 = performance.now();
   var fr = buildRawField(family, params, N);
   var tBake = performance.now() - t0;
 
-  /* Lipschitz from gradient sweep over interior — same logic as F13LD.grain */
+  this._uploadGeomField(fr, N);
+
+  /* Apply topology uniforms */
+  var topoU = labModeToUniforms(family, params, args);
+  this._u.thickness  = topoU.thickness;
+  this._u.isoLevel   = topoU.isoLevel;
+  this._u.topoMode   = topoU.topoMode;
+  this._u.halfInvert = topoU.halfInvert;
+  this._u.pipeR      = topoU.pipeR;
+  this._u.pipeOffset = topoU.pipeOffset;
+  this._u.normMode   = topoU.normMode || 0;
+  this._u.tile       = 1.0;
+  this._u.bodyColor  = labHexToRgb01(LAB_FAMILY_COLOR[family] || '#c7bbab');
+  var step = 2 * Math.PI / N;
+
+  /* v0.13.0 — field-pair PI-TPMS: bake field B (phase shift included) on a
+     second texture.  Self-pairs keep the single-texture path above. */
+  this._u.pairMode = 0;
+  if (params && params.pair && args.mode === 'pi-tpms') {
+    var fb = buildPairField(params.pair, args.phaseShift, N);
+    var gB = 0;
+    for (var bz = 1; bz < N - 1; bz++) for (var by = 1; by < N - 1; by++) for (var bx = 1; bx < N - 1; bx++) {
+      var bi = bx + by*N + bz*N*N;
+      var bgx = (fb.data[bi + 1]   - fb.data[bi - 1])   / (2*step);
+      var bgy = (fb.data[bi + N]   - fb.data[bi - N])   / (2*step);
+      var bgz = (fb.data[bi + N*N] - fb.data[bi - N*N]) / (2*step);
+      var bg = Math.sqrt(bgx*bgx + bgy*bgy + bgz*bgz);
+      if (bg > gB) gB = bg;
+    }
+    this._u.lipschitz = Math.max(this._u.lipschitz, gB * 1.1);   /* B may vary k× faster than A */
+    var rB = Math.max(fb.fieldMax - fb.fieldMin, 1e-6), bNorm = new Float32Array(N*N*N);
+    for (var ib = 0; ib < fb.data.length; ib++) bNorm[ib] = (fb.data[ib] - fb.fieldMin) / rB;
+    if (!this._fieldBTex) this._fieldBTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_3D, this._fieldBTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R16F, N, N, N, 0, gl.RED, gl.FLOAT, bNorm);   /* R16F like field A */
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+    gl.bindTexture(gl.TEXTURE_3D, null);
+    this._u.fieldBMin = fb.fieldMin;
+    this._u.fieldBMax = fb.fieldMax;
+    this._u.pairMode  = 1;
+  }
+
+  this._fieldUploaded = true;
+  this._dirty = true;
+  this._tBakeMs = tBake;
+  if (LAB_GEOM_N_FINE[family]) labQueueRefine(this);
+};
+
+/* Upload a baked raw field as the geometry texture and derive the march
+   constants from it.  R16F (not R8): foam fields span ~0–8 while struts live
+   in the bottom few hundredths, and noise sheets are thin against their
+   range — 8-bit steps erased exactly the features people want to see. */
+LabRaymarcher.prototype._uploadGeomField = function(fr, N) {
+  var gl = this.gl;
   var step = 2 * Math.PI / N;
   var maxG = 0;
   for (var iz = 1; iz < N - 1; iz++) {
@@ -904,72 +968,71 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
   this._u.fieldMin  = fr.fieldMin;
   this._u.fieldMax  = fr.fieldMax;
   this._u.nrmStep   = step * 0.5;
-
-  /* Apply topology uniforms */
-  var topoU = labModeToUniforms(family, params, args);
-  this._u.thickness  = topoU.thickness;
-  this._u.isoLevel   = topoU.isoLevel;
-  this._u.topoMode   = topoU.topoMode;
-  this._u.halfInvert = topoU.halfInvert;
-  this._u.pipeR      = topoU.pipeR;
-  this._u.pipeOffset = topoU.pipeOffset;
-  this._u.normMode   = topoU.normMode || 0;
-  this._u.texNG      = N;
-  this._u.tile       = 1.0;
-
-  /* Upload texture */
+  this._u.texNG     = N;
   var range = Math.max(fr.fieldMax - fr.fieldMin, 1e-6);
-  var bytes = new Uint8Array(N*N*N);
-  for (var i = 0; i < fr.data.length; i++) {
-    bytes[i] = Math.round(Math.max(0, Math.min(1, (fr.data[i] - fr.fieldMin) / range)) * 255);
-  }
+  var norm = new Float32Array(N*N*N);
+  for (var i = 0; i < fr.data.length; i++) norm[i] = (fr.data[i] - fr.fieldMin) / range;
   if (!this._fieldTex) this._fieldTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, N, N, 0, gl.RED, gl.UNSIGNED_BYTE, bytes);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R16F, N, N, N, 0, gl.RED, gl.FLOAT, norm);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
   gl.bindTexture(gl.TEXTURE_3D, null);
-
-  /* v0.13.0 — field-pair PI-TPMS: bake field B (phase shift included) on a
-     second texture.  Self-pairs keep the single-texture path above. */
-  this._u.pairMode = 0;
-  if (params && params.pair && args.mode === 'pi-tpms') {
-    var fb = buildPairField(params.pair, args.phaseShift, N);
-    var gB = 0;
-    for (var bz = 1; bz < N - 1; bz++) for (var by = 1; by < N - 1; by++) for (var bx = 1; bx < N - 1; bx++) {
-      var bi = bx + by*N + bz*N*N;
-      var bgx = (fb.data[bi + 1]   - fb.data[bi - 1])   / (2*step);
-      var bgy = (fb.data[bi + N]   - fb.data[bi - N])   / (2*step);
-      var bgz = (fb.data[bi + N*N] - fb.data[bi - N*N]) / (2*step);
-      var bg = Math.sqrt(bgx*bgx + bgy*bgy + bgz*bgz);
-      if (bg > gB) gB = bg;
-    }
-    this._u.lipschitz = Math.max(this._u.lipschitz, gB * 1.1);   /* B may vary k× faster than A */
-    var rB = Math.max(fb.fieldMax - fb.fieldMin, 1e-6), bBytes = new Uint8Array(N*N*N);
-    for (var ib = 0; ib < fb.data.length; ib++) bBytes[ib] = Math.round(Math.max(0, Math.min(1, (fb.data[ib] - fb.fieldMin) / rB)) * 255);
-    if (!this._fieldBTex) this._fieldBTex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_3D, this._fieldBTex);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, N, N, N, 0, gl.RED, gl.UNSIGNED_BYTE, bBytes);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
-    gl.bindTexture(gl.TEXTURE_3D, null);
-    this._u.fieldBMin = fb.fieldMin;
-    this._u.fieldBMax = fb.fieldMax;
-    this._u.pairMode  = 1;
-  }
-
-  this._fieldUploaded = true;
-  this._dirty = true;
-  this._tBakeMs = tBake;
 };
+
+/* ─── Background refinement of the geometry grid ──────────────
+   Families with fine features re-bake at a higher resolution after the
+   quick 48³ preview is on screen.  One design at a time, in ~12 ms slices
+   on the main thread, so the UI stays responsive; a design whose recipe
+   changes (or that is destroyed) mid-bake is skipped.  Display only — the
+   solver voxelizes separately. */
+var LAB_GEOM_N_FINE = { foam: 96, noise: 96, grain: 80 };
+var LAB_REFINE_QUEUE = [];
+var LAB_REFINE_BUSY = false;
+function labQueueRefine(rm) {
+  if (LAB_REFINE_QUEUE.indexOf(rm) < 0) LAB_REFINE_QUEUE.push(rm);
+  labPumpRefine();
+}
+function labPumpRefine() {
+  if (LAB_REFINE_BUSY) return;
+  var rm = LAB_REFINE_QUEUE.shift();
+  if (!rm) return;
+  if (rm.failed || rm._destroyed || !rm._recipe || !LAB_GEOM_N_FINE[rm._recipe.family]) { labPumpRefine(); return; }
+  LAB_REFINE_BUSY = true;
+  var recipe = rm._recipe, family = recipe.family, N = LAB_GEOM_N_FINE[family];
+  var kernel = KERNELS[family], params = kernel.parseRecipe(recipe);
+  var L = Math.PI, step = (2 * L) / N, data = new Float32Array(N * N * N);
+  var minV = Infinity, maxV = -Infinity, iz = 0;
+  function done() { LAB_REFINE_BUSY = false; setTimeout(labPumpRefine, 0); }
+  function slice() {
+    if (rm._recipe !== recipe || rm._destroyed || rm.failed) { done(); return; }
+    var t0 = performance.now();
+    while (iz < N && performance.now() - t0 < 12) {
+      var z = -L + (iz + 0.5) * step;
+      for (var iy = 0; iy < N; iy++) {
+        var y = -L + (iy + 0.5) * step;
+        for (var ix = 0; ix < N; ix++) {
+          var v = kernel.evaluate(params, -L + (ix + 0.5) * step, y, z);
+          data[(iz * N + iy) * N + ix] = v;
+          if (v < minV) minV = v;
+          if (v > maxV) maxV = v;
+        }
+      }
+      iz++;
+    }
+    if (iz < N) { setTimeout(slice, 0); return; }
+    rm._uploadGeomField({ data: data, fieldMin: minV, fieldMax: maxV }, N);
+    rm._dirty = true;
+    if (rm._nlPaused) rm._nlDrawOnce = true;
+    done();
+  }
+  setTimeout(slice, 0);
+}
 
 
 /* ════════════════════════════════════════════════════════════
@@ -1558,6 +1621,7 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uMacroAmp,       S.macroAmp);
   gl.uniform3f(u.uTint,           S.tint[0], S.tint[1], S.tint[2]);
   gl.uniform1f(u.uTintStrength,   S.tintStrength);
+  gl.uniform3f(u.uBodyColor,      S.bodyColor[0], S.bodyColor[1], S.bodyColor[2]);
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
@@ -1585,6 +1649,7 @@ LabRaymarcher.prototype._render = function(t) {
     gl.uniform1i(u.uStress, 2);
   }
 
+  if (typeof f13View !== 'undefined' && f13View) f13View.apply(gl, this._prog);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 };
 
@@ -1606,6 +1671,7 @@ LabRaymarcher.prototype.setActive = function(active) {
 
 LabRaymarcher.prototype.destroy = function() {
   if (this.failed) return;
+  this._destroyed = true;
   this.setActive(false);
   var gl = this.gl;
   if (this._fieldTex)  gl.deleteTexture(this._fieldTex);
