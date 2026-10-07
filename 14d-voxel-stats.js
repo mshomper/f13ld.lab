@@ -403,23 +403,68 @@ function sweepParamsForFractions(recipe, spec, N, fractions, onProgress) {
   });
 }
 
+/* v0.19.0 — step by thinnest feature.  Thinnest feature (voxels, the same
+   measure as the geometry check) at grid N after the island trim. */
+function sweepThinVoxAt(recipe, N, connectivity) {
+  var family = recipe.family, params = KERNELS[family].parseRecipe(recipe), args = resolveBuildArgs(recipe);
+  var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+  var conn = connectivity || 'networks';
+  if (conn === 'networks') solid = pruneToNetworks(solid, N);
+  else if (conn === 'largest') solid = pruneToLargestComponent(solid, N);
+  var n = 0, N3 = N * N * N;
+  for (var i = 0; i < N3; i++) n += solid[i];
+  if (!n) return 0;
+  if (n === N3) return N;
+  return sweepFeatureThickness(solid, N).thin;
+}
+/* Parameter values whose thinnest feature hits each target (voxels at N),
+   by bisection across the parameter's range.  The measure moves in voxel
+   steps, so a target is met to within a quarter voxel (or 1 %) or the
+   closest value found is kept; the achieved size is returned with it.
+   null = the target is outside what the range can reach. */
+function sweepParamsForFeatures(recipe, spec, N, targetsVox, connectivity, onProgress) {
+  if (spec.target !== 'monotone' && spec.target !== 'threshold') return null;
+  var lo = spec.hint ? spec.hint[0] : 0, hi = spec.hint ? spec.hint[1] : 2 * Math.abs(sweepParamGet(recipe, spec) || 1);
+  var r = JSON.parse(JSON.stringify(recipe)), cache = {};
+  function ftAt(v) { var key = v.toPrecision(12); if (cache[key] == null) { sweepParamSet(r, spec, v); cache[key] = sweepThinVoxAt(r, N, connectivity); } return cache[key]; }
+  var fLo = ftAt(lo), fHi = ftAt(hi), up = fHi >= fLo;
+  return targetsVox.map(function (t, idx) {
+    if (onProgress) onProgress(idx, targetsVox.length);
+    if ((up && (t < fLo || t > fHi)) || (!up && (t > fLo || t < fHi))) return null;
+    var a = lo, b = hi, best = null, bestErr = Infinity, tol = Math.max(0.25, 0.01 * t);
+    for (var it = 0; it < 18; it++) {
+      var m = 0.5 * (a + b), fm = ftAt(m), err = Math.abs(fm - t);
+      if (err < bestErr) { bestErr = err; best = { v: m, vox: fm }; }
+      if (err <= tol) break;
+      if ((fm < t) === up) a = m; else b = m;
+    }
+    return best;
+  });
+}
+
 /* Review a builder sweep in the worker: resolve every combination's
    parameter values (targeting solid fraction where asked) and check its
    geometry at a coarse grid.  Posts progress through onProgress. */
 function sweepReviewCombos(job, onProgress) {
   var base = job.recipe, s1 = job.spec1, s2 = job.spec2, N = job.N, NQ = job.checkN || 32;
   var v2s = s2 ? job.values2 : [null], combos = [];
-  var total = v2s.length * (job.byVf ? job.targets.length : job.values1.length), done = 0;
+  var nT = job.byFeat ? job.featTargetsVox.length : (job.byVf ? job.targets.length : job.values1.length);
+  var total = v2s.length * nT, done = 0;
   for (var j = 0; j < v2s.length; j++) {
     var r2 = JSON.parse(JSON.stringify(base));
     if (s2) sweepParamSet(r2, s2, v2s[j]);
-    var v1s = job.values1;
+    var v1s = job.values1, feat = null;
     if (job.byVf) {
       onProgress && onProgress({ stage: 'targeting', done: done, total: total });
       v1s = sweepParamsForFractions(r2, s1, N, job.targets);
+    } else if (job.byFeat) {
+      onProgress && onProgress({ stage: 'targeting', done: done, total: total });
+      feat = sweepParamsForFeatures(r2, s1, N, job.featTargetsVox, job.connectivity || 'networks') || job.featTargetsVox.map(function () { return null; });
+      v1s = feat.map(function (f) { return f ? f.v : null; });
     }
     for (var i = 0; i < v1s.length; i++) {
       var c = { i: i, j: j, v1: v1s[i], v2: v2s[j], target: job.byVf ? job.targets[i] : null };
+      if (job.byFeat) { c.featTarget = job.featTargets[i]; c.featVox = feat[i] ? feat[i].vox : null; }
       if (v1s[i] == null) { c.unreachable = true; combos.push(c); done++; continue; }
       var r = JSON.parse(JSON.stringify(r2));
       sweepParamSet(r, s1, v1s[i]);
@@ -449,5 +494,6 @@ var SWEEP_WORKER_ONMESSAGE =
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { sweepGeometryStats: sweepGeometryStats, sweepFeatureThickness: sweepFeatureThickness,
     sweepThresholdField: sweepThresholdField, sweepParamsForFractions: sweepParamsForFractions,
+    sweepThinVoxAt: sweepThinVoxAt, sweepParamsForFeatures: sweepParamsForFeatures,
     sweepParamCatalog: sweepParamCatalog, sweepParamGet: sweepParamGet, sweepParamSet: sweepParamSet, sweepReviewCombos: sweepReviewCombos };
 }

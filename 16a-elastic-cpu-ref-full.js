@@ -428,10 +428,17 @@ function cgSolveFullCPU(solid, C_s, C_v, C0, Gamma, N, eps_bar, tol, maxiter) {
      normal-shear entries are 0), but keeping the generic form
      means this same kernel works if we later allow anisotropic
      per-voxel materials. */
+  /* v0.19.0 — solid[idx] may be a partial-volume fraction: 0 / 1 pick the
+     void / solid stiffness exactly as before, values between blend linearly
+     (same rule as the GPU kernel's pvC). */
+  var C_mix = new Float64Array(36);
   function localStress(epsIn, sigOut) {
     var s = solid;
     for (var idx = 0; idx < N3; idx++) {
-      var C = s[idx] ? C_s : C_v;
+      var sv = s[idx], C;
+      if (sv >= 1) C = C_s;
+      else if (sv <= 0) C = C_v;
+      else { for (var cq = 0; cq < 36; cq++) C_mix[cq] = C_v[cq] + sv * (C_s[cq] - C_v[cq]); C = C_mix; }
       var e0 = epsIn[0][idx], e1 = epsIn[1][idx], e2 = epsIn[2][idx];
       var e3 = epsIn[3][idx], e4 = epsIn[4][idx], e5 = epsIn[5][idx];
       sigOut[0][idx] = C[0]*e0  + C[1]*e1  + C[2]*e2  + C[3]*e3  + C[4]*e4  + C[5]*e5;
@@ -638,6 +645,15 @@ function homogenizeFullCPU(recipe, N, opts) {
   var t0 = performance.now();
   var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt,
                           args.nWeights, args.pipeR, args.phaseShift);
+  /* v0.19.0 — opts.prune: the lab's island trim; opts.partialVolume: solid
+     fraction per surface voxel (14-rasterizer voxelFractionsFromMargin) */
+  var raw = solid;
+  if (opts.prune && typeof pruneToNetworks === 'function') solid = pruneToNetworks(solid, N);
+  var mPV = null;
+  if (opts.partialVolume && typeof buildVoxelMargin === 'function') {
+    mPV = buildVoxelMargin(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+    solid = voxelFractionsFromMargin(mPV, N, solid, raw, opts.pvSub || 4);
+  }
   var tRast = performance.now() - t0;
 
   /* Volume fraction */
@@ -650,7 +666,7 @@ function homogenizeFullCPU(recipe, N, opts) {
   var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
   var Es = mat.Es_MPa, nu = mat.nu;
   var C_s = isoC(Es, nu);
-  var C_v = isoC(Es * 1e-4, nu);   /* small but nonzero void stiffness */
+  var C_v = isoC(Es * (opts.voidRatio > 0 ? opts.voidRatio : 1e-4), nu);   /* small but nonzero void stiffness */
   var C_0 = isoC(Es, nu);          /* solid reference (NOT Voigt-avg) */
 
   /* Build full Γ̃ — μ₀ = C[21] (C44), λ₀ = C[1] (C12) per isoC layout */

@@ -137,8 +137,8 @@ var SIGMA_Y_TI64_MPA = (typeof NL_MAT_DEFAULT !== 'undefined' && isFinite(NL_MAT
      'largest'  keep only the largest network — one side of an interwoven weave
      'off'      keep everything (buckling still drops floating islands: they are free bodies)
    pruneLargest mirrors "not off" for solvers/tests that only read the old flag. */
-var GEOM_STATE = { connectivity: 'networks', pruneLargest: true };
-function connOpts(){ return { connectivity: GEOM_STATE.connectivity, pruneLargest: GEOM_STATE.connectivity !== 'off' }; }
+var GEOM_STATE = { connectivity: 'networks', pruneLargest: true, partialVolume: false };   /* v0.19.0 — partial-volume voxels for stiffness (off by default) */
+function connOpts(){ return { connectivity: GEOM_STATE.connectivity, pruneLargest: GEOM_STATE.connectivity !== 'off', partialVolume: !!GEOM_STATE.partialVolume }; }
 
 var RUN_STATE = {
   running: false,
@@ -176,6 +176,16 @@ function onConnectivityChange(v){
   if (v !== 'networks' && v !== 'largest' && v !== 'off') return;
   GEOM_STATE.connectivity = v;
   GEOM_STATE.pruneLargest = (v !== 'off');
+}
+
+/* v0.19.0 — surface voxels for the stiffness solve: the plain 0/1 cube
+   (default) or partial volume (each voxel the surface passes through carries
+   its solid fraction and blends solid and void stiffness).  On the PI-TPMS
+   paper's trio the cube reads low and partial volume reads high, so the two
+   bracket the converged value (docs/PARTIAL_VOLUME.md).  Crush and buckling
+   always use the 0/1 cube. */
+function onSurfaceVoxelChange(v){
+  GEOM_STATE.partialVolume = (v !== 'binary');
 }
 
 function onPhysToggle(el){
@@ -550,7 +560,7 @@ async function runRealSweep(N, runToken){
       /* Skip recompute when nothing this mode depends on changed: grid N,
          prune flag, solver path (full 6-LC Voigt) and the recipe/material
          fingerprint (Sprint A — ids alone are not unique across imports). */
-      var elSig = 'N' + N + '|p' + GEOM_STATE.connectivity + '|full6|cg' + CG_MAXITER_FULL + '|vs1|r' + recipeFp[i];
+      var elSig = 'N' + N + '|p' + GEOM_STATE.connectivity + '|full6|cg' + CG_MAXITER_FULL + '|vs1|pv' + (GEOM_STATE.partialVolume ? 1 : 0) + '|r' + recipeFp[i];
       if (d.results && !d.results._error && d.results._elasticSig === elSig){
         paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · cached');
         doneUnits++; bumpProgress();
@@ -595,7 +605,7 @@ async function runRealSweep(N, runToken){
         d.results._error = true;
       } else {
         d.results = mapElasticToResults(elasticResult);
-        d.results._runSource = 'real elastic · N=' + N + ' · ' + (elasticResult.tCG_ms|0) + ' ms';
+        d.results._runSource = 'real elastic · N=' + N + (elasticResult.partialVolume ? ' · partial volume' : ' · 0/1 cube') + ' · ' + (elasticResult.tCG_ms|0) + ' ms';
         d.results._elasticSig = elSig;
       }
       doneUnits++; bumpProgress();

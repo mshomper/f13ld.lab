@@ -87,7 +87,7 @@ var BUCKLE_WORKER_FILES = [
 /* Bump on any solver-file change so the worker's importScripts refetches
    instead of serving a stale cached copy (the blob worker has its own cache,
    separate from the main page). */
-var BUCKLE_SOLVER_VERSION = 'fe-h8i-5';
+var BUCKLE_SOLVER_VERSION = 'fe-h8i-6';   /* v0.19.0 — 14-rasterizer gained the partial-volume helpers */
 
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes

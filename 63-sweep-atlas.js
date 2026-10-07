@@ -17,6 +17,11 @@
    F13LD brand colors on the lab's dark theme.
    ============================================================ */
 
+/* v0.19.0 — axis value suffix and label note for builder axes stepped by
+   solid fraction (%) or by thinnest feature (mm). */
+function atlasAxSuffix(ax) { return ax && ax.byVf ? '%' : (ax && ax.byFeat ? ' mm' : ''); }
+function atlasAxNote(ax) { return ax && ax.byVf ? ' (target solid %)' : (ax && ax.byFeat ? ' (target thinnest feature, mm)' : ''); }
+
 var ATLAS_COL = {
   bg: '#06080f', panel: '#111118', panel2: '#0e0e1a', line: '#2a2a3a', lineSoft: '#1a1a2a',
   ink: '#e0e0ff', ink2: '#b8b8d0', mute: '#888', dim: '#555', head: '#7c8aaa',
@@ -87,7 +92,7 @@ function atlasRows() {
     var Cu = src.C || r.C, C = atlasFull(Cu), eig = atlasJacobiEig(C);
     var emax = eig[0], cnt = eig.filter(function (e) { return e > 0.01 * emax; }).length;
     var cls = cnt >= 6 ? 2 : (cnt <= 1 ? 0 : 1);
-    rows.push({ run: run, res: r, idx: idx, vf: r.vf_solved / 100, C: C, eig: eig, cls: cls, ext: src !== r,
+    rows.push({ run: run, res: r, idx: idx, vf: (r.vf_partial != null ? r.vf_partial : r.vf_solved) / 100, C: C, eig: eig, cls: cls, ext: src !== r,
       Ex: src.Ex, Ey: src.Ey, Ez: src.Ez, Gyz: src.Gyz, Gxz: src.Gxz, Gxy: src.Gxy });
   });
   return rows;
@@ -564,7 +569,7 @@ function atlasMap(rows, cur) {
   var W = Math.max(280, swEl('atMap').clientWidth || 480), cw = Math.max(8, Math.min(64, Math.floor((W - 90) / n1))), ch = Math.max(10, Math.min(40, Math.floor(300 / n2)));
   var h = '<table class="at-mtab"><tr><th class="ax">' + swEsc(a2 ? a2.label : '') + '</th>';
   var every = Math.ceil(n1 / Math.max(1, Math.floor((W - 90) / 46)));
-  for (var i = 0; i < n1; i++) h += '<th style="width:' + cw + 'px">' + (i % every === 0 ? swEsc(a1.byVf ? sweepFmtVal(a1.values[i]) + '%' : sweepFmtVal(a1.values[i])) : '') + '</th>';
+  for (var i = 0; i < n1; i++) h += '<th style="width:' + cw + 'px">' + (i % every === 0 ? swEsc(sweepFmtVal(a1.values[i]) + atlasAxSuffix(a1)) : '') + '</th>';
   h += '</tr>';
   for (var j = 0; j < n2; j++) {
     h += '<tr><th>' + (a2 ? swEsc(sweepFmtVal(a2.values[j])) : '') + '</th>';
@@ -583,7 +588,7 @@ function atlasMap(rows, cur) {
     }
     h += '</tr>';
   }
-  el.innerHTML = '<div class="at-sub">' + swEsc(a1.label) + (a1.byVf ? ' (target solid %)' : '') + ' →</div>' + h + '</table>';
+  el.innerHTML = '<div class="at-sub">' + swEsc(a1.label) + atlasAxNote(a1) + ' →</div>' + h + '</table>';
   leg.innerHTML = isCls
     ? ATLAS_CLASS.map(function (n, k) { return '<span class="at-lk"><span class="at-sw sq" style="background:' + ATLAS_COL.cls[k] + '"></span>' + n + '</span>'; }).join('') + '<span class="at-lk"><span class="at-sw sq cur"></span>current</span>'
     : '<span class="at-lk"><span class="at-ramp ' + (isVf ? 'vf' : 'log') + '"></span>' + (isVf ? '0 → 60 %+' : atlasFmtE(lo) + ' → ' + atlasFmtE(hi) + ' (log)') + '</span><span class="at-lk"><span class="at-sw sq cur"></span>current</span>';
@@ -838,9 +843,9 @@ function atlasS3Draw() {
   /* tick positions in box coordinates */
   function axTicks(ax, xsN) {
     var vals = ax.values.map(Number), n = vals.length;
-    if (n <= 9) return vals.map(function (v, i) { return { p: xsN[i], t: sweepFmtVal(ax.values[i]) + (ax.byVf ? '%' : '') }; });
+    if (n <= 9) return vals.map(function (v, i) { return { p: xsN[i], t: sweepFmtVal(ax.values[i]) + atlasAxSuffix(ax) }; });
     var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-    return atlasNiceTicks(lo, hi, 6).map(function (v) { return { p: -1 + 2 * (v - lo) / (hi - lo), t: sweepFmtVal(v) + (ax.byVf ? '%' : '') }; });
+    return atlasNiceTicks(lo, hi, 6).map(function (v) { return { p: -1 + 2 * (v - lo) / (hi - lo), t: sweepFmtVal(v) + atlasAxSuffix(ax) }; });
   }
   var tx = axTicks(D.a1, D.xs), tz = axTicks(D.a2, D.zs);
   var ty = D.ticks.map(function (t) { return { p: D.Y(t), t: D.useLog ? atlasExpFmt(Math.pow(10, t)) : (D.isVf ? atlasPct(t) : (atlasEs() ? atlasFmtE(t) : String(+t.toPrecision(3)))) }; });
@@ -936,7 +941,7 @@ function atlasS3Draw() {
     var tm = mid.slice(); tm[run] = 0; var pt = P(tm[0], tm[1], tm[2]); g.fillText(title, pt[0] + dx * 34, pt[1] + dy * 34 + 4);
     g.font = '10px "JetBrains Mono", monospace';
   }
-  edgeLabels(2, 0, tx, D.a1.label + (D.a1.byVf ? ' (target solid %)' : ''));
+  edgeLabels(2, 0, tx, D.a1.label + atlasAxNote(D.a1));
   edgeLabels(0, 2, tz, D.a2.label);
   var bestV = null;
   [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(function (c) { var p = P(c[0] * EX[0], 0, c[1] * EX[2]); if (!bestV || p[0] < bestV.x) bestV = { x: p[0], c: c }; });
@@ -955,7 +960,7 @@ function atlasS3Hover(e) {
   if (!best) { tip.hidden = true; if (prev) atlasS3Queue(); return; }
   var D = ATLAS._s3, row = D.cell[best.i][best.j];
   var v = atlasS3Val(row, best.k);
-  tip.innerHTML = '<b>' + swEsc(row.run.id) + '</b> · ' + ATLAS_CLASS[row.cls] + '<br>' + swEsc(D.a1.label) + ' = ' + swEsc(sweepFmtVal(D.a1.values[best.i])) + (D.a1.byVf ? ' %' : '') +
+  tip.innerHTML = '<b>' + swEsc(row.run.id) + '</b> · ' + ATLAS_CLASS[row.cls] + '<br>' + swEsc(D.a1.label) + ' = ' + swEsc(sweepFmtVal(D.a1.values[best.i])) + atlasAxSuffix(D.a1) +
     '<br>' + swEsc(D.a2.label) + ' = ' + swEsc(sweepFmtVal(D.a2.values[best.j])) + '<br>' + (best.k === 'vf' ? 'Solid ' + (v * 100).toFixed(1) + ' %' :
     (D.surfaces.length > 1 ? best.k : ATLAS._s3.metricLabel) + ' = ' + atlasFmtE(v) + ' · ' + (row.vf * 100).toFixed(1) + ' % solid');
   tip.hidden = false;

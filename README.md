@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.17.3 · alpha · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.19.0 · alpha · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (option)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** [PolyForm Noncommercial 1.0.0](./LICENSE.md): free for research and non-commercial use; anyone may run it to reproduce published results (see [NOTICE](./NOTICE)). Commercial licences: matt@notarobot-eng.com
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,20 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Crush axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.19.0
+
+**Normal runs on the fast elastic path.** Runs that capture stress and deformation fields for the viewer now use the GPU-resident solver (`16i-elastic-fast.js`) that sweeps have used since v0.15.0, instead of the older path with two blocking GPU round trips per iteration. Same operator, same CG, same stopping test, same fields. The older path stays as the fallback, for example when a GPU's limits can't hold the fast path's operator at N = 128. `await runElasticFastTest(32)` now also compares the captured fields.
+
+**Feature size in mm.** The sweep CSV gains `thinnest_feature_T`, `median_feature_T` (cell units), `thinnest_feature_mm`, `median_feature_mm` and `cell_mm`. The sweep builder can step parameter 1 **by thinnest feature** in mm: each target size is found by bisection at the run grid, to the nearest quarter voxel, and the review map shows the size each run actually reached.
+
+**Partial-volume voxels (option, off by default).** With **Surface voxels → Partial volume**, every voxel the surface passes through carries its true solid fraction (sampled 64 times inside the voxel), and the stiffness solve blends solid and void by it. The solid fraction becomes exact at any grid, and N = 32 reads about as well as the 0/1 cube at 64. But it reads high: 2–9 % at N = 64 on the PI-TPMS paper's trio, where the cube reads 1–11 % low. The two bracket the converged value, which is why the cube stays the default. Crush and buckling always use the cube. Sweep CSV: `partial_volume`, `vf_partial_pct`. Details, data and what was tried: [`docs/PARTIAL_VOLUME.md`](./docs/PARTIAL_VOLUME.md). GPU check: `await runPartialVolumeCheck()`.
+
+**Scopes for the next physics.** [`docs/THERMAL_SCOPE.md`](./docs/THERMAL_SCOPE.md) (conductivity tensor and 3-D temperature map in air, water and tissue) and [`docs/FLUIDS_LBM_SCOPE.md`](./docs/FLUIDS_LBM_SCOPE.md) (lattice Boltzmann wall shear stress and permeability).
+
+## What's new in v0.18.0
+
+**Viewer.** Design cards use the shared F13LD shading in each design's family colour; the geometry texture is R16F, and foam, noise and grain refine to a finer preview in the background.
 
 ## What's new in v0.17.3
 

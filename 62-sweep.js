@@ -47,6 +47,7 @@ var SWEEP_STATE = {
   voidRatio: 1e-6,                 /* void stiffness ÷ solid (Matt, 2026-10-01: 1e-6 for sweeps) */
   refine: 'off',                   /* 'off' | 'coarser' | 'finer' | 'pair' (64 ↔ 128) — second grid for extrapolation */
   order: 2,                        /* assumed convergence order for the extrapolation */
+  partialVolume: false,            /* v0.19.0 — surface voxels carry their solid fraction in the stiffness solve (off by default) */
   previewing: false, previewDone: 0, previewTotal: 0,
   current: null, startedAt: 0, log: []
 };
@@ -72,7 +73,8 @@ function sweepSnapshot() {
   return { v: 2, name: SWEEP_STATE.name, title: SWEEP_STATE.title, source: SWEEP_STATE.source, runs: SWEEP_STATE.runs, bases: SWEEP_STATE.bases, axes: SWEEP_STATE.axes,
     results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
     preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder,
-    voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order, timing: SWEEP_STATE.timing };
+    voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order, timing: SWEEP_STATE.timing,
+    partialVolume: SWEEP_STATE.partialVolume };
 }
 function sweepSave() {
   if (_swSaveT) return;
@@ -98,6 +100,7 @@ function sweepApplySaved(p) {
   SWEEP_STATE.builder = p.builder || {};
   if (p.voidRatio > 0) SWEEP_STATE.voidRatio = p.voidRatio;
   SWEEP_STATE.refine = p.refine || 'off'; SWEEP_STATE.order = p.order || 2;
+  SWEEP_STATE.partialVolume = p.partialVolume === true;
   SWEEP_STATE.timing = p.timing || SWEEP_STATE.timing || {};
   return true;
 }
@@ -291,6 +294,11 @@ function sweepRecipeOf(d) {
 /* Builder runs keep one base recipe per sweep (SWEEP_STATE.bases) plus the
    values written into it, so a large sweep of a large recipe (a beam with
    hundreds of struts) stays small.  CSV runs carry their own recipe. */
+/* Cell edge in mm for a recipe (a foam tile is one lab cell). */
+function sweepCellMm(rc) {
+  var gm = (rc && rc.geometry) || {};
+  return (rc && rc.family === 'foam' && gm.tile_mm > 0) ? gm.tile_mm : (gm.cellSizeMm > 0 ? gm.cellSizeMm : 5);
+}
 function sweepRecipeForRun(run) {
   if (run.recipe) return run.recipe;
   var base = SWEEP_STATE.bases && SWEEP_STATE.bases[run.baseId];
@@ -336,6 +344,7 @@ function sweepRunsFromCombos(plan, combos) {
     if (plan.spec2) params.push({ key: plan.spec2.key, name: plan.spec2.label, unit: plan.spec2.unit, value: iv(plan.spec2, c.v2) });
     var purpose = params.map(function (p) { return p.name + ' = ' + sweepFmtVal(p.value) + (p.unit ? ' ' + p.unit : ''); }).join(', ');
     if (c.target != null) purpose = 'target ' + (c.target * 100).toFixed(2) + ' % solid → ' + purpose;
+    if (c.featTarget != null) purpose = 'target thinnest ' + sweepFmtVal(c.featTarget) + ' mm (got ' + sweepFmtVal(c.featVox / plan.N * plan.cellMm) + ' mm at N = ' + plan.N + ') → ' + purpose;
     runs.push({
       id: id, tier: '', set: plan.title, purpose: purpose, note: '', label: plan.title, shift: '',
       N: plan.N, nu: plan.nu, baseId: 'b0', applied: applied, grid: [c.i, c.j],
@@ -382,7 +391,8 @@ async function sweepSolveAt(recipe, N, prec, conn) {
   var t0 = performance.now();
   var R = await solveDesignElasticFull(recipe, N, {
     connectivity: conn, pruneLargest: conn !== 'off',
-    captureFieldsLCs: [], cgTol: prec.tol, cgMaxiter: prec.maxiter, voidRatio: SWEEP_STATE.voidRatio
+    captureFieldsLCs: [], cgTol: prec.tol, cgMaxiter: prec.maxiter, voidRatio: SWEEP_STATE.voidRatio,
+    partialVolume: SWEEP_STATE.partialVolume === true
   });
   var wall = (performance.now() - t0) / 1000;
   var noLoad = null;
@@ -422,11 +432,14 @@ async function sweepRunOne(run) {
     throw new Error('imported geometry is not loaded');
   var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
   var A = await sweepSolveAt(recipe, run.N, prec, conn), R = A.R;
-  var vfRaw = R.rho_raw != null ? R.rho_raw * 100 : R.rho * 100, vf = R.rho * 100;
+  /* v0.19.0 — vf_solved stays the 0/1 voxel count after the trim; with
+     partial-volume voxels the fraction-weighted solid is vf_partial */
+  var vfRaw = R.rho_raw != null ? R.rho_raw * 100 : R.rho * 100, vf = (R.rho_binary != null ? R.rho_binary : R.rho) * 100;
   var res = {
     id: run.id, when: new Date().toISOString(), N: run.N, nu: run.nu,
     tol: prec.tol, maxiter: prec.maxiter, connectivity: conn, voidRatio: SWEEP_STATE.voidRatio,
     vf_voxel: vfRaw, vf_solved: vf, trim_removed_pct: vfRaw > 0 ? (vfRaw - vf) / vfRaw * 100 : 0,
+    partialVolume: !!R.partialVolume, vf_partial: R.partialVolume ? R.rho * 100 : null,
     vf_check: run.expectedVf ? (vfRaw - run.expectedVf) / run.expectedVf : null,
     C: sweepVoigtUpper(R.C_eff),
     Ex: R.Ex_MPa / SWEEP_ES, Ey: R.Ey_MPa / SWEEP_ES, Ez: R.Ez_MPa / SWEEP_ES,
@@ -444,7 +457,7 @@ async function sweepRunOne(run) {
     var B = await sweepSolveAt(recipe, N2, prec, conn);
     var c = sweepConstants(B.Cfull) || {};
     res.companion = { N: N2, C: sweepVoigtUpper(B.R.C_eff), Ex: c.Ex, Ey: c.Ey, Ez: c.Ez, Gyz: c.Gyz, Gxz: c.Gxz, Gxy: c.Gxy,
-                      vf_solved: B.R.rho * 100, iters: B.iters, residual: B.residual, converged: B.converged, wall_s: B.wall,
+                      vf_solved: (B.R.rho_binary != null ? B.R.rho_binary : B.R.rho) * 100, vf_partial: B.R.partialVolume ? B.R.rho * 100 : null, iters: B.iters, residual: B.residual, converged: B.converged, wall_s: B.wall,
                       vf_voxel: (B.R.rho_raw != null ? B.R.rho_raw : B.R.rho) * 100, itersBy: B.itersBy };   /* v0.15.1 */
     res.wall_s += B.wall;
     if (!B.converged) res.converged = false;
@@ -618,13 +631,13 @@ function sweepCsvCell(v) {
 }
 function sweepExportCsv() {
   var cols = ['run_id', 'tier', 'set', 'purpose', 'grid_N', 'nu_s', 'cg_tol', 'cg_maxiter', 'connectivity', 'param_name', 'param_value', 'param2_name', 'param2_value',
-              'expected_vf_pct', 'vf_voxel_pct', 'vf_measured_pct', 'vf_check_rel_pct', 'trim_removed_pct'];
+              'expected_vf_pct', 'vf_voxel_pct', 'vf_measured_pct', 'vf_check_rel_pct', 'trim_removed_pct', 'partial_volume', 'vf_partial_pct'];
   cols.push('void_ratio');
   for (var i = 1; i <= 6; i++) for (var j = i; j <= 6; j++) cols.push('C' + i + j);
   cols = cols.concat(['Ex', 'Ey', 'Ez', 'Gyz', 'Gxz', 'Gxy', 'nu_xy', 'nu_xz', 'nu_yz',
     'iters_total', 'iters_xx', 'iters_yy', 'iters_zz', 'iters_yz', 'iters_xz', 'iters_xy', 'final_residual_max', 'converged', 'wall_time_s',
     'ref_Ex', 'ref_Ey', 'ref_Ez', 'ratio_Ex', 'ratio_Ey', 'ratio_Ez',
-    'thinnest_feature_vox', 'median_feature_vox', 'spans', 'checks',
+    'thinnest_feature_vox', 'median_feature_vox', 'thinnest_feature_T', 'median_feature_T', 'thinnest_feature_mm', 'median_feature_mm', 'cell_mm', 'spans', 'checks',
     'grid2_N', 'grid2_Ex', 'grid2_Ey', 'grid2_Ez', 'grid2_Gyz', 'grid2_Gxz', 'grid2_Gxy', 'grid2_iters', 'grid2_residual', 'grid2_wall_time_s',
     'grid2_vf_voxel_pct', 'grid2_vf_measured_pct', 'grid2_converged',
     'grid2_iters_xx', 'grid2_iters_yy', 'grid2_iters_zz', 'grid2_iters_yz', 'grid2_iters_xz', 'grid2_iters_xy',
@@ -660,6 +673,7 @@ function sweepExportCsv() {
         ['Ex', 'Ey', 'Ez'].forEach(function (q) { row['ext_ratio_' + q] = (ref[q] != null && Math.abs(ref[q]) > 1e-5) ? r.ext[q] / ref[q] : null; });
       }
       row.vf_voxel_pct = r.vf_voxel; row.vf_measured_pct = r.vf_solved;
+      row.partial_volume = r.partialVolume ? 'yes' : 'no'; row.vf_partial_pct = r.vf_partial;
       row.vf_check_rel_pct = r.vf_check != null ? r.vf_check * 100 : null; row.trim_removed_pct = r.trim_removed_pct;
       for (var k in r.C) row[k] = r.C[k];
       ['Ex', 'Ey', 'Ez', 'Gyz', 'Gxz', 'Gxy', 'nu_xy', 'nu_xz', 'nu_yz'].forEach(function (q) { row[q] = r[q]; });
@@ -676,6 +690,13 @@ function sweepExportCsv() {
     var st = SWEEP_STATE.preview[run.id];
     if (st && !st.error) {
       row.thinnest_feature_vox = st.thinVox; row.median_feature_vox = st.medVox;
+      /* v0.19.0 — the same features in cell units (T = fraction of the cell edge)
+         and in mm at the run's cell size */
+      var rc = null; try { rc = sweepRecipeForRun(run); } catch (e) { rc = null; }
+      var cellMm = sweepCellMm(rc);
+      row.cell_mm = cellMm;
+      if (st.thinVox != null) { row.thinnest_feature_T = st.thinVox / run.N; row.thinnest_feature_mm = st.thinVox / run.N * cellMm; }
+      if (st.medVox != null) { row.median_feature_T = st.medVox / run.N; row.median_feature_mm = st.medVox / run.N * cellMm; }
       row.spans = ['x', 'y', 'z'].filter(function (a) { return st.spans[a]; }).join('');
       row.checks = sweepFlags(run, st).map(function (f) { return f.text; }).join('; ');
     }
@@ -793,17 +814,17 @@ function sweepRenderBuilder() {
   if (b.p2 && b.p2 !== 'none' && (!cat.some(function (c) { return c.key === b.p2; }) || b.p2 === b.p1)) { b.p2 = 'none'; }
   var s1 = cat.filter(function (c) { return c.key === b.p1; })[0];
   var s2 = (b.p2 && b.p2 !== 'none') ? cat.filter(function (c) { return c.key === b.p2; })[0] : null;
-  var canVf = !!s1.target, byVf = canVf && b.by === 'vf';
-  var key1 = b.design + '|' + b.p1 + '|' + (byVf ? 'vf' : 'v');
+  var canVf = !!s1.target, byVf = canVf && b.by === 'vf', byFeat = canVf && b.by === 'feat';
+  var key1 = b.design + '|' + b.p1 + '|' + (byVf ? 'vf' : (byFeat ? 'feat' : 'v'));
   if (b.key1 !== key1 || b.from1 == null || b.from1 === '') {
     var c1 = sweepParamGet(rec, s1);
-    b.from1 = byVf ? '5' : sweepFmtVal(s1.hint ? Math.max(s1.hint[0], c1 * 0.5) : c1 * 0.5);
-    b.to1 = byVf ? '40' : sweepFmtVal(s1.hint ? Math.min(s1.hint[1], c1 === 0 ? s1.hint[1] / 2 : c1 * 1.5) : (c1 === 0 ? 0.1 : c1 * 1.5));
+    b.from1 = byVf ? '5' : (byFeat ? '0.3' : sweepFmtVal(s1.hint ? Math.max(s1.hint[0], c1 * 0.5) : c1 * 0.5));
+    b.to1 = byVf ? '40' : (byFeat ? '0.8' : sweepFmtVal(s1.hint ? Math.min(s1.hint[1], c1 === 0 ? s1.hint[1] / 2 : c1 * 1.5) : (c1 === 0 ? 0.1 : c1 * 1.5)));
     b.list1 = ''; b.key1 = key1;
     /* whole-number parameters (field B frequency): one step per integer across the hint */
-    if (s1.integer && !byVf) { b.from1 = String(s1.hint[0]); b.to1 = String(s1.hint[1]); b.steps1 = String(s1.hint[1] - s1.hint[0] + 1); }
+    if (s1.integer && !byVf && !byFeat) { b.from1 = String(s1.hint[0]); b.to1 = String(s1.hint[1]); b.steps1 = String(s1.hint[1] - s1.hint[0] + 1); }
     /* v0.14.0 — a spec may suggest its own starting range (foam cell count, random seed) */
-    if (s1.range && !byVf) { b.from1 = String(s1.range[0]); b.to1 = String(s1.range[1]); b.steps1 = String(s1.range[2]); }
+    if (s1.range && !byVf && !byFeat) { b.from1 = String(s1.range[0]); b.to1 = String(s1.range[1]); b.steps1 = String(s1.range[2]); }
   }
   var key2 = b.design + '|' + (b.p2 || 'none');
   if (s2 && (b.key2 !== key2 || b.from2 == null || b.from2 === '')) {
@@ -815,7 +836,8 @@ function sweepRenderBuilder() {
   b.key2 = key2;
   b.steps1 = b.steps1 || '5'; b.N = String(b.N || 64);
   b.nu = (b.nu != null && b.nu !== '') ? b.nu : String((rec.material && rec.material.nu) || 0.34);
-  b.by = byVf ? 'vf' : 'value'; b.p2 = s2 ? b.p2 : 'none';
+  b.by = byVf ? 'vf' : (byFeat ? 'feat' : 'value'); b.p2 = s2 ? b.p2 : 'none';
+  var unit1 = byVf ? ' %' : (byFeat ? ' mm' : '');
 
   function opt(c, sel) { return '<option value="' + swEsc(c.key) + '"' + (c.key === sel ? ' selected' : '') + '>' + swEsc(c.label + (c.unit ? ' (' + c.unit + ')' : '')) + '</option>'; }
   function opts(sel, exclude, withNone) {
@@ -832,10 +854,11 @@ function sweepRenderBuilder() {
       '<span class="imp-sub">' + swEsc(rec.family) + (rec.geometry && rec.geometry.mode ? ' · ' + swEsc(rec.geometry.mode) : '') + '</span></div>' +
     '<div class="sw-prow"><span class="sw-pn">1</span>' +
       '<select id="swb_p1" onchange="sweepBuilderChanged(true)">' + opts(b.p1, null, false) + '</select>' +
-      (canVf ? '<select id="swb_by" onchange="sweepBuilderChanged(true)"><option value="value"' + (byVf ? '' : ' selected') + '>by value</option><option value="vf"' + (byVf ? ' selected' : '') + '>by solid fraction</option></select>' : '<input type="hidden" id="swb_by" value="value">') +
-      '<label>from ' + inp('from1', 66) + (byVf ? ' %' : '') + '</label><label>to ' + inp('to1', 66) + (byVf ? ' %' : '') + '</label><label>steps ' + inp('steps1', 44) + '</label>' +
-      (byVf ? '<input type="hidden" id="swb_list1" value="">' : '<label>or values ' + inp('list1', 120, ' placeholder="e.g. 0.05, 0.1, 0.2"') + '</label>') +
-      '<span class="imp-sub">' + (byVf ? (s1.target === 'threshold' ? 'exact at the grid' : 'found by bisection') : 'now ' + sweepFmtVal(now1)) + '</span></div>' +
+      (canVf ? '<select id="swb_by" onchange="sweepBuilderChanged(true)"><option value="value"' + (byVf || byFeat ? '' : ' selected') + '>by value</option><option value="vf"' + (byVf ? ' selected' : '') + '>by solid fraction</option><option value="feat"' + (byFeat ? ' selected' : '') + '>by thinnest feature</option></select>' : '<input type="hidden" id="swb_by" value="value">') +
+      '<label>from ' + inp('from1', 66) + unit1 + '</label><label>to ' + inp('to1', 66) + unit1 + '</label><label>steps ' + inp('steps1', 44) + '</label>' +
+      (byVf ? '<input type="hidden" id="swb_list1" value="">' : (byFeat ? '<label>or sizes ' + inp('list1', 120, ' placeholder="e.g. 0.3, 0.4, 0.5"') + ' mm</label>' : '<label>or values ' + inp('list1', 120, ' placeholder="e.g. 0.05, 0.1, 0.2"') + '</label>')) +
+      '<span class="imp-sub">' + (byVf ? (s1.target === 'threshold' ? 'exact at the grid' : 'found by bisection') :
+        (byFeat ? 'found by bisection at the run grid, to the nearest quarter voxel · cell ' + sweepFmtVal(sweepCellMm(rec)) + ' mm' : 'now ' + sweepFmtVal(now1))) + '</span></div>' +
     '<div class="sw-prow"><span class="sw-pn">2</span>' +
       '<select id="swb_p2" onchange="sweepBuilderChanged(true)">' + opts(b.p2, b.p1, true) + '</select>' +
       (s2 ? '<label>from ' + inp('from2', 66) + '</label><label>to ' + inp('to2', 66) + '</label><label>steps ' + inp('steps2', 44) + '</label>' +
@@ -857,18 +880,22 @@ function sweepPlan() {
   var base = sweepClone(sweepRecipeOf(d)), cat = sweepParamCatalog(base);
   var s1 = cat.filter(function (c) { return c.key === b.p1; })[0];
   var s2 = (b.p2 && b.p2 !== 'none') ? cat.filter(function (c) { return c.key === b.p2; })[0] : null;
-  var byVf = b.by === 'vf' && s1.target;
+  var byVf = b.by === 'vf' && s1.target, byFeat = b.by === 'feat' && s1.target;
   var nu = parseFloat(b.nu), N = parseInt(b.N, 10);
   if (!(nu >= 0 && nu < 0.5)) throw new Error('Poisson’s ratio must be between 0 and 0.5');
-  var v1 = null, targets = null;
+  var v1 = null, targets = null, featTargets = null, cellMm = sweepCellMm(base);
   if (byVf) {
     var lo = parseFloat(b.from1), hi = parseFloat(b.to1), st = parseInt(b.steps1, 10);
     if (!(lo >= 0 && lo <= 100 && hi >= 0 && hi <= 100 && st >= 1)) throw new Error('solid fractions are percentages from 0 to 100, with at least one step');
     targets = sweepValues({ from: lo / 100, to: hi / 100, steps: st });
+  } else if (byFeat) {
+    featTargets = sweepValues({ from: b.from1, to: b.to1, steps: b.steps1, list: b.list1 });
+    if (featTargets.some(function (t) { return !(t > 0) || t >= cellMm; })) throw new Error('feature sizes are in mm, above 0 and smaller than the ' + sweepFmtVal(cellMm) + ' mm cell');
   } else v1 = sweepValues({ from: b.from1, to: b.to1, steps: b.steps1, list: b.list1 });
   var v2 = s2 ? sweepValues({ from: b.from2, to: b.to2, steps: b.steps2, list: b.list2 }) : null;
-  return { design: d, title: d.title, base: base, spec1: s1, spec2: s2, byVf: !!byVf, values1: v1, targets: targets, values2: v2,
-           n1: byVf ? targets.length : v1.length, n2: s2 ? v2.length : 1, N: N, nu: nu };
+  return { design: d, title: d.title, base: base, spec1: s1, spec2: s2, byVf: !!byVf, byFeat: !!byFeat, values1: v1, targets: targets,
+           featTargets: featTargets, cellMm: cellMm, values2: v2,
+           n1: byVf ? targets.length : (byFeat ? featTargets.length : v1.length), n2: s2 ? v2.length : 1, N: N, nu: nu };
 }
 
 /* Review: resolve values + quick geometry check at N = 32, in the worker. */
@@ -881,7 +908,9 @@ async function sweepReview() {
   sweepRenderReview();
   try {
     var m = await sweepGeomCall({ type: 'review', recipe: plan.base, spec1: plan.spec1, spec2: plan.spec2, values1: plan.values1,
-      values2: plan.values2, byVf: plan.byVf, targets: plan.targets, N: plan.N, checkN: 32, connectivity: conn },
+      values2: plan.values2, byVf: plan.byVf, targets: plan.targets, N: plan.N, checkN: 32, connectivity: conn,
+      byFeat: plan.byFeat, featTargets: plan.featTargets,
+      featTargetsVox: plan.byFeat ? plan.featTargets.map(function (t) { return t / plan.cellMm * plan.N; }) : null },
       function (p) { if (SWEEP_STATE.review !== rv) return; rv.done = p.done; rv.stage = p.stage; if (p.combo) rv.combos.push(p.combo); sweepRenderReviewSoon(); });
     if (SWEEP_STATE.review !== rv) return;
     rv.combos = m.combos; rv.busy = false;
@@ -957,10 +986,11 @@ function sweepReviewMap(plan, combos) {
   if (n1 * n2 > 2500) return '<div class="imp-sub">' + (n1 * n2).toLocaleString() + ' runs — too many to draw the map</div>';
   var byKey = {};
   combos.forEach(function (c) { byKey[c.i + ',' + c.j] = c; });
-  var lab1 = plan.byVf ? plan.targets.map(function (t) { return (t * 100).toFixed(1) + '%'; }) : plan.values1.map(sweepFmtVal);
+  var lab1 = plan.byVf ? plan.targets.map(function (t) { return (t * 100).toFixed(1) + '%'; })
+           : (plan.byFeat ? plan.featTargets.map(function (t) { return sweepFmtVal(t) + ' mm'; }) : plan.values1.map(sweepFmtVal));
   var lab2 = plan.spec2 ? plan.values2.map(sweepFmtVal) : [''];
   var cw = Math.max(10, Math.min(40, Math.floor(560 / n1)));
-  var h = '<div class="sw-map"><div class="sw-map-ax imp-sub">' + swEsc(plan.spec1.label) + (plan.byVf ? ' (by solid fraction)' : '') + ' →' +
+  var h = '<div class="sw-map"><div class="sw-map-ax imp-sub">' + swEsc(plan.spec1.label) + (plan.byVf ? ' (by solid fraction)' : (plan.byFeat ? ' (by thinnest feature)' : '')) + ' →' +
           (plan.spec2 ? ' · rows: ' + swEsc(plan.spec2.label) : '') + '</div><table class="sw-mtab"><tr><th></th>';
   var every = Math.ceil(n1 / Math.floor(560 / 44));
   for (var i = 0; i < n1; i++) h += '<th style="width:' + cw + 'px">' + (i % every === 0 ? swEsc(lab1[i]) : '') + '</th>';
@@ -973,6 +1003,7 @@ function sweepReviewMap(plan, combos) {
       else if (st) { bg = sweepSeqColor(st.vf_trim); tip = (st.vf_trim * 100).toFixed(1) + ' % solid' + (st.thinVox != null ? ' · thinnest ≈ ' + (st.thinVox * plan.N / 32).toFixed(1) + ' vox at N = ' + plan.N : '') +
         (!(st.spans.x && st.spans.y && st.spans.z) ? ' · spans ' + ['x', 'y', 'z'].filter(function (a) { return st.spans[a]; }).join('') + ' only' : ''); }
       if (c) tip = sweepFmtVal(c.v1) + (plan.spec2 ? ', ' + sweepFmtVal(c.v2) : '') + ' — ' + tip;
+      if (c && c.featVox != null) tip += ' · thinnest ' + sweepFmtVal(c.featVox / plan.N * plan.cellMm) + ' mm at N = ' + plan.N;
       h += '<td class="' + cls + '" style="background:' + bg + '" title="' + swEsc(tip) + '"></td>';
     }
     h += '</tr>';
@@ -1023,8 +1054,8 @@ function sweepCommitReview() {
       skipIds['S' + String(c.i + 1).padStart(w, '0') + (rv.plan.spec2 ? '-' + String(c.j + 1).padStart(w, '0') : '')] = true;
     }
   });
-  var axes = [{ key: rv.plan.spec1.key, label: rv.plan.spec1.label, unit: rv.plan.spec1.unit, byVf: rv.plan.byVf,
-                values: rv.plan.byVf ? rv.plan.targets.map(function (t) { return t * 100; }) : rv.plan.values1 }];
+  var axes = [{ key: rv.plan.spec1.key, label: rv.plan.spec1.label, unit: rv.plan.spec1.unit, byVf: rv.plan.byVf, byFeat: rv.plan.byFeat,
+                values: rv.plan.byVf ? rv.plan.targets.map(function (t) { return t * 100; }) : (rv.plan.byFeat ? rv.plan.featTargets : rv.plan.values1) }];
   if (rv.plan.spec2) axes.push({ key: rv.plan.spec2.key, label: rv.plan.spec2.label, unit: rv.plan.spec2.unit, values: rv.plan.values2 });
   var name = (rv.plan.title + '_' + rv.plan.spec1.label + (rv.plan.spec2 ? '_x_' + rv.plan.spec2.label : '')).replace(/[^\w.-]+/g, '_');
   var title = rv.plan.title + ' · ' + rv.plan.spec1.label + (rv.plan.spec2 ? ' × ' + rv.plan.spec2.label : '');
@@ -1129,6 +1160,8 @@ function sweepRenderSettings() {
       [['off', 'off'], ['coarser', 'one coarser'], ['finer', 'one finer'], ['pair', '64 ↔ 128 pair']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SWEEP_STATE.refine ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
     (SWEEP_STATE.refine !== 'off' ? '<label class="imp-sub" title="Assumed convergence order. The F set measured about 2 for PI-gyroid Ex and Ey, 1.4 for Ez and 1.2 for the sheet gyroid.">order <select onchange="sweepSetOpt(\'order\', +this.value)"' + dis + '>' +
       [1, 2].map(function (o) { return '<option' + (o === SWEEP_STATE.order ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' : '') +
+    '<label class="imp-sub" title="0/1 cube (default, as before v0.19.0): reads low on thin features at coarse grids. Partial volume: voxels the surface passes through carry their solid fraction; exact solid fraction, reads a few percent high. Together they bracket the converged value.">Surface voxels <select onchange="sweepSetOpt(\'partialVolume\', this.value === \'pv\')"' + dis + '>' +
+      '<option value="binary"' + (SWEEP_STATE.partialVolume !== true ? ' selected' : '') + '>0/1 cube</option><option value="pv"' + (SWEEP_STATE.partialVolume === true ? ' selected' : '') + '>partial volume (reads high)</option></select></label>' +
     '<span class="imp-sub" title="Set by the Connectivity selector in the run controls">Islands: ' + connTxt + '</span>' +
     '<span class="imp-sub">Stiffness ÷ solid modulus</span>';
 }
@@ -1185,7 +1218,7 @@ function sweepNew() {
   var hasRes = Object.keys(SWEEP_STATE.results).length > 0;
   if (!confirm('Start a new sweep? This clears the run list' + (hasRes ? ' and its results (export them first if you need them)' : '') + ', the builder and the run settings.')) return;
   sweepResetRuns();
-  SWEEP_STATE.builder = {}; SWEEP_STATE.precision = 'standard'; SWEEP_STATE.voidRatio = 1e-6; SWEEP_STATE.refine = 'off'; SWEEP_STATE.order = 2;
+  SWEEP_STATE.builder = {}; SWEEP_STATE.precision = 'standard'; SWEEP_STATE.voidRatio = 1e-6; SWEEP_STATE.refine = 'off'; SWEEP_STATE.order = 2; SWEEP_STATE.partialVolume = false;
   SWEEP_UI.tab = 'build'; SWEEP_UI.notesOpen = false;
   sweepSave(); sweepRenderSources(); sweepRenderBuilder(); sweepRender();
 }

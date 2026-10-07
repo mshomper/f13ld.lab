@@ -26,8 +26,10 @@
    with the linear elastic C(x) (16b's localStress) instead of the J2
    tangent.  Load order: after 16b and 16g.
 
-   Used by solveDesignElasticFull when no per-voxel fields are requested
-   (the sweep).  window.LAB_FAST_ELASTIC = false → legacy path.
+   Used by solveDesignElasticFull for every solve (v0.19.0): sweeps (no
+   per-voxel fields) and normal runs, which capture fields per load case
+   from the converged strain and stress already on the GPU (same
+   extractors as 16b).  window.LAB_FAST_ELASTIC = false → legacy path.
    Validation (browser console):  await runElasticFastTest(32)
    ============================================================ */
 
@@ -244,8 +246,9 @@ ElasticFastSolver.prototype.upload = function (solid, gammaEntry, C_s, C_v, C_0)
   if (this.gammaKey !== gammaEntry.key) { this.G = gammaEntry.G; this.gammaKey = gammaEntry.key; delete this.bg.gamma; }
 };
 
-/* One load case: CG on A eps = b, eps0 = b = eps_bar (as 16b). */
-ElasticFastSolver.prototype.solveLoadCase = async function (eps_bar, tol, maxIt) {
+/* One load case: CG on A eps = b, eps0 = b = eps_bar (as 16b).
+   capture = true → per-voxel fields from the converged state (v0.19.0). */
+ElasticFastSolver.prototype.solveLoadCase = async function (eps_bar, tol, maxIt, capture) {
   var d = this.device, es = this.es, N3 = this.N3;
   var e1 = d.createCommandEncoder(); es._fillPair(e1, es.eps, eps_bar); d.queue.submit([e1.finish()]);
   var e2 = d.createCommandEncoder(); es._fillPair(e2, es.b, eps_bar); d.queue.submit([e2.finish()]);
@@ -280,59 +283,74 @@ ElasticFastSolver.prototype.solveLoadCase = async function (eps_bar, tol, maxIt)
   var o = NLS_COUNT;
   /* mean6 holds vec4(σxx,σyy,σzz,·), vec4(σyz,σxz,σxy,·) */
   var sigma = [w[o], w[o + 1], w[o + 2], w[o + 4], w[o + 5], w[o + 6]];
+  /* v0.19.0 — fields.  The final readback ran _stress('eps'), so es.sig
+     holds C(x):eps at the converged state and es.eps the converged strain:
+     exactly what 16b's extractors read. */
+  var fields = null;
+  if (capture) {
+    var sigArr = await es._readbackPair(es.sig);
+    var isNormal = eps_bar[0] !== 0 || eps_bar[1] !== 0 || eps_bar[2] !== 0;
+    fields = isNormal ? await es.extractFieldsForLCFull(eps_bar, sigArr) : await es.extractStressOnlyForLCFull(sigArr);
+  }
   return {
-    sigma: sigma, iters: w[NLS_IT] | 0, converged: converged,
+    sigma: sigma, iters: w[NLS_IT] | 0, converged: converged, fields: fields,
     breakReason: converged ? 'converged' : (w[NLS_DONE] > 0.5 ? 'pAp_breakdown' : 'max_iter'),
     finalResidual: Math.sqrt(rr / Math.max(b2, 1e-60)), readbacks: reads
   };
 };
 
-/* Six load cases → the same result shape as ElasticSolverFull.homogenizeFull. */
-ElasticFastSolver.prototype.homogenize = async function (tol, maxIt) {
+/* Six load cases → the same result shape as ElasticSolverFull.homogenizeFull.
+   captureLCs: solver LC indices (0..5) to capture fields for (v0.19.0). */
+ElasticFastSolver.prototype.homogenize = async function (tol, maxIt, captureLCs) {
   var voigt = ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'];
-  var C = new Float64Array(36), perLC = [], totalIters = 0, allConverged = true, reads = 0;
+  var C = new Float64Array(36), perLC = [], totalIters = 0, allConverged = true, reads = 0, fieldsByLC = {};
   for (var lc = 0; lc < 6; lc++) {
     var eb = [0, 0, 0, 0, 0, 0]; eb[lc] = 1;
-    var res = await this.solveLoadCase(eb, tol, maxIt);
+    var res = await this.solveLoadCase(eb, tol, maxIt, !!captureLCs && captureLCs.indexOf(lc) >= 0);
+    if (res.fields) fieldsByLC[lc] = res.fields;
     totalIters += res.iters; reads += res.readbacks;
     if (!res.converged) allConverged = false;
     for (var P = 0; P < 6; P++) C[P * 6 + lc] = res.sigma[P];
     perLC.push({ axis: voigt[lc], iters: res.iters, converged: res.converged, breakReason: res.breakReason, finalResidual: res.finalResidual });
   }
-  return elasticConstantsFromC(C, perLC, totalIters, allConverged, reads);
+  return elasticConstantsFromC(C, perLC, totalIters, allConverged, reads, fieldsByLC);
 };
 
 /* Symmetrise + invert + engineering constants (as homogenizeFull). */
-function elasticConstantsFromC(C_eff, perLC, totalIters, allConverged, readbacks) {
+function elasticConstantsFromC(C_eff, perLC, totalIters, allConverged, readbacks, fieldsByLC) {
+  fieldsByLC = fieldsByLC || {};
   for (var P2 = 0; P2 < 6; P2++) for (var Q2 = P2 + 1; Q2 < 6; Q2++) {
     var avg = 0.5 * (C_eff[P2 * 6 + Q2] + C_eff[Q2 * 6 + P2]); C_eff[P2 * 6 + Q2] = avg; C_eff[Q2 * 6 + P2] = avg;
   }
   var S = invert6x6(C_eff);
-  if (S === null) return { valid: false, reject_reason: 'singular_C_eff', C_eff: C_eff, perLC: perLC, totalIters: totalIters, allConverged: allConverged, fieldsByLC: {}, readbacks: readbacks };
+  if (S === null) return { valid: false, reject_reason: 'singular_C_eff', C_eff: C_eff, perLC: perLC, totalIters: totalIters, allConverged: allConverged, fieldsByLC: fieldsByLC, readbacks: readbacks };
   var C11 = C_eff[0], C12 = C_eff[1], C44 = C_eff[21];
   return {
     valid: true,
     Ex: 1 / S[0], Ey: 1 / S[7], Ez: 1 / S[14], Gyz: 1 / S[21], Gxz: 1 / S[28], Gxy: 1 / S[35],
     nu_xy: -S[1] / S[0], nu_xz: -S[2] / S[0], nu_yz: -S[8] / S[7],
     zenerA: (C11 - C12) > 1e-30 ? (2 * C44) / (C11 - C12) : NaN,
-    C_eff: C_eff, S: S, perLC: perLC, totalIters: totalIters, allConverged: allConverged, fieldsByLC: {}, readbacks: readbacks
+    C_eff: C_eff, S: S, perLC: perLC, totalIters: totalIters, allConverged: allConverged, fieldsByLC: fieldsByLC, readbacks: readbacks
   };
 }
 
-/* Entry used by solveDesignElasticFull.  Returns null → caller uses legacy. */
-async function elasticFastHomogenize(N, solid, C_s, C_v, C_0, opts, info) {
+/* Entry used by solveDesignElasticFull.  Returns null → caller uses legacy.
+   captureLCs: solver LC indices to capture per-voxel fields for. */
+async function elasticFastHomogenize(N, solid, C_s, C_v, C_0, opts, info, captureLCs) {
   if (!elasticFastEnabled()) return null;
   var g = elasticFastGamma(N, C_0[21], C_0[1], info);
   if (!g) return null;
   var s = elasticFastSolver(N);
   s.upload(solid, g, C_s, C_v, C_0);
-  return await s.homogenize(opts.cgTol || CG_TOL_FULL, opts.cgMaxiter || CG_MAXITER_FULL);
+  return await s.homogenize(opts.cgTol || CG_TOL_FULL, opts.cgMaxiter || CG_MAXITER_FULL, captureLCs || []);
 }
 
 /* ════════════════════════════════════════════════════════════
    runElasticFastTest — fast vs legacy on the demo designs and a foam.
      await runElasticFastTest(32)          (browser console)
-   Pass: every C_ij within 0.1 % of max|C| and the same convergence.
+   Pass: every C_ij within 0.1 % of max|C| and the same convergence;
+   v0.19.0 — with fields captured, von Mises and u′ within 1 % of their
+   max on every axis, and the field run takes the fast path.
    ════════════════════════════════════════════════════════════ */
 async function runElasticFastTest(N, extraRecipes) {
   N = N || 32;
@@ -345,7 +363,7 @@ async function runElasticFastTest(N, extraRecipes) {
   (extraRecipes || []).forEach(function (r, i) { recipes.push({ name: r.name || ('extra ' + i), r: r }); });
   var rows = [], allOk = true;
   for (var i = 0; i < recipes.length; i++) {
-    var opt = { captureFieldsLCs: [], pruneLargest: true, connectivity: 'networks', voidRatio: 1e-6, cgTol: 1e-4, cgMaxiter: 1000 };
+    var opt = { captureFieldsLCs: [], pruneLargest: true, connectivity: 'networks', voidRatio: 1e-6, cgTol: 1e-4, cgMaxiter: 1000, fastFallback: false };   /* v0.19.0 — test the fast path itself, no legacy safety net */
     window.LAB_FAST_ELASTIC = false;
     var t0 = performance.now(); var L = await solveDesignElasticFull(recipes[i].r, N, opt); var tL = performance.now() - t0;
     window.LAB_FAST_ELASTIC = true;
@@ -355,12 +373,90 @@ async function runElasticFastTest(N, extraRecipes) {
     var cmax = 0, dmax = 0;
     for (var k = 0; k < 36; k++) { cmax = Math.max(cmax, Math.abs(L.C_eff[k])); dmax = Math.max(dmax, Math.abs(L.C_eff[k] - Fz.C_eff[k])); }
     var rel = dmax / cmax, ok = rel < 1e-3 && (!!L.converged === !!Fz.converged);
+    /* v0.19.0 — per-voxel fields (normal runs): von Mises and u′ on every axis */
+    var optF = Object.assign({}, opt, { captureFieldsLCs: [0, 1, 2, 3, 4, 5] });
+    window.LAB_FAST_ELASTIC = false;
+    var t3 = performance.now(); var LF = await solveDesignElasticFull(recipes[i].r, N, optF); var tLF = performance.now() - t3;
+    window.LAB_FAST_ELASTIC = true;
+    var t4 = performance.now(); var FF = await solveDesignElasticFull(recipes[i].r, N, optF); var tFF = performance.now() - t4;
+    var fRel = 0, uRel = 0, fMissing = false;
+    ['xx', 'yy', 'zz', 'yz', 'xz', 'xy'].forEach(function (ax) {
+      var a = LF.fieldsByAxis && LF.fieldsByAxis[ax], b = FF.fieldsByAxis && FF.fieldsByAxis[ax];
+      if (!a || !b) { fMissing = true; return; }
+      var m = 0, dm = 0;
+      for (var q = 0; q < a.sigma_vm.length; q++) { m = Math.max(m, Math.abs(a.sigma_vm[q])); dm = Math.max(dm, Math.abs(a.sigma_vm[q] - b.sigma_vm[q])); }
+      fRel = Math.max(fRel, dm / (m || 1));
+      if (!!a.u_prime !== !!b.u_prime) { fMissing = true; return; }
+      if (a.u_prime) for (var c3 = 0; c3 < 3; c3++) {
+        var mu = 0, du = 0, ua = a.u_prime[c3], ub = b.u_prime[c3];
+        for (var q2 = 0; q2 < ua.length; q2++) { mu = Math.max(mu, Math.abs(ua[q2])); du = Math.max(du, Math.abs(ua[q2] - ub[q2])); }
+        uRel = Math.max(uRel, du / (mu || 1));
+      }
+    });
+    var okF = !fMissing && fRel < 1e-2 && uRel < 1e-2 && FF.solverPath === 'fast';
+    ok = ok && okF;
     if (!ok) allOk = false;
     rows.push({ design: recipes[i].name, rel_dC: rel.toExponential(2), iters_legacy: L.iters, iters_fast: Fz.iters, conv: L.converged + '/' + Fz.converged,
-                t_legacy_s: (tL / 1000).toFixed(2), t_fast_s: (tF / 1000).toFixed(2), t_fast_cached_s: (tF2 / 1000).toFixed(2), path: Fz.solverPath, ok: ok });
+                t_legacy_s: (tL / 1000).toFixed(2), t_fast_s: (tF / 1000).toFixed(2), t_fast_cached_s: (tF2 / 1000).toFixed(2), path: Fz.solverPath,
+                fields_dVM: fMissing ? 'missing' : fRel.toExponential(2), fields_du: fMissing ? '-' : uRel.toExponential(2),
+                t_fields_legacy_s: (tLF / 1000).toFixed(2), t_fields_fast_s: (tFF / 1000).toFixed(2), ok: ok });
   }
   delete window.LAB_FAST_ELASTIC;
   console.table(rows);
   console.log('[elastic-fast] ' + (allOk ? 'ALL PASS' : 'FAIL'));
   return { ok: allOk, rows: rows };
+}
+
+/* ════════════════════════════════════════════════════════════
+   runPartialVolumeCheck — v0.19.0 partial-volume voxels on the PI-TPMS
+   paper's matched-feature trio (SWEEP.md §8: A4m PI, C4 sheet, D7 skeletal),
+   same settings as the paper (ν 0.3, void 1e-6, tolerance 1e-5).
+     await runPartialVolumeCheck()            (browser console, ~1–2 min)
+     await runPartialVolumeCheck([32, 64])    (skip 128)
+   For each design and grid: Ex and Ez ÷ E solid with the 0/1 cube and with
+   partial volume, plus the reference — the 0/1 cube extrapolated from the
+   two finest grids (order 1, as SWEEP.md §4: doubling the grid roughly
+   halves the gap).  Pass: at 64 the reference lies between the cube (low)
+   and partial volume (high) — the bracket docs/PARTIAL_VOLUME.md reports.
+   ════════════════════════════════════════════════════════════ */
+async function runPartialVolumeCheck(grids) {
+  grids = grids || [32, 64, 128];
+  if (!WGPU.device) await ensureDevice();
+  var rows = [
+    { run_id: 'A4m', surface: 'gyroid', mode: 'PI-TPMS round', wall_ratio: '0.1364', shift: '(0,1/8,1/2)', grid_N: '64' },
+    { run_id: 'C4', surface: 'gyroid', mode: 'sheet', level_c: '0.6453', grid_N: '64' },
+    { run_id: 'D7', surface: 'gyroid', mode: 'skeletal', level_c: '1.2786', grid_N: '64' }];
+  var out = [], allOk = true;
+  for (var i = 0; i < rows.length; i++) {
+    var rec = sweepRunFromCsvRow(rows[i]).recipe;
+    rec.material = { Es_MPa: 1, nu: 0.3 };
+    var byN = {};
+    for (var g = 0; g < grids.length; g++) {
+      var N = grids[g], o = { captureFieldsLCs: [], pruneLargest: true, connectivity: 'networks', voidRatio: 1e-6, cgTol: 1e-5, cgMaxiter: 3000 };
+      var t0 = performance.now(); var B = await solveDesignElasticFull(rec, N, Object.assign({}, o, { partialVolume: false })); var tB = performance.now() - t0;
+      var t1 = performance.now(); var P = await solveDesignElasticFull(rec, N, Object.assign({}, o, { partialVolume: true })); var tP = performance.now() - t1;
+      byN[N] = { B: B, P: P, tB: tB, tP: tP };
+    }
+    var nf = grids[grids.length - 1], nc = grids[grids.length - 2];
+    var ref = {};
+    ['Ex_MPa', 'Ez_MPa'].forEach(function (k) { ref[k] = 2 * byN[nf].B[k] - byN[nc].B[k]; });
+    grids.forEach(function (N) {
+      var e = byN[N], r = { design: rows[i].run_id, N: N };
+      ['Ex_MPa', 'Ez_MPa'].forEach(function (k) {
+        var a = k.slice(0, 2);
+        r[a + '_cube'] = e.B[k] ? +e.B[k].toPrecision(4) : null;
+        r[a + '_pv'] = e.P[k] ? +e.P[k].toPrecision(4) : null;
+        r[a + '_cube_vs_ref_%'] = e.B[k] ? +((e.B[k] / ref[k] - 1) * 100).toFixed(1) : null;
+        r[a + '_pv_vs_ref_%'] = e.P[k] ? +((e.P[k] / ref[k] - 1) * 100).toFixed(1) : null;
+      });
+      r.rho_cube = +(e.B.rho * 100).toFixed(2); r.rho_pv = +(e.P.rho * 100).toFixed(2);
+      r.partial_voxels_pct = +((e.P.pvVoxelFrac || 0) * 100).toFixed(1);
+      r.t_cube_s = +(e.tB / 1000).toFixed(1); r.t_pv_s = +(e.tP / 1000).toFixed(1); r.t_pv_raster_s = +((e.P.tPv_ms || 0) / 1000).toFixed(2);
+      if (N === 64 && grids.length >= 3 && !(r['Ex_cube_vs_ref_%'] <= 0 && r['Ex_pv_vs_ref_%'] >= 0 && r['Ez_cube_vs_ref_%'] <= 0 && r['Ez_pv_vs_ref_%'] >= 0)) allOk = false;
+      out.push(r);
+    });
+  }
+  console.table(out);
+  console.log('[partial-volume] reference = 0/1 cube extrapolated from N = ' + grids.slice(-2).join(' and ') + (grids.length >= 3 ? (allOk ? ' · PASS (at 64 the cube reads low and partial volume high)' : ' · CHECK: at 64 the reference is not between the cube and partial volume') : ''));
+  return { ok: allOk, rows: out };
 }

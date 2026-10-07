@@ -222,6 +222,149 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
 
 
 /* ============================================================
+   v0.19.0 — partial-volume voxels (stiffness only)
+
+   buildVoxelMargin(family, params, offset, N, mode, wt, nWeights, pipeR, phaseShift)
+     The continuous quantity behind buildVoxels' solid test, as a margin m
+     with solid ⟺ m > 0, sampled at the N³ voxel CORNERS (corner (i,j,k)
+     at −π + (i,j,k)·step; periodic, so corner N is corner 0).  Each mode
+     mirrors buildVoxels' own test — keep the two in sync:
+       solid           offset − V                (every distance family too)
+       shell           wt − |V − offset|         (÷|∇φ|, clipped, when normalized)
+       shell + weights local width from the field gradient direction
+       pi-tpms         pipeR − PI distance       (or − max(|φA|,|φB|) raw)
+       noise / grain   sheet hw − |V − iso| · half ±(V − iso) · solid |V − iso| − hw
+
+   voxelFractionsFromMargin(mg, N, kept, raw, sub)
+     mg = buildVoxelMargin's result.  Solid fraction of every voxel whose
+     corners straddle the surface: the margin is evaluated EXACTLY at a sub³
+     grid of points inside the voxel (default 4³) and the solid points are
+     counted.  (Trilinear interpolation from the corners was tried first and
+     read thin tubes and struts 4–5 % low at N = 32: the margin of a tube is
+     cone-shaped, so interpolating it between corners under-fills the tube.)
+     Voxels whose corners all agree keep their 0/1 value, so
+     features thinner than a voxel are never lost, and the lab's island
+     trim is respected: a voxel the trim removed stays 0, and a void voxel
+     with no kept solid among its 26 neighbours stays 0.
+
+   The elastic solve blends void and solid stiffness by this fraction
+   (Voigt-type mixing — Lucarini et al. 2021 found it the best smoothing
+   for FFT lattice homogenization).  Crush, buckling and connectivity keep
+   the plain 0/1 cube.
+   ============================================================ */
+function buildVoxelMargin(family, params, offset, N, mode, wt, nWeights, pipeR, phaseShift) {
+  var L = Math.PI, step = (2 * L) / N, N3 = N * N * N;
+  var kernel = KERNELS[family || 'tpms'];
+  if (!kernel) throw new Error('buildVoxelMargin: unknown family "' + family + '"');
+  var evalFn = function (x, y, z) { return kernel.evaluate(params, x, y, z); };
+  var shellNorm = !!(params && params.shellNorm), piNorm = !!(params && params.piNorm);
+  var NORM_E = 0.012, NORM_EPS = 0.08, NORM_COSCLAMP = 0.95, NORM_CLIP_MULT = 5, NORM_INV_2E = 1 / (2 * NORM_E);
+  function gradFC(ax, ay, az) {
+    var gx = (evalFn(ax + NORM_E, ay, az) - evalFn(ax - NORM_E, ay, az)) * NORM_INV_2E;
+    var gy = (evalFn(ax, ay + NORM_E, az) - evalFn(ax, ay - NORM_E, az)) * NORM_INV_2E;
+    var gz = (evalFn(ax, ay, az + NORM_E) - evalFn(ax, ay, az - NORM_E)) * NORM_INV_2E;
+    return { gx: gx, gy: gy, gz: gz, mag: Math.sqrt(gx * gx + gy * gy + gz * gz) };
+  }
+  function gradPairB(pair, x, y, z, dx, dy, dz) {
+    var gx = (tpmsPairB(pair, x + NORM_E, y, z, dx, dy, dz) - tpmsPairB(pair, x - NORM_E, y, z, dx, dy, dz)) * NORM_INV_2E;
+    var gy = (tpmsPairB(pair, x, y + NORM_E, z, dx, dy, dz) - tpmsPairB(pair, x, y - NORM_E, z, dx, dy, dz)) * NORM_INV_2E;
+    var gz = (tpmsPairB(pair, x, y, z + NORM_E, dx, dy, dz) - tpmsPairB(pair, x, y, z - NORM_E, dx, dy, dz)) * NORM_INV_2E;
+    return { gx: gx, gy: gy, gz: gz, mag: Math.sqrt(gx * gx + gy * gy + gz * gz) };
+  }
+  function piDistanceN(phiA_, phiB_, grA, grB) {
+    var magA = Math.max(grA.mag, NORM_EPS), magB = Math.max(grB.mag, NORM_EPS);
+    var dA = phiA_ / magA, dB = phiB_ / magB;
+    var cosA = (grA.gx * grB.gx + grA.gy * grB.gy + grA.gz * grB.gz) / (magA * magB);
+    if (cosA > NORM_COSCLAMP) cosA = NORM_COSCLAMP;
+    if (cosA < -NORM_COSCLAMP) cosA = -NORM_COSCLAMP;
+    var sin2 = 1 - cosA * cosA, num = dA * dA - 2 * cosA * dA * dB + dB * dB;
+    return Math.sqrt(Math.max(num, 0) / sin2);
+  }
+  var TWO_PI = 2 * Math.PI, ps = phaseShift || {};
+  var pdx = (ps.x || 0) * TWO_PI, pdy = (ps.y || 0) * TWO_PI, pdz = (ps.z || 0) * TWO_PI;
+  var pr = pipeR || 0.1, off = offset || 0, pair = params && params.pair;
+  var iso = params ? params.isoLevel : 0, hw = params ? params.halfWidth : 0, inv = !!(params && params.halfInvert);
+  function margin(x, y, z) {
+    var v;
+    if (mode === 'pi-tpms') {
+      var vA = evalFn(x, y, z) - off;
+      var vB = pair ? tpmsPairB(pair, x, y, z, pdx, pdy, pdz) : evalFn(x + pdx, y + pdy, z + pdz) - off;
+      if (piNorm) {
+        var grA = gradFC(x, y, z), grB = pair ? gradPairB(pair, x, y, z, pdx, pdy, pdz) : gradFC(x + pdx, y + pdy, z + pdz);
+        var dPi = piDistanceN(vA, vB, grA, grB);
+        if (dPi > NORM_CLIP_MULT * pr) dPi = NORM_CLIP_MULT * pr;
+        return pr - dPi;
+      }
+      return pr - Math.max(Math.abs(vA), Math.abs(vB));
+    }
+    v = evalFn(x, y, z);
+    if (mode === 'shell') {
+      var w = wt;
+      if (nWeights) {
+        var g = gradFC(x, y, z), gl = g.mag || 1;
+        w = wt * (nWeights.wx * Math.abs(g.gx / gl) + nWeights.wy * Math.abs(g.gy / gl) + nWeights.wz * Math.abs(g.gz / gl));
+      }
+      if (shellNorm) {
+        var gs = gradFC(x, y, z), d = Math.abs(v - offset) / Math.max(gs.mag, NORM_EPS);
+        if (d > NORM_CLIP_MULT * w) d = NORM_CLIP_MULT * w;
+        return w - d;
+      }
+      return w - Math.abs(v - offset);
+    }
+    if (mode === 'noise-sheet' || mode === 'grain-sheet') return hw - Math.abs(v - iso);
+    if (mode === 'noise-half' || mode === 'grain-half') return inv ? iso - v : v - iso;
+    if (mode === 'noise-solid' || mode === 'grain-solid') return Math.abs(v - iso) - hw;
+    return offset - v;
+  }
+  var m = new Float32Array(N3);
+  for (var i = 0; i < N; i++) {
+    var x = -L + i * step;
+    for (var j = 0; j < N; j++) {
+      var y = -L + j * step;
+      for (var k = 0; k < N; k++) m[i * N * N + j * N + k] = margin(x, y, -L + k * step);
+    }
+  }
+  return { m: m, fn: margin, step: step, L: L, N: N };
+}
+
+function voxelFractionsFromMargin(mg, N, kept, raw, sub) {
+  sub = sub || 4;
+  var m = mg.m, fn = mg.fn, step = mg.step, L = mg.L;
+  var NN = N * N, N3 = NN * N, out = Float32Array.from(kept);
+  var w = new Float64Array(sub);
+  for (var s0 = 0; s0 < sub; s0++) w[s0] = (s0 + 0.5) / sub * step;
+  var c = new Float64Array(8), inv = 1 / (sub * sub * sub);
+  for (var i = 0; i < N; i++) {
+    var i1 = (i + 1) % N;
+    for (var j = 0; j < N; j++) {
+      var j1 = (j + 1) % N;
+      for (var k = 0; k < N; k++) {
+        var k1 = (k + 1) % N, id = i * NN + j * N + k;
+        c[0] = m[i * NN + j * N + k];   c[1] = m[i * NN + j * N + k1];
+        c[2] = m[i * NN + j1 * N + k];  c[3] = m[i * NN + j1 * N + k1];
+        c[4] = m[i1 * NN + j * N + k];  c[5] = m[i1 * NN + j * N + k1];
+        c[6] = m[i1 * NN + j1 * N + k]; c[7] = m[i1 * NN + j1 * N + k1];
+        var pos = 0;
+        for (var q = 0; q < 8; q++) if (c[q] > 0) pos++;
+        if (pos === 0 || pos === 8) continue;                 /* corners agree: keep 0/1 */
+        if (raw && raw[id] > 0.5 && !(kept[id] > 0.5)) continue; /* removed by the island trim */
+        if (!(kept[id] > 0.5)) {                               /* void voxel: only next to kept solid */
+          var near = false;
+          for (var a = -1; a <= 1 && !near; a++) for (var b = -1; b <= 1 && !near; b++) for (var e = -1; e <= 1 && !near; e++)
+            if (kept[((i + a + N) % N) * NN + ((j + b + N) % N) * N + ((k + e + N) % N)] > 0.5) near = true;
+          if (!near) continue;
+        }
+        var n = 0, x0 = -L + i * step, y0 = -L + j * step, z0 = -L + k * step;
+        for (var u = 0; u < sub; u++) for (var v = 0; v < sub; v++) for (var z = 0; z < sub; z++)
+          if (fn(x0 + w[u], y0 + w[v], z0 + w[z]) > 0) n++;
+        out[id] = n * inv;
+      }
+    }
+  }
+  return out;
+}
+
+/* ============================================================
    buildRawField — produce the raw scalar field (pre-topology)
    for shader-side display. Mirrors buildVoxels' Pass 1 but
    returns the Float32Array of kernel.evaluate values plus

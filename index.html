@@ -43,7 +43,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.18.0</span>
+      <span class="fh-version">v0.19.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -124,6 +124,13 @@
             <option value="networks" selected>All networks · remove islands</option>
             <option value="largest">Largest network only</option>
             <option value="off">Keep everything</option>
+          </select>
+        </div>
+        <div class="spec-pill" id="pvPill" title="How voxels on the surface are treated in the stiffness solve. 0/1 cube (default): every voxel is fully solid or fully void; thin walls and struts read low on coarse grids. Partial volume: each voxel the surface passes through carries its true solid fraction and blends solid and void stiffness; the solid fraction is exact and N = 32 reads about as well as the cube at 64, but stiffness reads a few percent high. The two bracket the converged value. Crush and buckling always use the 0/1 cube.">
+          <span class="key">Surface voxels</span>
+          <select id="pvSel" onchange="onSurfaceVoxelChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;">
+            <option value="binary" selected>0/1 cube</option>
+            <option value="pv">Partial volume (reads high)</option>
           </select>
         </div>
       </div>

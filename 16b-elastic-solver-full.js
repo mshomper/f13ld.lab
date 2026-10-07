@@ -125,26 +125,35 @@ var LOCAL_STRESS_FULL_WGSL = ELASTIC_PARAMS_FULL_WGSL +
 '@group(0) @binding(4) var<storage, read_write> sig_s: array<vec4<f32>>;\n' +
 '@group(0) @binding(5) var<uniform>             P: ElasticParamsFull;\n' +
 '\n' +
+'/* v0.19.0 - partial-volume voxels: solid[i] is the voxel\'s solid fraction.\n' +
+' 0 and 1 pick the void and solid stiffness exactly as before (binary designs\n' +
+' are unchanged bit for bit); between them the stiffness blends linearly\n' +
+' (Voigt-type mixing, Lucarini et al. 2021). */\n' +
+'fn pvC(a: vec3<f32>, b: vec3<f32>, f: f32) -> vec3<f32> {\n' +
+'  if (f >= 1.0) { return b; }\n' +
+'  if (f <= 0.0) { return a; }\n' +
+'  return mix(a, b, f);\n' +
+'}\n' +
 '@compute @workgroup_size(64)\n' +
 'fn local_stress_full(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
 '  let i = gid.x;\n' +
 '  if (i >= P.total) { return; }\n' +
-'  let isSolid = solid[i] > 0.5;\n' +
+'  let fs = solid[i];\n' +
 '  let en = eps_n[i].xyz;\n' +
 '  let es = eps_s[i].xyz;\n' +
 '\n' +
-'  let r0n = select(P.Cv_r0n.xyz, P.Cs_r0n.xyz, isSolid);\n' +
-'  let r0s = select(P.Cv_r0s.xyz, P.Cs_r0s.xyz, isSolid);\n' +
-'  let r1n = select(P.Cv_r1n.xyz, P.Cs_r1n.xyz, isSolid);\n' +
-'  let r1s = select(P.Cv_r1s.xyz, P.Cs_r1s.xyz, isSolid);\n' +
-'  let r2n = select(P.Cv_r2n.xyz, P.Cs_r2n.xyz, isSolid);\n' +
-'  let r2s = select(P.Cv_r2s.xyz, P.Cs_r2s.xyz, isSolid);\n' +
-'  let r3n = select(P.Cv_r3n.xyz, P.Cs_r3n.xyz, isSolid);\n' +
-'  let r3s = select(P.Cv_r3s.xyz, P.Cs_r3s.xyz, isSolid);\n' +
-'  let r4n = select(P.Cv_r4n.xyz, P.Cs_r4n.xyz, isSolid);\n' +
-'  let r4s = select(P.Cv_r4s.xyz, P.Cs_r4s.xyz, isSolid);\n' +
-'  let r5n = select(P.Cv_r5n.xyz, P.Cs_r5n.xyz, isSolid);\n' +
-'  let r5s = select(P.Cv_r5s.xyz, P.Cs_r5s.xyz, isSolid);\n' +
+'  let r0n = pvC(P.Cv_r0n.xyz, P.Cs_r0n.xyz, fs);\n' +
+'  let r0s = pvC(P.Cv_r0s.xyz, P.Cs_r0s.xyz, fs);\n' +
+'  let r1n = pvC(P.Cv_r1n.xyz, P.Cs_r1n.xyz, fs);\n' +
+'  let r1s = pvC(P.Cv_r1s.xyz, P.Cs_r1s.xyz, fs);\n' +
+'  let r2n = pvC(P.Cv_r2n.xyz, P.Cs_r2n.xyz, fs);\n' +
+'  let r2s = pvC(P.Cv_r2s.xyz, P.Cs_r2s.xyz, fs);\n' +
+'  let r3n = pvC(P.Cv_r3n.xyz, P.Cs_r3n.xyz, fs);\n' +
+'  let r3s = pvC(P.Cv_r3s.xyz, P.Cs_r3s.xyz, fs);\n' +
+'  let r4n = pvC(P.Cv_r4n.xyz, P.Cs_r4n.xyz, fs);\n' +
+'  let r4s = pvC(P.Cv_r4s.xyz, P.Cs_r4s.xyz, fs);\n' +
+'  let r5n = pvC(P.Cv_r5n.xyz, P.Cs_r5n.xyz, fs);\n' +
+'  let r5s = pvC(P.Cv_r5s.xyz, P.Cs_r5s.xyz, fs);\n' +
 '\n' +
 '  sig_n[i] = vec4<f32>(\n' +
 '    dot(r0n, en) + dot(r0s, es),\n' +
@@ -1565,6 +1574,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
                           args.nWeights, args.pipeR, args.phaseShift);
   var insideRaw = 0;   /* v0.10.0 sweep — solid fraction before island trim */
   for (var vr = 0; vr < solid.length; vr++) insideRaw += solid[vr];
+  var rawSolid = solid;   /* v0.19.0 — kept for the partial-volume trim test */
   /* Connectivity gate — keep only the largest periodic solid component so
      floating islands don't seed spurious modes (default-on from the run). */
   if (opts.pruneLargest && typeof pruneVoxels === 'function') {
@@ -1612,6 +1622,23 @@ async function solveDesignElasticFull(recipe, N, opts) {
     }
   }
 
+  /* v0.19.0 — partial-volume voxels (opts.partialVolume): every voxel the
+     surface passes through gets its solid fraction (14-rasterizer
+     buildVoxelMargin + voxelFractionsFromMargin, 4³ points per voxel, 3³
+     at N ≥ 128) and the stiffness kernel blends void and solid by it.
+     Connectivity above ran on the 0/1 cube and stays as reported; rho
+     becomes the fraction-weighted solid, rho_binary keeps the 0/1 count. */
+  var rhoBinary = rho, pvFrac = 0, tPv = 0, partialVolume = false;
+  if (opts.partialVolume && typeof buildVoxelMargin === 'function') {
+    var tPv0 = performance.now();
+    var mg = buildVoxelMargin(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+    solid = voxelFractionsFromMargin(mg, N, solid, rawSolid, opts.pvSub || (N >= 128 ? 3 : 4));
+    var insidePv = 0, nPart = 0;
+    for (var vp = 0; vp < solid.length; vp++) { insidePv += solid[vp]; if (solid[vp] > 0 && solid[vp] < 1) nPart++; }
+    rho = insidePv / solid.length; pvFrac = nPart / solid.length; partialVolume = true;
+    tPv = performance.now() - tPv0;
+  }
+
   var mat = recipe.material || { Es_MPa: 110000, nu: 0.34 };
   var Es = mat.Es_MPa, nu = mat.nu;
   /* v0.10.1 sweep — void stiffness as a fraction of the solid (default 1e-4,
@@ -1622,14 +1649,26 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var C_v = isoC(Es * voidRatio, nu);
   var C_0 = isoC(Es, nu);
 
-  /* v0.15.0 — sweeps (no per-voxel fields) take the fast path (16i):
-     GPU-resident CG, packed operator, Γ cached per grid.  Same operator,
-     same CG, same stopping test; window.LAB_FAST_ELASTIC = false → legacy. */
+  /* v0.15.0 — sweeps took the fast path (16i): GPU-resident CG, packed
+     operator, Γ cached per grid.  v0.19.0 — normal runs too: 16i captures
+     the per-voxel fields with 16b's own extractors.  Same operator, same CG,
+     same stopping test; window.LAB_FAST_ELASTIC = false → legacy.  Legacy is
+     still the fallback when the device can't hold the packed Γ (e.g. 128³
+     on a GPU with the default 128 MB binding limit). */
   var hom = null, tGamma = 0, tCG = 0, solverPath = 'legacy';
-  if (captureLCs_solver.length === 0 && typeof elasticFastHomogenize === 'function') {
+  if (typeof elasticFastHomogenize === 'function') {
     var gInfo = {}, tF0 = performance.now();
-    hom = await elasticFastHomogenize(N, solid, C_s, C_v, C_0, opts, gInfo);
+    hom = await elasticFastHomogenize(N, solid, C_s, C_v, C_0, opts, gInfo, captureLCs_solver);
     if (hom) { tGamma = gInfo.tGamma_ms || 0; tCG = performance.now() - tF0 - tGamma; solverPath = 'fast'; }
+    /* v0.19.0 — safety net now that normal runs use the fast path: a load
+       case that stops unconverged there is re-solved on the legacy path
+       (seen on SwiftShader: beamBCC N = 16, load case yy).  opts.fastFallback
+       = false keeps the fast result (e.g. to study it). */
+    if (hom && !hom.allConverged && opts.fastFallback !== false) {
+      console.warn('[elastic] fast path left ' + hom.perLC.filter(function (p) { return !p.converged; }).map(function (p) { return p.axis; }).join(', ') +
+                   ' unconverged at N=' + N + ' — re-solving on the legacy path');
+      hom = null; solverPath = 'legacy (fast unconverged)';
+    }
   }
 
   if (!hom) {
@@ -1712,6 +1751,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
          unloaded axis reads ~0 or slightly negative instead of discarding it */
       Gxy_MPa: Gxy, Gxz_MPa: Gxz, Gyz_MPa: Gyz, nu_xy: nu_xy, nu_xz: nu_xz, nu_yz: nu_yz,
       rho_raw: insideRaw / solid.length, cgTol: opts.cgTol || CG_TOL_FULL, voidRatio: voidRatio,
+      rho_binary: rhoBinary, partialVolume: partialVolume, pvVoxelFrac: pvFrac, tPv_ms: tPv,
       C_eff: Array.from(C_phys), S: Array.from(S_phys), iters: hom.totalIters, solverPath: solverPath
     };
   }
@@ -1764,6 +1804,10 @@ async function solveDesignElasticFull(recipe, N, opts) {
     Gxy_MPa:  Gxy, Gxz_MPa: Gxz, Gyz_MPa: Gyz,
     nu_xy:    nu_xy, nu_xz: nu_xz, nu_yz: nu_yz,
     rho_raw:  insideRaw / solid.length,   /* before island trim */
+    rho_binary: rhoBinary,                /* v0.19.0 — 0/1 voxel count after trim */
+    partialVolume: partialVolume,         /* v0.19.0 — stiffness used voxel solid fractions */
+    pvVoxelFrac: pvFrac,                  /* share of voxels holding a partial fraction */
+    tPv_ms:   tPv,
     cgTol:    opts.cgTol || CG_TOL_FULL,
     voidRatio: voidRatio,
     C_eff:    Array.from(C_phys),
@@ -1961,6 +2005,15 @@ var LOCAL_STRESS_BATCHED_WGSL = ELASTIC_PARAMS_FULL_WGSL + BATCH_SIZE_STRUCT_WGS
 '@group(0) @binding(4) var<storage, read_write> sig_s: array<vec4<f32>>;\n' +
 '@group(0) @binding(5) var<uniform>             P:  ElasticParamsFull;\n' +
 '@group(0) @binding(6) var<uniform>             BS: BatchSize;\n' +
+'/* v0.19.0 - partial-volume voxels: solid[i] is the voxel\'s solid fraction.\n' +
+' 0 and 1 pick the void and solid stiffness exactly as before (binary designs\n' +
+' are unchanged bit for bit); between them the stiffness blends linearly\n' +
+' (Voigt-type mixing, Lucarini et al. 2021). */\n' +
+'fn pvC(a: vec3<f32>, b: vec3<f32>, f: f32) -> vec3<f32> {\n' +
+'  if (f >= 1.0) { return b; }\n' +
+'  if (f <= 0.0) { return a; }\n' +
+'  return mix(a, b, f);\n' +
+'}\n' +
 '@compute @workgroup_size(64)\n' +
 'fn local_stress_batched(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
 '  let voxel = gid.x;\n' +
@@ -1968,21 +2021,21 @@ var LOCAL_STRESS_BATCHED_WGSL = ELASTIC_PARAMS_FULL_WGSL + BATCH_SIZE_STRUCT_WGS
 '  let slot = gid.y;\n' +                          /* combined CG slot 0..6T-1 */
 '  let i = slot * BS.voxels + voxel;\n' +
 '  let design = slot / 6u;\n' +
-'  let isSolid = solid[design * BS.voxels + voxel] > 0.5;\n' +
+'  let fs = solid[design * BS.voxels + voxel];\n' +
 '  let en = eps_n[i].xyz;\n' +
 '  let es = eps_s[i].xyz;\n' +
-'  let r0n = select(P.Cv_r0n.xyz, P.Cs_r0n.xyz, isSolid);\n' +
-'  let r0s = select(P.Cv_r0s.xyz, P.Cs_r0s.xyz, isSolid);\n' +
-'  let r1n = select(P.Cv_r1n.xyz, P.Cs_r1n.xyz, isSolid);\n' +
-'  let r1s = select(P.Cv_r1s.xyz, P.Cs_r1s.xyz, isSolid);\n' +
-'  let r2n = select(P.Cv_r2n.xyz, P.Cs_r2n.xyz, isSolid);\n' +
-'  let r2s = select(P.Cv_r2s.xyz, P.Cs_r2s.xyz, isSolid);\n' +
-'  let r3n = select(P.Cv_r3n.xyz, P.Cs_r3n.xyz, isSolid);\n' +
-'  let r3s = select(P.Cv_r3s.xyz, P.Cs_r3s.xyz, isSolid);\n' +
-'  let r4n = select(P.Cv_r4n.xyz, P.Cs_r4n.xyz, isSolid);\n' +
-'  let r4s = select(P.Cv_r4s.xyz, P.Cs_r4s.xyz, isSolid);\n' +
-'  let r5n = select(P.Cv_r5n.xyz, P.Cs_r5n.xyz, isSolid);\n' +
-'  let r5s = select(P.Cv_r5s.xyz, P.Cs_r5s.xyz, isSolid);\n' +
+'  let r0n = pvC(P.Cv_r0n.xyz, P.Cs_r0n.xyz, fs);\n' +
+'  let r0s = pvC(P.Cv_r0s.xyz, P.Cs_r0s.xyz, fs);\n' +
+'  let r1n = pvC(P.Cv_r1n.xyz, P.Cs_r1n.xyz, fs);\n' +
+'  let r1s = pvC(P.Cv_r1s.xyz, P.Cs_r1s.xyz, fs);\n' +
+'  let r2n = pvC(P.Cv_r2n.xyz, P.Cs_r2n.xyz, fs);\n' +
+'  let r2s = pvC(P.Cv_r2s.xyz, P.Cs_r2s.xyz, fs);\n' +
+'  let r3n = pvC(P.Cv_r3n.xyz, P.Cs_r3n.xyz, fs);\n' +
+'  let r3s = pvC(P.Cv_r3s.xyz, P.Cs_r3s.xyz, fs);\n' +
+'  let r4n = pvC(P.Cv_r4n.xyz, P.Cs_r4n.xyz, fs);\n' +
+'  let r4s = pvC(P.Cv_r4s.xyz, P.Cs_r4s.xyz, fs);\n' +
+'  let r5n = pvC(P.Cv_r5n.xyz, P.Cs_r5n.xyz, fs);\n' +
+'  let r5s = pvC(P.Cv_r5s.xyz, P.Cs_r5s.xyz, fs);\n' +
 '  sig_n[i] = vec4<f32>(dot(r0n,en)+dot(r0s,es), dot(r1n,en)+dot(r1s,es), dot(r2n,en)+dot(r2s,es), 0.0);\n' +
 '  sig_s[i] = vec4<f32>(dot(r3n,en)+dot(r3s,es), dot(r4n,en)+dot(r4s,es), dot(r5n,en)+dot(r5s,es), 0.0);\n' +
 '}\n';

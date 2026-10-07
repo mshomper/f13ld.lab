@@ -88,6 +88,19 @@ Spanning is a connectivity test, not a stiffness guarantee: a mechanism-like top
 
 For parameters where solid is a threshold on a per-voxel quantity (TPMS level, sheet thickness, PI wall ratio, grain/noise level or half-width in the matching mode, imported-cell wall offset), *Step by → solid fraction* takes a range in % and finds the parameter value that gives each fraction **exactly at the chosen grid** (before island trim): the per-voxel quantity is computed once and each value is a quantile of it. Checked: A6 target 19.81 % → wall ratio 0.1897 (matrix 0.19), C3 32.5 % → c 0.5025 (0.5006), D4 20 % → c 0.918 (0.9138), each rebuilding to the target within 0.03 points.
 
+
+### 1.5 Step by thinnest feature (v0.19.0)
+
+For the same threshold-type parameters, *Step by → thinnest feature* takes sizes in **mm** (at the design's cell size; a foam tile is one cell). Each size is found by bisection over the parameter's range at the run grid, using the geometry check's own thinnest-feature measure (§1.3). The measure moves in voxel steps, so each target is met to within a quarter voxel (or 1 %), and the closest value found is kept. The review map's tooltip and each run's purpose line show the size actually reached.
+
+Checked at N = 64, 5 mm cell:
+- **PI-gyroid wall ratio**, targets 0.40 / 0.55 / 0.70 / 0.90 mm → 0.388 / 0.533 / 0.683 / 0.880 mm (all within 0.25 voxel).
+- **Sheet gyroid thickness**, 0.4 / 0.6 / 0.8 → 0.422 / 0.580 / 0.772 mm.
+- **Skeletal offset**, 0.5 / 0.7 / 1.0 → 0.508 / 0.683 / 1.002 mm.
+
+About 0.7–4 s per base design in the background worker.
+
+**CSV (v0.19.0):** `thinnest_feature_T` and `median_feature_T` (fraction of the cell edge), `thinnest_feature_mm`, `median_feature_mm` and `cell_mm`, next to the existing `_vox` columns. With **Surface voxels = partial volume** (run settings): `partial_volume = yes` and `vf_partial_pct`, the fraction-weighted solid. `vf_measured_pct` stays the 0/1 voxel count after the trim. See `PARTIAL_VOLUME.md`.
 ## 2. Settings
 
 - **Precision:** *Standard* — CG tolerance 1e-4, up to 1,000 iterations per load case (300 before v0.16.0; the export's `cg_maxiter` column records which). *High* — 1e-5, up to 1,000 iterations. A6 at N = 64 on the CPU reference took ~60 iterations per load case at 1e-5.
