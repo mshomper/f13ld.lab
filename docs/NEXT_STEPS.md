@@ -1,6 +1,8 @@
 # F13LD.lab — Next Steps (session handoff)
 
 
+> **2026-10-07 · v0.19.2** — crush: two side-stress cutbacks on a normal-tolerance crush trigger the tight restart immediately (`NL_TIGHT_AFTER_CUTBACKS = 2` in 16g); verified on Matt's compliant design in v0.19.1 that the tight run finishes clean (13 steps to 5.94 %, 23 s, no cutbacks).
+>
 > **2026-10-07 · v0.19.1** — crush: a field-solve divergence before yield is retried once at the tight step tolerance (reusing the elastic setup), and if it still diverges the accepted steps are kept as a partial curve (`truncReason: 'diverged'`, no yield) instead of an error that dropped the design from the plot (Matt's compliant design, N = 64, Z, diverged at ε 3.83 %).
 >
 > **2026-10-07 · v0.19.0** — normal runs (with fields) on the fast elastic path; thinnest feature in cell units and mm in the sweep CSV; sweep builder steps by thinnest feature (mm); partial-volume voxels, on by default — grid-converged by N = 64 on the GPU check ([`PARTIAL_VOLUME.md`](PARTIAL_VOLUME.md)); fast-path Γ rebind fix. Scopes for the next physics: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md), [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md).

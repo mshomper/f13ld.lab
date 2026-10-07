@@ -709,7 +709,7 @@ async function runRealSweep(N, runToken){
           nlOut = await runCrush(nlTight, axKey, axStore, nlVoid, onNlStep);
           if (nlOut && nlOut.retryTight && !stale()){
             axStore._tight = nlTight = true;
-            console.log('[run] ' + dn.id + ' ' + axKey + ': side-stress floor ' + (nlOut.lateralFloor * 100).toFixed(1) + '% — re-running the crush at the tighter step tolerance (newtonTol ' + NL_TIGHT_NEWTON_TOL + '), reusing the elastic setup');
+            console.log('[run] ' + dn.id + ' ' + axKey + ': ' + (nlOut.retryReason === 'cutbacks' ? nlOut.lateralCutbacks + ' side-stress cutbacks' : 'side-stress floor ' + (nlOut.lateralFloor * 100).toFixed(1) + '%') + ' — re-running the crush at the tighter step tolerance (newtonTol ' + NL_TIGHT_NEWTON_TOL + '), reusing the elastic setup');
             paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · ' + axLbl + ' · tighter solve…');
             nlOut = await runCrush(true, axKey, axStore, nlVoid, onNlStep);
           }

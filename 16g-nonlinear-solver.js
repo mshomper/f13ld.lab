@@ -504,6 +504,12 @@ var NL_CG_MAX        = 1000;
    85.5 s for a 1e-5 setup), so the retry reuses the first attempt's setup.
    NL_TIGHT_CG_TOL = null keeps cgTol (and so the elastic setup) unchanged. */
 var NL_TIGHT_NEWTON_TOL = 1e-5;
+/* v0.19.2 — on a normal-tolerance crush (opts.tightOnFloor), this many side-
+   stress cutbacks mean the design is at the f32 precision floor: restart at
+   NL_TIGHT_* right away instead of grinding on until the field solve diverges
+   (compliant design, 2026-10-07: cutbacks at steps 3 and 7, diverged at step
+   10 after ~25 s; the tight run then finished clean in 23 s). */
+var NL_TIGHT_AFTER_CUTBACKS = 2;
 var NL_TIGHT_CG_TOL     = null;
 
 function NonlinearSolverFull(N, fftPlan) {
@@ -1055,6 +1061,10 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
       if (latBad) {
         lateralCutbacks++; latCuts++;
         console.warn('[crush] lateral stress ' + (latRel * 100).toFixed(1) + '% of axial after ' + macroMax + ' corrections (> ' + (latLimit * 100).toFixed(1) + '%) @ eps=' + (trial * 100).toFixed(2) + '% — cutting the step back once');
+        if (opts.tightOnFloor && lateralCutbacks >= NL_TIGHT_AFTER_CUTBACKS) {
+          console.warn('[crush] ' + lateralCutbacks + ' side-stress cutbacks by eps=' + (eAxis * 100).toFixed(2) + '% — restarting at the tighter tolerance');
+          return { retryTight: true, retryReason: 'cutbacks', lateralCutbacks: lateralCutbacks, lateralFloor: latFloor, axis: axis };
+        }
       }
       var encR = d.createCommandEncoder();
       es._copyPair(encR, { n: this.snap_n, s: this.snap_s }, es.eps);
