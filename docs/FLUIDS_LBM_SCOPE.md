@@ -351,6 +351,7 @@ Version targets: flow Phase 1 as **v0.20.0**.
 - **The WSS window is selectable and defaults from the material chosen** (§3.7).
 - **No fixed reference flow.** Results are grounded in what users care about: each design's best flow, in-window surface there, how forgiving it is, and whether a lab can run it (§3.7).
 - **Solve time accepted:** about 10–20 s per design at 64, one to a few minutes at 128.
+- **Heat exchangers added as a second purpose** (Matt, 2026-10-07, after a request from a user building a lattice heat-exchanger database for surrogate models). Two phases follow version 1: inertial pressure drop, then convective heat transfer (§11). Order: thermal Phase 3 with the new geometry columns (`THERMAL_SCOPE.md` §3.9) → fluids version 1 (this scope) → §11.2 → §11.3.
 
 ## 7. Open questions for Matt
 
@@ -373,8 +374,7 @@ Version targets: flow Phase 1 as **v0.20.0**.
 ## 9. Later (not in this pass)
 
 - **Oxygen and nutrient transport:** an advection–diffusion lattice (D3Q7, TRT) driven by the converged velocity field, one-way coupled, with uptake on cell-covered walls. Flow through scaffold pores is advection-dominated (pore Péclet number in the hundreds at 1 mm/s), so it needs care with resolution.
-- **Conjugate heat transfer:** the same advection–diffusion lattice carrying heat through fluid and solid, linking this module to `THERMAL_SCOPE.md`. Relevant to TPMS heat exchangers.
-- **Inertial runs** at the true Reynolds number, for Re above 1, where superposition no longer holds.
+- ~~Conjugate heat transfer~~ and ~~inertial runs~~ — now planned phases, §11 (Matt, 2026-10-07).
 - **Whole construct in a chamber:** pressure inlet and outlet, entrance effects, wall channelling. This needs a multi-cell domain and connects to the multi-cell work for buckling and crush.
 - **Streamlines and particle paths** in the viewer.
 
@@ -422,3 +422,74 @@ Version targets: flow Phase 1 as **v0.20.0**.
 - the exact Zick–Homsy / Sangani–Acrivos table values for F6 and F7;
 - Ginzburg's CLI coefficients, if the linear interpolation option is added alongside Bouzidi;
 - the adapter's actual storage-binding limit on Matt's machine (reported by the Phase 0 benchmark page).
+
+---
+
+## 11. Heat-exchanger extension (planned, Matt 2026-10-07)
+
+### 11.1 Why
+
+A user building a database of lattice responses for heat exchangers, to train reduced-order and surrogate models, asked for pressure drop, permeability, thermal conductivity and heat-transfer performance. Version 1 covers permeability, and pressure drop only in the viscous limit. Heat exchangers run at Reynolds numbers of roughly 10–500, where inertia carries most of the pressure drop, and their key number is the heat-transfer coefficient between fluid and solid. The LBM core of §3 serves both. These two phases add the heat-exchanger regime and outputs. Every result also goes to the sweep CSV, because surrogate training is built from it.
+
+### 11.2 Phase HX-1: inertial pressure drop
+
+- **Runs:** each principal axis at a list of Reynolds numbers (default 1, 10, 50, 100, 200; editable), at the true Reynolds number. Superposition (§1) no longer holds, so every point is its own solve.
+- **Driving:** the body force is adjusted during the run (a simple controller on the mean velocity) until the superficial velocity hits the target Reynolds number.
+- **Reynolds number:** defined on the hydraulic diameter, d_h = 4ε / a (porosity ε, surface area density a), with the interstitial velocity U/ε. The card also reports it on the cell size, since papers use both.
+- **Lattice limits:**
+  - Mach number: lattice velocity ≤ 0.1.
+  - Relaxation time no closer to ½ than the TRT stability margin.
+  - At N = 64 that likely caps the Reynolds number near 100. Higher points need N = 128, and the run warns.
+- **Unsteady flow.** Above some Reynolds number the steady solution stops existing (wake shedding behind struts). When the residual stops falling, the run averages over a time window and flags "unsteady: time-averaged".
+- **Outputs per axis:**
+  - mean pressure gradient against superficial velocity;
+  - a Darcy–Forchheimer fit −dp/dx = μU/K + βρU², with K from the version 1 run, giving the Forchheimer coefficient β (1/m) and the dimensionless F = β√K;
+  - Fanning friction factor f(Re) on the hydraulic diameter;
+  - the Reynolds number where inertia reaches 10 % of the pressure drop.
+- **Fluids** (presets, editable):
+  - air at 25 and 80 °C;
+  - water at 25 and 60 °C;
+  - 50/50 ethylene glycol–water;
+  - a light oil;
+  - custom.
+
+  Each preset carries ρ, μ, k and c_p.
+
+### 11.3 Phase HX-2: convective heat transfer
+
+- **Method:** an advection–diffusion lattice (D3Q7, TRT), one-way coupled to the converged velocity field of each HX-1 point.
+- **Periodic thermal condition:** the temperature is a part that rises linearly along the flow plus a periodic correction, as the thermal module splits a uniform ramp from a periodic correction. This is the fully developed periodic-cell formulation. The exact variant, uniform wall flux or uniform wall temperature (the latter needs an exponential-decay scaling), is to be confirmed against the sources in §11.6 before coding.
+- **Step 1, walls at uniform temperature** (no conduction in the metal). Gives the interstitial Nusselt number.
+- **Step 2, conjugate.** Heat also conducts through the solid, using the thermal module's wall voxels (`14e` `buildVoxelTensors`) and solid conductivity. Metal conduction matters at heat-exchanger scales; the thermal module already measures how much.
+- **Outputs per axis and Reynolds point:**
+  - interstitial heat-transfer coefficient h_sf (W/m²·K) and its Nusselt number on d_h. This is the input that two-equation porous-media models and surrogate models take;
+  - volumetric coefficient h_v = h_sf · a (W/m³·K);
+  - Colburn j = Nu / (Re · Pr^⅓);
+  - the area-goodness ratio j/f;
+  - the Prandtl number used.
+- **Viewer:** the fluid temperature on the section plane (the thermal map's section plane carries over), and the wall heat flux on the strut surface, as the WSS map draws wall traction.
+
+### 11.4 New sweep columns (per axis, per Reynolds point where it applies)
+
+`porosity`, `surface_area_density_m2m3`, `hydraulic_diameter_mm`, `open_x/y/z` (fluid percolates), `K_xx/yy/zz_m2`, `forchheimer_beta_1m`, `forchheimer_F`, `Re`, `dpdx_Pa_m`, `fanning_f`, `Nu_sf`, `h_sf_WmK`, `h_v_Wm3K`, `colburn_j`, `j_over_f`, `fluid`, `Pr`, plus convergence and "unsteady" flags. Also a long-format CSV, one row per design × axis × Reynolds number, since surrogate pipelines usually want that shape.
+
+### 11.5 Limits
+
+- Periodic unit cell: the fully developed interior of a core. No entrance region, no headers, no maldistribution.
+- Laminar and early-transitional flow only, with no turbulence model. The upper Reynolds limit is set by the grid and flagged.
+- Constant fluid properties: no temperature-dependent viscosity, no buoyancy.
+- Single-phase flow.
+
+### 11.6 Validation targets (to confirm before use)
+
+- Hydraulic diameter, surface area and porosity against analytic values for simple cubic and BCC beams and for Schwarz P.
+- Darcy–Forchheimer on simple sphere and cylinder arrays against published periodic-cell data.
+- Interstitial heat transfer: the periodic-cell study of Kuwahara, Shirota & Nakayama (2001, *Int. J. Heat Mass Transfer*) on square-rod arrays.
+- TPMS heat exchangers: published CFD and experiment comparing gyroid, Schwarz P and diamond pressure drop and Nusselt number at matched porosity.
+- Metal foams: published forced-convection and pressure-drop correlations.
+
+The specific papers and their numbers are to be confirmed before they are used as pass/fail tests, as Castro et al. 2019 is for permeability (§4).
+
+### 11.7 Open questions for Matt
+
+Listed in the session handoff; the user's answers on fluids and operating ranges set the default presets and Reynolds list.

@@ -230,6 +230,13 @@ The shared shading block (`20c-f13-shade.js`) stays byte-identical. Field colour
 - **New CSV columns, one set per filler** (suffix `_air`, `_water`, `_tissue`): `kx_WmK`, `ky_WmK`, `kz_WmK`, `k_rel` (κ / κ_s, directional mean), `k_eff_hs` (efficiency), plus `k_iters` and `k_converged`.
 - **Run settings:** a "Physics: stiffness / stiffness + thermal" choice.
 - Atlas metrics follow the existing `ATLAS_S3_METRICS` pattern.
+- **Geometry columns for heat-exchanger and surrogate use** (Matt, 2026-10-07; no solver needed), built in Phase 3 alongside the thermal columns:
+  - `porosity` (1 − solid fraction, composite voxels);
+  - `surface_area_density_m2m3`: the area of the continuous surface (marching cubes on the margin grid) ÷ cell volume;
+  - `hydraulic_diameter_mm` = 4 · porosity ÷ surface area density;
+  - `open_x/y/z`: the pore space runs through the cell along each axis (connectivity on the void).
+
+  See `FLUIDS_LBM_SCOPE.md` §11 for the heat-exchanger phases these feed.
 
 ### 3.10 Code touch points
 
@@ -295,7 +302,7 @@ Version targets: Phase 0 shipped as v0.19.3 (CPU reference only, nothing user-vi
 
 ## 7. Open questions for Matt
 
-- Should the temperature map default to one cell with ΔT across it, or would you rather set a physical gradient, such as degrees per millimetre?
+- ~~Temperature map: ΔT per cell or a physical gradient?~~ ΔT across one cell (Matt, 2026-10-07; §13.1).
 - Are the as-built conductivity presets worth adding next to the wrought values for every AM material, or only where the gap is large?
 
 ---

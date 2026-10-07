@@ -66,8 +66,9 @@
    - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
    - sweep builder → "by thinnest feature", and the new CSV columns.
 2. **Thermal Phase 1 — done and merged (v0.20.0).** Matt's RTX checks all PASS ([`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4). **GPU checks and timing are Matt's; sessions don't run them headless** (Matt, 2026-10-07: SwiftShader is far too slow to be worth it).
-3. **Thermal Phase 2 — built (v0.21.0, branch `thermal-phase2`)**; Matt click-tests (§13.3), then merge. Next: **Phase 3** — materials (fill k_s gaps, add c_p for diffusivity, as-built notes) and sweep columns / Atlas metrics (§3.8–3.9).
-4. **Dev cycle** — §1a.
+3. **Thermal Phase 2 — built (v0.21.0, branch `thermal-phase2`)**; Matt click-tests (§13.3), then merge. Next: **Phase 3** — materials (fill k_s gaps, add c_p for diffusivity, as-built notes; AlSi10Mg and CuCrZr as-built and treated matter for heat exchangers) and sweep columns / Atlas metrics, **plus the geometry columns** (porosity, surface area density, hydraulic diameter, open axes) (§3.8–3.9).
+4. **Then fluids version 1** ([`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md)), **then the heat-exchanger phases** HX-1 inertial pressure drop and HX-2 convective heat transfer (§11; Matt, 2026-10-07, after a user request for a lattice heat-exchanger database).
+5. **Dev cycle** — §1a.
 
 **Done 2026-10-07 (Matt):** v0.17.x crush changes verified on the RTX machine — foam and PI-TPMS unblocked; some sparse foams still make several cutbacks, manageable. The Plotly stress–strain plot is good. **PI-TPMS paper finished** (other session) — removed from this list.
 **Moved down (Matt, 2026-10-07):** foam calibration re-run on the exact field and the refit (old §1 items 2–3) — the foam tool carries estimates and that is fine for now; kept in §2 Queued.
