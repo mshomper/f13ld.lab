@@ -1,6 +1,6 @@
 # F13LD.lab — Fluids: Lattice Boltzmann Wall Shear Stress and Permeability (Scope)
 
-**Status:** Proposal for Matt's review. No code written yet.
+**Status:** Approved for planning (Matt, 2026-10-07; decisions in §6). No code written yet.
 **Written against:** v0.18.0 (main `18ddbae`), 2026-10-07
 **Goal:** Tell a designer whether a lattice will give cells the right mechanical cue under perfusion. The module computes the wall shear stress (WSS) on every strut surface, how much of the surface falls inside an osteogenic target window, and the permeability tensor. It works for any lattice the lab can build, built from scratch inside F13LD.lab on a lattice Boltzmann (LBM) solver running on the GPU.
 **Out of scope (this pass):**
@@ -69,11 +69,11 @@ Most scaffold CFD studies mesh one geometry, run one flow rate in one direction,
    - Permeability κx, κy, κz in m², plus k / L² (dimensionless, independent of cell size)
    - Porosity and specific surface (mm² of wall per mm³)
    - Hydraulic tortuosity
-   - **WSS at the reference flow:** area-weighted median and 95th percentile, in mPa
-   - **% of surface in the target window**
-   - % stagnant (below the stimulation floor) and % above the detachment limit
-   - **Best flow rate**, the one that maximizes in-window surface
-   - Flags: "no open path along Z", "grid too coarse for WSS" (§3.8), "Re > 1: inertia not modelled", "force balance off by X %"
+   - **Best flow:** the flow rate that puts the most surface inside the target window, in mm/s and in mL/min for the chosen chamber
+   - **% of surface in the window at that best flow:** the headline biocompatibility number
+   - **Usable flow range:** the span of flow rates over which in-window surface stays at least half of its best. A wide range means the design forgives an imprecise pump
+   - At the best flow: area-weighted median and 95th-percentile WSS in mPa, % stagnant (below the stimulation floor) and % above the detachment limit
+   - Flags: "no open path along Z", "grid too coarse for WSS" (§3.8), "best flow outside the usual bioreactor range" (§3.7), "Re > 1: inertia not modelled", "force balance off by X %"
 3. **Flow view tab:**
    - **WSS on the surface**, in one of two styles:
      - *Window mode* (default): three colour bands, below / inside / above the target window, so in-window surface reads at a glance.
@@ -84,8 +84,8 @@ Most scaffold CFD studies mesh one geometry, run one flow rate in one direction,
    - **WSS histogram** on log bins with the window shaded, plus **in-window % vs flow rate**, a curve with the optimum marked.
    - **Orientation map:** a sphere coloured by in-window % for each flow direction at the current flow rate, drawn like the stiffness surface. It shows which way to mount the part.
    - **Directional permeability surface** K(n) from the 3×3 tensor (`22-stiffness-viz.js` pattern).
-4. **Run settings:** fluid (culture medium, water at 37 °C, or custom viscosity and density), target window preset (§3.7), flow defaults, and quality (grid, tolerance).
-5. **Sweep:** permeability and WSS columns at a stated reference flow, and Atlas metrics.
+4. **Run settings:** fluid (culture medium, water at 37 °C, or custom viscosity and density), target window (defaults from the design's material, §3.7, always editable), chamber diameter for mL/min, and quality (grid, tolerance).
+5. **Sweep:** permeability, best flow, in-window % at best flow and the usable flow range per run, plus Atlas metrics.
 
 ---
 
@@ -198,17 +198,40 @@ Viscosity only scales WSS. Permeability does not depend on it.
 - perfusion bioreactor: flow rate in mL/min plus chamber diameter in mm;
 - or superficial velocity directly in mm/s.
 
-The reference flow for cards and sweeps is to be confirmed (§7). Zhao et al. (2018) found mineralization-optimal flow rates of 0.5–5 mL/min (0.17–1.7 mm/s superficial) for their chamber, depending on pore shape and size.
+**No arbitrary reference flow: results are reported at each design's own best flow.** What a designer wants to know is:
+1. how much surface this lattice can put in the osteogenic window;
+2. at what flow;
+3. how forgiving it is if the pump is off;
+4. whether that flow is one a lab can actually run.
 
-**Target-window presets** (user-editable):
+All four come free from the live-rescaling trick (§3.6, step 5). The card reports the best flow, in-window % at it, and the usable range (in-window ≥ ½ of its best). Sweeps record the same, so designs compare on what each can achieve, not on one flow that suits some of them.
+
+**Practical operating range.** Perfusion studies typically run at superficial velocities of about 0.1–1 mm/s (Pires et al. 2022 used 0.1 and 1 mm/s). Zhao et al. (2018) found mineralization-optimal flows of 0.5–5 mL/min, or 0.17–1.7 mm/s, depending on pore shape and size. When a design's best flow falls outside roughly 0.05–2 mm/s, the card flags it as hard to reach in a standard bioreactor.
+
+**Chamber diameter** only converts mm/s to mL/min for display: Q = U·A. It defaults to 10 mm and is editable.
+
+**Target window, chosen by material.** The window defaults from the design's material family (the `family` field in `15c-materials.js`). It is always editable, and every preset is selectable for any material.
+
+| Material family | Default window | Basis |
+|---|---|---|
+| Titanium, cobalt-chrome, stainless steel, refractory (Ta, Nb), shape memory (NiTi) | **10–30 mPa** | Mineralizing shear measured on titanium fibre mesh, compiled in Zhao et al. 2018. The closest evidence for metal scaffolds |
+| Polymer (PA12, PEEK, PEKK) | **0.1–10 mPa** | The window most scaffold CFD studies use (Pires et al. 2022, citing Zhao et al. 2015 and Ali et al. 2019) |
+| Ceramic (none in the library yet) | **5–15 mPa** | β-TCP, Zhao et al. 2018. Ready for when ceramics are added |
+| Aluminium, copper, nickel superalloys | **0.1–10 mPa**, with a "not an implant material" note | No implant evidence; the general window is used |
+
+**Selectable presets:**
 
 | Preset | Window | Source |
 |---|---|---|
-| Scaffold CFD convention | 0.1–10 mPa | Pires et al. 2022, citing Zhao et al. 2015 and Ali et al. 2019 |
+
+| Preset | Window | Source |
+|---|---|---|
+| General scaffold CFD | 0.1–10 mPa | Pires et al. 2022, citing Zhao et al. 2015 and Ali et al. 2019 |
 | Titanium fibre mesh | 10–30 mPa | Compiled in Zhao et al. 2018 |
 | Ceramic (β-TCP) | 5–15 mPa | Zhao et al. 2018 |
 | Silk fibroin | 1.47–24 mPa | Zhao et al. 2018 |
-| Floor / ceiling | below 0.11 mPa: insufficient stimulus; above 60 mPa: cell death or detachment | Zhao et al. 2018 |
+| Custom | user values | — |
+| Floor and ceiling (always on) | below 0.11 mPa: insufficient stimulus; above 60 mPa: cell death or detachment | Zhao et al. 2018 |
 
 **Reynolds check.** Re = ρ U d / μ, with d the mean pore size.
 - Above about 0.5 the card warns that inertia starts to matter and the linear rescaling becomes approximate. At 1 mm/s and 500 µm pores, Re ≈ 0.5.
@@ -269,12 +292,12 @@ Permeability needs about **8–10 cells across the narrowest throats**. WSS with
 | `19f-flow-cpu-ref.js` (new) | Float64 D3Q19 TRT reference with identical boundary rules, for N ≤ 32 |
 | `19g-flow-lbm.js` (new) | GPU solver: kernels, force calibration, convergence, mass correction, coarse-to-fine start, stress and speed extraction |
 | `19h-flow-wss.js` (new) | Wall probes, extrapolation, unit tractions, live rescaling, statistics, orientation scan |
-| `15c-materials.js` | Fluid presets (μ, ρ at 37 °C) beside the existing `muFluid_PaS` field |
+| `15c-materials.js` | Fluid presets (μ, ρ at 37 °C) beside the existing `muFluid_PaS` field; family → default WSS window map |
 | `50-controls.js` | `PHYS_STATE.flow`, run phase after thermal, flow settings, timing calibration |
 | `40-design-grid.js` | Card rows and flags, Flow view tab, live controls, histogram and flow-rate curve |
 | `21-raymarcher.js` | Window-band colour mode, WSS shell texture, section-plane speed view (plane from thermal) |
 | `22-stiffness-viz.js` | K(n) surface and the orientation-map sphere |
-| `62-sweep.js`, `63-sweep-atlas.js` | Permeability and WSS columns at the reference flow |
+| `62-sweep.js`, `63-sweep-atlas.js` | Permeability, best flow, in-window % at best flow, usable flow range, window used |
 | `index.html` | Flow toggle and view tab |
 | `18-stokes-cpu-ref.js`, `19-stokes-solver.js` | **Retired** after validation. The CPU FFT helpers the buckling worker loads from 18 (`fft3dCpu`) move to a small `12b-fft-cpu.js` first, and `BUCKLE_WORKER_FILES` is updated |
 
@@ -325,13 +348,13 @@ Version targets: flow Phase 1 as **v0.20.0**.
 - **Fluids lives inside F13LD.lab.** The lab is the one-stop shop for lattice computation.
 - **Start from scratch** rather than building on the existing Stokes solver, whose accuracy is uncertain.
 - Crush to densification is parked until after thermal and fluids.
+- **The WSS window is selectable and defaults from the material chosen** (§3.7).
+- **No fixed reference flow.** Results are grounded in what users care about: each design's best flow, in-window surface there, how forgiving it is, and whether a lab can run it (§3.7).
+- **Solve time accepted:** about 10–20 s per design at 64, one to a few minutes at 128.
 
 ## 7. Open questions for Matt
 
-- Which WSS window should be the default? This scope assumes the common scaffold CFD window of 0.1 to 10 millipascals, with titanium mesh, ceramic and silk as presets.
-- What reference flow should cards and sweeps report at? For example, 1 mL/min in a 10 mm chamber, or a superficial velocity such as 0.5 mm/s.
 - Should the default fluid be culture medium with 10 % serum, or water at body temperature?
-- Is one to a few minutes per design acceptable for the 128-cell reference grid, with 64 as the everyday grid?
 - Once the new solver validates, can the old Stokes files be deleted outright, or should they move to the proto folder?
 - Should nutrient and oxygen transport be planned as the next flow feature after this?
 

@@ -1,6 +1,6 @@
 # F13LD.lab — Thermal Conductivity and 3-D Temperature Map (Scope)
 
-**Status:** Proposal for Matt's review. No code written yet.
+**Status:** Approved for planning (Matt, 2026-10-07; decisions in §6). No code written yet.
 **Written against:** v0.18.0 (main `18ddbae`), 2026-10-07
 **Goal:** Fill the existing "Thermal κ" stubs with a working solver: the effective conductivity tensor of any lattice the lab can build (native recipes, foams, imported STL cells), a 3-D temperature map on the cell, and a heat-flux "hot spot" map. It should run in seconds, in the same Run All flow as stiffness.
 **Out of scope (this pass):**
@@ -51,7 +51,7 @@ The physics is the scalar cousin of the stiffness solve: **one unknown per voxel
 2. **The card's thermal rows fill in:**
    - κx, κy and κz in W/m·K;
    - **κ / κ_solid**, the fraction of the parent metal's conductivity, in %;
-   - **thermal efficiency**: κ as a percentage of the most any structure at this density can conduct (the Hashin–Shtrikman upper bound, §3.5). A sheet TPMS near 100 % is close to ideal; a strut lattice sits much lower;
+   - **thermal efficiency**: κ as a percentage of the most any structure of this density and filler can conduct (the Hashin–Shtrikman upper bound, §3.5). A sheet TPMS near 100 % is close to ideal; a strut lattice sits much lower;
    - anisotropy, κmax / κmin;
    - effective diffusivity in mm²/s.
 3. **Thermal view tab: the 3-D temperature map.** The cell is coloured by temperature with a hot face and a cold face on the chosen axis, as if ΔT (default 10 K, editable) were applied across one cell. Isotherms bend where the solid is thin or tortuous. Controls:
@@ -63,7 +63,7 @@ The physics is the scalar cousin of the stiffness solve: **one unknown per voxel
    - **Section plane:** cut the cell to see inside the struts. This is new to the lab's viewer, and the fluids module will reuse it (§3.7).
    - A colour bar labelled in real units: °C (relative to the cold face) or W/m².
 4. **Directional conductivity surface:** κ(n) drawn like the existing stiffness surface (`22-stiffness-viz.js`), from the 3×3 tensor.
-5. **Filler phase selector** in the run settings. It sets what fills the pores (§3.4): *vacuum* (solid conduction only, the default), air, water / tissue, bone cement, or powder.
+5. **Pore fillers: air, water and tissue, all solved in one run** (§3.4). Each filler is a separate, cheap solve, so all three are computed by default; the run settings let you untick any. The card and the temperature map have a filler switch, so the three environments compare side by side without re-running. There is no vacuum option, since no real part sits in one.
 6. **Sweep:** κ columns in the CSV, and κ / κ_solid and efficiency available as Atlas metrics.
 
 ---
@@ -104,11 +104,10 @@ This is the scalar case of Willot's forward-difference ("resistor network") Gree
   Each iteration costs **one stencil apply (no FFT) plus one forward and one inverse FFT**. The elastic fast path needs a batch-3 FFT pair per iteration; thermal needs a single real field.
 - **Two load cases per FFT.** Real fields pack two to a complex slot, as `16i-elastic-fast.js` already does. X and Y share one solve, and Z runs alone (or rides with the next design's X).
 - **Iterations scale with √(contrast).** With CG, counts grow with the square root of the solid-to-filler conductivity ratio (Zeman et al. 2010). Expected:
-  - vacuum filler with a 1e-4 floor: a few hundred iterations;
-  - Ti-6Al-4V in air (≈ 260:1): tens of iterations;
-  - water: about 10.
+  - Ti-6Al-4V in air (≈ 250:1): a few tens of iterations;
+  - Ti-6Al-4V in water or tissue (≈ 10–15:1): about 10.
 
-  §5 Phase 0 measures this before anything is promised.
+  Copper and aluminium alloys in air reach contrasts of several thousand, so expect a few hundred iterations there. Physical fillers keep the contrast far below the stiffness solve's million-to-one void, which is why three fillers per design still cost only seconds. §5 Phase 0 measures this before anything is promised.
 - **Everything GPU-resident**, following 16i:
   - CG scalars stay on the GPU, with periodic readbacks;
   - tolerance presets are shared with stiffness (Standard 1e-4, High 1e-5);
@@ -150,20 +149,22 @@ A 10 % gyroid sheet is only about 2 voxels thick at N = 64. Treated as staircase
 
 ### 3.4 The filler phase (what fills the pores)
 
-| Filler | k (W/m·K) | Ti-6Al-4V : filler | Use |
-|---|---|---|---|
-| **Vacuum (default)** | 0 → floor 1e-4·k_s | — | Solid-conduction property of the lattice itself |
-| Air | 0.026 | ≈ 260 | Lattice in a heat exchanger / heat sink, bench tests |
-| Water / soft tissue | 0.6 | ≈ 11 | Implant in vivo |
-| PMMA bone cement | ≈ 0.2 (to confirm) | ≈ 35 | Cement-filled cages and augmented screws (exotherm spreading) |
-| Metal powder | ≈ 0.1–0.2 | ≈ 35–50 | Lattice inside the powder bed during the build (Bartsch et al. 2022 measured 0.13 for Ti-6Al-4V powder) |
-| Custom | user value | — | — |
+| Filler (all on by default) | k (W/m·K) | ρ (kg/m³) | c_p (J/kg·K) | Ti-6Al-4V : filler | Use |
+|---|---|---|---|---|---|
+| Air (37 °C) | 0.027 | 1.14 | 1007 | ≈ 250 | Bench tests, heat exchangers and heat sinks, a part before implantation |
+| Water (37 °C) | 0.63 | 993 | 4178 | ≈ 11 | Saline or culture medium in the pores, wet testing |
+| Soft tissue | ≈ 0.5 (to confirm) | ≈ 1050 | ≈ 3600 | ≈ 13 | Implant in the body, pores filled with ingrown tissue or marrow |
+| Custom (in settings) | user value | user | user | — | Anything else |
 
-**The vacuum floor follows the stiffness void rule.** The floor is 1e-4·k_s. When κ comes out within about 50× of the floor, the card shows a "filler-limited" flag, the counterpart of today's "void-limited" flag. Test T11 (§4) checks that the floor moves κ by less than 0.1 % on any connected lattice.
+Bone cement (PMMA, ≈ 0.2) and metal powder (≈ 0.13 for Ti-6Al-4V, Bartsch et al. 2022) are natural later presets (§9).
+
+**Validation-only "solid only" mode.** The textbook scaling laws (2φ/3 for sheets, φ/3 for struts) assume empty pores. A hidden solid-only mode (filler at 1e-6·k_s) exists only inside the validation suite (T6, T7), never in the UI.
+
+**"Filler-dominated" flag.** When κ along an axis comes out within 2× of the filler's own k, the card says so. That means the lattice adds little conduction along that axis and the number mostly reflects the environment.
 
 **Percolation check.** `periodicComponents` (`14a-connectivity.js:341`) already reports which axes the solid wraps across, as its `wraps` bits.
 - An axis with no continuous solid path gets "no solid path" on the card.
-- Its κ is then set entirely by the filler, and with vacuum it is near zero by construction.
+- Its κ is then set mostly by the filler.
 
 ### 3.5 Outputs and units
 
@@ -172,13 +173,16 @@ A 10 % gyroid sheet is only about 2 voxels thick at N = 64. Treated as staircase
   - The asymmetry |κ_ij − κ_ji| / ‖κ‖ is recorded as a solver-health number.
   - A second health check compares the energy form E·κ·E with ⟨q⟩·E.
 - **Card values:** κx, κy and κz (the diagonal), κ / κ_s, anisotropy, and the efficiency below.
-- **Efficiency:** κ / κ_HS+, the ratio to the Hashin–Shtrikman upper bound for the solid fraction φ.
-  - With a vacuum filler that bound is 2φ / (3 − φ) · k_s. At low density it tends to 2φ/3.
-  - TPMS sheets approach this limit at low density (Zhang & Liu 2025). Strut and beam lattices tend to φ/3, about half of it.
+- **Efficiency:** κ / κ_HS+, the ratio to the Hashin–Shtrikman upper bound for solid fraction φ in that filler:
+
+      κ_HS+ = k_s + (1 − φ) / ( 1/(k_f − k_s) + φ/(3 k_s) )
+
+  - With a filler much less conductive than the metal, this tends to 2φ/3 · k_s at low density.
+  - TPMS sheets approach the bound at low density (Zhang & Liu 2025). Strut and beam lattices tend to φ/3, about half of it.
   - So efficiency separates sheet-like heat paths from strut-like ones at a glance.
 - **Diffusivity:** α_eff = κ_eff / ⟨ρ c_p⟩, in mm²/s. Heat capacity simply averages by volume, so this needs no extra solve, only a `cp_JkgK` column in the materials table (§3.8).
 - **Fields kept for the viewer** (solver order, converted with `solverToTexOrder`):
-  - T̃ for each axis;
+  - T̃ for each axis and each filler;
   - |q| on voxel centres (from the face fluxes).
 
   Total temperature is rebuilt on the fly as ΔT·(x/L) + scaled T̃.
@@ -187,7 +191,7 @@ A 10 % gyroid sheet is only about 2 voxels thick at N = 64. Treated as staircase
 
 - **Storage:** `THERMAL_BY_DESIGN[id]`, the same pattern as `NONLIN_BY_DESIGN`. Thermal results then survive the elastic pass rebuilding `d.results`, and never reach localStorage.
 - **Card values:** a small `d.results.thermal` block. It replaces today's `kappa_z: 0` sentinel in `mapElasticToResults` and `stubResults`.
-- **Cache signature:** design fingerprint, grid, filler, k_s, tolerance and field version.
+- **Cache signature:** design fingerprint, grid, k_s, filler set, tolerance and field version. Each filler's result is cached separately, so unticking or re-ticking a filler never re-solves the others.
 
 ### 3.7 Viewer: temperature map and section plane
 
@@ -219,7 +223,7 @@ The shared shading block (`20c-f13-shade.js`) stays byte-identical. Field colour
 
 ### 3.9 Sweep
 
-- **New CSV columns:** `kx_WmK`, `ky_WmK`, `kz_WmK`, `k_rel` (κ / κ_s, directional mean), `k_eff_hs` (efficiency), `k_filler`, `k_iters`, `k_converged`.
+- **New CSV columns, one set per filler** (suffix `_air`, `_water`, `_tissue`): `kx_WmK`, `ky_WmK`, `kz_WmK`, `k_rel` (κ / κ_s, directional mean), `k_eff_hs` (efficiency), plus `k_iters` and `k_converged`.
 - **Run settings:** a "Physics: stiffness / stiffness + thermal" choice.
 - Atlas metrics follow the existing `ATLAS_S3_METRICS` pattern.
 
@@ -231,9 +235,9 @@ The shared shading block (`20c-f13-shade.js`) stays byte-identical. Field colour
 | `14e-link-field.js` (new, shared with fluids) | Gradient-normalized signed field, per-link crossing fractions, thin-feature detection |
 | `17a-thermal-cpu-ref.js` (new) | Float64 reference solver for validation |
 | `17b-thermal-solver.js` (new) | GPU solver: face conductances, stencil kernel, FFT preconditioner, CG, flux and field extraction |
-| `15c-materials.js`, `docs/MATERIALS.md` | Missing k_s, `cp_JkgK`, as-built notes, filler table |
-| `50-controls.js` | Thermal phase block in `runRealSweep` (after Buckling), `doThermal` flag, filler setting, timing calibration (replaces the fixed 1.0 s), remove "Thermal" from `notWired` |
-| `40-design-grid.js` | Card rows, readout, flags (filler-limited, no solid path, not converged), viewport gating, thermal controls |
+| `15c-materials.js`, `docs/MATERIALS.md` | Missing k_s, `cp_JkgK`, as-built notes, filler table (air, water, tissue) |
+| `50-controls.js` | Thermal phase block in `runRealSweep` (after Buckling), `doThermal` flag, filler checkboxes, timing calibration (replaces the fixed 1.0 s), remove "Thermal" from `notWired` |
+| `40-design-grid.js` | Card rows, readout, filler switch, flags (filler-dominated, no solid path, not converged), viewport gating, thermal controls |
 | `21-raymarcher.js` | R16F signed scalar texture option, thermal colour maps, isotherms, section plane |
 | `22-stiffness-viz.js` | κ(n) directional surface from the 3×3 tensor |
 | `62-sweep.js`, `63-sweep-atlas.js` | Thermal columns and metrics |
@@ -258,7 +262,7 @@ Run headless (CPU oracle, plus SwiftShader for the GPU kernels) before Matt's cl
 | T8 | Grid convergence, gyroid sheet at N = 32 / 64 / 128 | Monotone. Sub-voxel walls close most of the 32 → 128 gap that staircase voxels leave (both reported) |
 | T9 | GPU vs CPU oracle at N = 32, all families incl. foam and STL import | Within 0.1 % |
 | T10 | Symmetry and energy checks on anisotropic designs (PI-TPMS, directional grain) | Asymmetry < 0.5 %; the energy form matches ⟨q⟩·E within 0.5 % |
-| T11 | Vacuum-floor sensitivity: floor 1e-4 vs 1e-6 | κ changes < 0.1 % on connected designs |
+| T11 | Filler consistency on every demo design | κ(air) < κ(tissue) < κ(water); each within its own two-phase Hashin–Shtrikman bounds; with filler = solid, κ = k_s exactly |
 | T12 | Native designs unchanged | Stiffness, crush and buckling numbers identical to v0.18.0 |
 
 ---
@@ -280,13 +284,12 @@ Version targets: Phase 1 as **v0.19.0**, Phase 2 as v0.19.x.
 
 - Thermal shows a **3-D temperature map**, not only κ numbers.
 - Thermal is the next new physics, ahead of fluids. Crush to densification stays parked as later work.
+- **Pore fillers are air, water and tissue, all selectable.** Thermal is fast enough to solve several per run. No vacuum option: no real part sits in one.
 
 ## 7. Open questions for Matt
 
-- Should the default filler be vacuum (the lattice's own solid conduction) or water / tissue (the in-body case)? This scope assumes vacuum.
 - Should the temperature map default to one cell with ΔT across it, or would you rather set a physical gradient, such as degrees per millimetre?
 - Are the as-built conductivity presets worth adding next to the wrought values for every AM material, or only where the gap is large?
-- Is bone cement filling a case you want built in now (it needs a cement material entry), or later?
 
 ---
 
@@ -301,6 +304,7 @@ Version targets: Phase 1 as **v0.19.0**, Phase 2 as v0.19.x.
 
 ## 9. Later (not in this pass)
 
+- **More filler presets:** PMMA bone cement (cement-filled cages and augmented screws, for exotherm spreading) and metal powder (a lattice inside the powder bed during the build).
 - **Conjugate heat transfer** (heat carried by flowing fluid) with the fluids module's velocity field: a one-way coupled advection–diffusion solve. See `FLUIDS_LBM_SCOPE.md` §9.
 - **Effective electrical conductivity.** The same solver applies with σ in place of k. This is relevant to MRI-related implant questions, though RF heating itself is an electromagnetic problem outside the lab.
 - **Thermal expansion of multi-material cells**, via an eigenstrain added to the elastic solve. Levin's two-phase formula is the exact check. It is pointless for single-material lattices, which expand exactly like the parent metal.
@@ -327,5 +331,5 @@ Version targets: Phase 1 as **v0.19.0**, Phase 2 as v0.19.x.
 
 **To confirm before coding:**
 - the exact Rayleigh / McPhedran coefficients for T5;
-- the PMMA cement conductivity;
+- the soft-tissue conductivity and heat capacity (muscle-like values assumed);
 - the Schneider–Ospald–Kabel equivalence statement (the paper could not be fetched; the equivalence for the scalar case is standard).
