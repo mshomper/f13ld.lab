@@ -59,7 +59,7 @@
    - a normal Run All: stress and deformation views as before, run source reads "· partial volume"; `await runElasticFastTest(32)` passes (moduli and fields, fast vs legacy; spinodoid still unconverged on both paths, as before);
    - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
    - sweep builder → "by thinnest feature", and the new CSV columns.
-2. **Thermal, Phase 1 (GPU)** — [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §11.6: `17b-thermal-solver.js` mirroring 17a (rotated-grid gather kernel with per-voxel phi + normal, scalar FFT preconditioner, two load cases per complex FFT), card rows, run phase, T9–T12. Settle first: island-trim policy for thermal (§11.5).
+2. **Thermal, Phase 1 (GPU)** — [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §11.6: `17b-thermal-solver.js` mirroring 17a (rotated-grid gather kernel with per-voxel phi + normal, scalar FFT preconditioner, two load cases per complex FFT), card rows, run phase, T9–T12, and the "under-resolved" card flag (thinnest feature under a voxel; island trim stays on — Matt, 2026-10-07). Matt runs the BCC beam N = 128 reference first: `node --max-old-space-size=8000 proto/thermal/beam_reference.js` (§11.4 †).
 3. **Dev cycle** — §1a.
 
 **Done 2026-10-07 (Matt):** v0.17.x crush changes verified on the RTX machine — foam and PI-TPMS unblocked; some sparse foams still make several cutbacks, manageable. The Plotly stress–strain plot is good. **PI-TPMS paper finished** (other session) — removed from this list.

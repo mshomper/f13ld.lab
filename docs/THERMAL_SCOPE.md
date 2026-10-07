@@ -290,6 +290,7 @@ Version targets: Phase 0 shipped as v0.19.3 (CPU reference only, nothing user-vi
 - Thermal is the next new physics, ahead of fluids. Crush to densification stays parked as later work.
 - **Pore fillers are air, water and tissue, all selectable.** Thermal is fast enough to solve several per run. No vacuum option: no real part sits in one.
 - **Tissue filler k = 0.5 W/m·K** (a good average; Matt, 2026-10-07, approving Phase 0).
+- **Island trim stays on for thermal; designs with features thinner than a voxel are flagged as under-resolved** (Matt, 2026-10-07; §11.5). Phase 0 merged to main.
 
 ## 7. Open questions for Matt
 
@@ -420,13 +421,13 @@ Not done in Phase 0: T5 (cubic sphere arrays: coefficients still to confirm), an
 | | 0/1 cube, same grid | 10.24 (−1.8 %) | 10.54 (+1.1 %) | 10.75 (+3.1 %) |
 | | Face scheme | 9.06 (−13 %) | 10.42 (−0.1 %) | — |
 
-† The beam references at N = 128 were run with the two-tier rule (11.2); the three-tier N = 128 beam run (about 16 min on the VM's CPU) was cut off by a session restart. It is the one number to confirm on the RTX in Phase 1. For the gyroids the two rules agree at N = 128 to 4 digits.
+† The beam references at N = 128 were run with the two-tier rule (11.2); the three-tier N = 128 beam run (about 16 min on the VM's CPU) was cut off by a session restart. It is the one number to confirm on the RTX in Phase 1 (Matt will run it): `node --max-old-space-size=8000 proto/thermal/beam_reference.js`. For the gyroids the two rules agree at N = 128 to 4 digits.
 
 The c = 0.1 sheet is 0.7 voxels thick at N = 32, 1.3 at 64 and 2.7 at 128. Sheets thinner than about one voxel are where composite voxels help most: the 0/1 cube loses most of the sheet at N = 32.
 
 ### 11.5 Findings to settle before Phase 1
 
-- **The island trim breaks sheets thinner than a voxel.** At N = 32 the 0/1 cube of the c = 0.1 gyroid is a scatter of fragments. The trim keeps the largest (18 voxels) and the solid fraction falls from 6.4 % to 0.06 %. With the trim off, composite voxels recover the sheet (κ within 7 % of N = 128). The stiffness solver has the same exposure. Options for thermal: trim off; trim judged on the composite fractions (a voxel counts as solid when φ ≥ ½); or keep the trim and flag designs whose thinnest feature is under a voxel. The sweep already reports the thinnest feature in voxels.
+- **The island trim breaks sheets thinner than a voxel.** At N = 32 the 0/1 cube of the c = 0.1 gyroid is a scatter of fragments. The trim keeps the largest (18 voxels) and the solid fraction falls from 6.4 % to 0.06 %. With the trim off, composite voxels recover the sheet (κ within 7 % of N = 128). The stiffness solver has the same exposure. Options were: trim off; trim judged on the composite fractions; or keep the trim and flag. **Decided (Matt, 2026-10-07): keep the trim and flag the design as under-resolved** when its thinnest feature is under a voxel at the thermal grid (the sweep's thinnest-feature measure, 14d, already gives it in voxels). Phase 1 adds the flag to the card.
 - **Features thinner than about ¾ voxel can slip between the 9 sign samples** (corners and centre) of a voxel, leaving pinholes in a sheet. In air the pinholes cost little (c = 0.1 at N = 32: −10 %, N = 64: −2.6 %). With near-empty pores thin sheets read low at N = 32 (c = 0.1: 0.46 of the thin-shell value; c = 0.2: 0.69), because nothing bridges the gaps. No real filler is that empty: the highest contrast in the library is copper in air, about 15,000 : 1, against 1,000,000 : 1 in this test.
 - **Iterations** (tolerance 1e-8, CPU):
 
