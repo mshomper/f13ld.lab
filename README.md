@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.20.0 · alpha · **thermal conductivity on the GPU (air / water / tissue in the pores)** · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.21.0 · alpha · **3-D temperature map with a section plane** · **thermal conductivity on the GPU (air / water / tissue in the pores)** · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** [PolyForm Noncommercial 1.0.0](./LICENSE.md): free for research and non-commercial use; anyone may run it to reproduce published results (see [NOTICE](./NOTICE)). Commercial licences: matt@notarobot-eng.com
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,18 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Crush axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.21.0
+
+**The Thermal κ tab draws the heat.** After a Run All with Thermal κ on, each tile shows the cell coloured by the thermal field, live and rotatable. The controls (bottom right of each tile) are shared by all tiles, so the designs always compare in the same view:
+- **T: temperature.** ΔT = 10 K across one cell along the chosen gradient axis (X / Y / Z), in °C above the cold face, with isotherm lines every 1 K. One scale for every design.
+- **Δ: deviation.** How far each point sits off a plain linear ramp (blue below, red above): the architecture's own effect on the heat path.
+- **q: heat flux.** Local flux ÷ what a solid block would carry under the same gradient; hot spots are where heat crowds through thin necks. Top of the scale = the 99th percentile in the solid.
+- **κ: directional conductivity surface,** drawn like the stiffness surface (its value along each axis is κ along that axis).
+- Deviation, flux and κ follow the *Map scale* toggle (own scale per design, or shared).
+- **Section plane,** exactly as in F13LD.tpms: X / Y / Z pills (bottom left), drag the handle to move the cut. The cut face of the metal shows the field inside struts and nodes; the pores on the cut show the filler's field, dimmed.
+- *Pores filled with* still switches every card and map between air, water and tissue without re-running.
+- Fields are kept at half precision for every grid (about 9 MB per design at N = 64, 70 MB at 128).
 
 ## What's new in v0.20.0
 

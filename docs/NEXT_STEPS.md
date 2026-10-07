@@ -1,5 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
+> **2026-10-07 · v0.21.0** — thermal Phase 2 on branch `thermal-phase2`: temperature / deviation / flux map on the Thermal κ tab, κ(n) surface, section plane matching F13LD.tpms (filler's field on the cut, dimmed), fields at half precision for every grid. Awaiting Matt's click-test: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §13.3.
+>
 > **2026-10-07 · v0.20.0** — thermal Phase 1: GPU solver `17b` (three axes per CG, batch-2 FFT preconditioner, GPU-resident scalars), wall data on a worker pool reusing the elastic voxels (`17c`), Run All Phase 4 with air / water / tissue, card rows and flags (under-resolved = > 5 % of solid in sub-3³-voxel fragments), "Pores filled with" switch. GPU = Float64 CPU to rounding on all families at N = 16 (headless). Timing and N ≥ 32 checks are Matt's, on the RTX: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4.
 >
 
@@ -47,6 +49,7 @@
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
 | **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
 | **v0.17.2** | Tight crush = Newton tolerance only (NL_TIGHT_CG_TOL = null), retry reuses the first attempt's elastic setup (cache keyed by void + cgTol); foam: floor 0.3 %, ~45 s per axis (was setup 85.5 s). Nonlinear-tab cubes pause while a run is solving |
+| **v0.21.0** | Thermal Phase 2: map (T / Δ / q), κ(n) surface, section plane as in F13LD.tpms, half-precision fields. `THERMAL_SCOPE.md` §13 |
 | **v0.20.0** | Thermal Phase 1: `17b` GPU solver, `17c` wall-data worker pool (reuses 16b's voxels / margin via two stash hooks), Run All Phase 4, cards, fillers, flags, console checks. `THERMAL_SCOPE.md` §12 |
 | **v0.19.3** | Thermal Phase 0: CPU reference `17a` (rotated grid, full-tensor laminate composite voxels, PCG with FFT preconditioner), `14e-link-field.js` (`buildVoxelTensors` for thermal, `buildLinkField` for fluids), `proto/thermal/` (validation, face-based scheme kept for the record). `THERMAL_SCOPE.md` §11 |
 | **v0.19.1 / v0.19.2** | Crush: pre-yield divergence retried at the tight tolerance, partial curve kept; tight restart after 2 side-stress cutbacks |
@@ -63,7 +66,7 @@
    - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
    - sweep builder → "by thinnest feature", and the new CSV columns.
 2. **Thermal Phase 1 — done and merged (v0.20.0).** Matt's RTX checks all PASS ([`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4). **GPU checks and timing are Matt's; sessions don't run them headless** (Matt, 2026-10-07: SwiftShader is far too slow to be worth it).
-3. **Thermal Phase 2** — temperature map on the Thermal κ tab (R16F signed scalar, three field views, isotherms, section plane, κ(n) surface), §3.7. Fields are already kept per design up to N = 64.
+3. **Thermal Phase 2 — built (v0.21.0, branch `thermal-phase2`)**; Matt click-tests (§13.3), then merge. Next: **Phase 3** — materials (fill k_s gaps, add c_p for diffusivity, as-built notes) and sweep columns / Atlas metrics (§3.8–3.9).
 4. **Dev cycle** — §1a.
 
 **Done 2026-10-07 (Matt):** v0.17.x crush changes verified on the RTX machine — foam and PI-TPMS unblocked; some sparse foams still make several cutbacks, manageable. The Plotly stress–strain plot is good. **PI-TPMS paper finished** (other session) — removed from this list.

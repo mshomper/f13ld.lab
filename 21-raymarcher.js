@@ -113,6 +113,20 @@ function buildLabRaymarcherFS(stepCount) {
        their current behavior); the nonlinear crush sets a bounded value so the
        axial-compression factor can never invert. */
     'uniform float uMacroAmp;',
+    /* v0.21.0 — thermal view (uViewMode 3): one R16F field on TEXTURE4.
+       uThermView 0 temperature · 1 deviation · 2 heat flux.  Temperature =
+       uDT·(p_axis + H)/(2H) + uThermScale·T̃ (°C above the cold face; T̃ in
+       voxel units, uThermScale = ΔT/N); deviation = uThermScale·T̃, shown on
+       ±uThermHi; flux ratio on 0..uThermHi. */
+    'uniform float uThermOn; uniform float uThermView; uniform float uThermAxis;',
+    'uniform float uThermScale; uniform float uThermHi; uniform float uDT;',
+    'uniform highp sampler3D uTherm;',
+    /* v0.21.0 — clip plane, as in F13LD.tpms: axis 0 off / 1 x / 2 y / 3 z,
+       position in half-cells (−1..1), side +1 keeps coord < position. */
+    'uniform float uClipAxis; uniform float uClipPos; uniform float uClipSide;',
+    /* plane outline + drag handle (backbuffer px), drawn over the image */
+    'uniform vec2 uClipC0; uniform vec2 uClipC1; uniform vec2 uClipC2; uniform vec2 uClipC3;',
+    'uniform vec2 uClipHandle; uniform float uClipDpr; uniform vec3 uClipCol;',
 
     'const float H = 3.141593;',
 
@@ -338,7 +352,7 @@ function buildLabRaymarcherFS(stepCount) {
        A.3 — stress mode (uViewMode == 2) also applies the warp so
        the colormap reads on the deformed shape.  Surface shading
        (colormap vs iridescent) is selected in main() based on mode. */
-    'float implicit(vec3 p) {',
+    'float implicit0(vec3 p) {',
     '  vec3 p_eval = p;',
     '  float tBox = -1.0e6;',
     '  if (uViewMode > 0.5 && uViewMode < 2.5) {',
@@ -375,6 +389,48 @@ function buildLabRaymarcherFS(stepCount) {
     '  if (uTopoMode < 1.5) return max((uHalfInvert < 0.5 ? -adj : adj), tBox);',            /* half */
     '  return max(-(abs(adj) - thickness), tBox);',                                        /* anti-sheet */
     '}',
+    /* v0.21.0 — the solid clipped by the section plane (F13LD.tpms sceneSDF) */
+    'float clipCoord(vec3 p) { return (uClipAxis < 1.5) ? p.x : ((uClipAxis < 2.5) ? p.y : p.z); }',
+    'float implicit(vec3 p) {',
+    '  float s = implicit0(p);',
+    '  if (uClipAxis > 0.5) { float c = clipCoord(p), cp = uClipPos * H; s = max(s, (uClipSide > 0.0) ? (c - cp) : (cp - c)); }',
+    '  return s;',
+    '}',
+    /* thermal colormaps: inferno (temperature), Moreland cool–warm (deviation) */
+    'vec3 inferno(float x) {',
+    '  x = clamp(x, 0.0, 1.0); float xs = x * 7.0; float seg = floor(xs); float t = xs - seg;',
+    '  vec3 c0 = vec3(0.0015,0.0005,0.0139), c1 = vec3(0.1065,0.0475,0.2848), c2 = vec3(0.3157,0.0710,0.4851), c3 = vec3(0.5205,0.1328,0.4185);',
+    '  vec3 c4 = vec3(0.7234,0.2140,0.3301), c5 = vec3(0.8990,0.3714,0.1840), c6 = vec3(0.9831,0.6248,0.0441), c7 = vec3(0.9884,0.9984,0.6449);',
+    '  vec3 a = c0; vec3 b = c1;',
+    '  if (seg >= 6.5) { a = c6; b = c7; } else if (seg >= 5.5) { a = c5; b = c6; } else if (seg >= 4.5) { a = c4; b = c5; }',
+    '  else if (seg >= 3.5) { a = c3; b = c4; } else if (seg >= 2.5) { a = c2; b = c3; } else if (seg >= 1.5) { a = c1; b = c2; }',
+    '  else if (seg >= 0.5) { a = c0; b = c1; }',
+    '  return mix(a, b, t);',
+    '}',
+    'vec3 coolwarm(float x) {',
+    '  float xs = clamp(x, 0.0, 1.0) * 4.0; float seg = floor(min(xs, 3.999)); float t = xs - seg;',
+    '  vec3 c0 = vec3(0.2298,0.2987,0.7537), c1 = vec3(0.5543,0.6901,0.9955), c2 = vec3(0.8654,0.8654,0.8654), c3 = vec3(0.9567,0.5980,0.4773), c4 = vec3(0.7057,0.0156,0.1502);',
+    '  vec3 a = c0; vec3 b = c1;',
+    '  if (seg >= 2.5) { a = c3; b = c4; } else if (seg >= 1.5) { a = c2; b = c3; } else if (seg >= 0.5) { a = c1; b = c2; }',
+    '  return mix(a, b, t);',
+    '}',
+    /* data colour of the thermal field at p (isotherm lines on the temperature view) */
+    'vec3 thermColor(vec3 p) {',
+    '  float s = texture(uTherm, fract(p / (2.0 * H) + 0.5)).r;',
+    '  if (uThermView < 0.5) {',
+    '    float pa = (uThermAxis < 0.5) ? p.x : ((uThermAxis < 1.5) ? p.y : p.z);',
+    '    float val = uDT * (pa + H) / (2.0 * H) + uThermScale * s;',
+    '    vec3 c = inferno(val / max(uDT, 1e-9));',
+    '    float band = val / max(uDT * 0.1, 1e-9);',
+    '    float w = max(fwidth(band), 1e-4);',
+    '    float d = abs(fract(band + 0.5) - 0.5);',
+    '    return c * (1.0 - 0.45 * (1.0 - smoothstep(0.5 * w, 1.5 * w, d)));',
+    '  }',
+    '  if (uThermView < 1.5) return coolwarm(0.5 + 0.5 * uThermScale * s / max(uThermHi, 1e-12));',
+    '  return cividis(s / max(uThermHi, 1e-12));',
+    '}',
+    /* distance (px) from q to segment ab, for the plane outline */
+    'float segDist(vec2 q, vec2 a, vec2 b) { vec2 ab = b - a; float h = clamp(dot(q - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0); return length(q - a - ab * h); }',
 
     /* boxNormal — used for near-cap shading when the ray enters
        the unit-cell box already inside the solid.  A.2.1: extent
@@ -407,7 +463,7 @@ function buildLabRaymarcherFS(stepCount) {
     '}',
     F13_SHADE_GLSL,
 
-    'void main() {',
+    'vec4 renderPix() {',
     '  vec2 uv = (gl_FragCoord.xy - res*0.5) / min(res.x, res.y);',
     '  vec3 ro = rot * vec3(uPan.x, uPan.y, zoom);',
     '  vec3 rd = normalize(rot * vec3(uv.x, uv.y, -1.6));',
@@ -434,7 +490,7 @@ function buildLabRaymarcherFS(stepCount) {
     '  vec3 tmi = min(tb, tt), tma = max(tb, tt);',
     '  float tEn = max(max(tmi.x, tmi.y), tmi.z);',
     '  float tEx = min(min(tma.x, tma.y), tma.z);',
-    '  if (tEn > tEx || tEx < 0.0) { fragColor = vec4(bgCol, 1.0); return; }',
+    '  if (tEn > tEx || tEx < 0.0) return vec4(bgCol, 1.0);',
 
     '  float t = max(tEn, 0.001);',
     '  bool hit = false; bool nearCap = false;',
@@ -452,6 +508,23 @@ function buildLabRaymarcherFS(stepCount) {
     '    }',
     '  }',
 
+    /* v0.21.0 — thermal + clip: where the ray crosses the section plane into
+       the kept half through filler (not solid), paint the filler's field
+       there, dimmed, so the cut shows heat in the pores as well as in the
+       metal.  Solid on the plane is the marched cut face below. */
+    '  if (uViewMode > 2.5 && uThermOn > 0.5 && uClipAxis > 0.5) {',
+    '    float rda = clipCoord(rd), roa = clipCoord(ro);',
+    '    if (abs(rda) > 1e-6 && uClipSide * rda < 0.0) {',
+    '      float tp = (uClipPos * H - roa) / rda;',
+    '      if (tp > tEn && tp < tEx && !nearCap && (!hit || t > tp + 1e-3)) {',
+    '        vec3 pp = ro + rd * tp;',
+    '        if (implicit0(pp) > 0.0) {',
+    '          vec3 fc = mix(bgCol, thermColor(pp), 0.5);',
+    '          return vec4(clamp(mix(bgCol, fc, exp(-tp * 0.010)), 0.0, 1.0), 1.0);',
+    '        }',
+    '      }',
+    '    }',
+    '  }',
     '  vec3 pos; vec3 n;',
     '  if (nearCap) { pos = ro + rd*tEn; n = boxNormal(pos); if (dot(n,-rd) < 0.0) n = -n; t = tEn; }',
     '  else if (hit) { pos = ro + rd*t; n = nrmField(pos); if (dot(n,-rd) < 0.0) n = -n; }',
@@ -459,7 +532,7 @@ function buildLabRaymarcherFS(stepCount) {
     '    if (implicit(ro + rd*tEx) < thresh) {',
     '      pos = ro + rd*tEx; n = boxNormal(pos);',
     '      if (dot(n,-rd) < 0.0) n = -n; t = tEx;',
-    '    } else { fragColor = vec4(bgCol, 1.0); return; }',
+    '    } else return vec4(bgCol, 1.0);',
     '  }',
 
     /* Lighting distance scale for occlusion/shadows: local SDF gradient at the hit. */
@@ -490,7 +563,9 @@ function buildLabRaymarcherFS(stepCount) {
        principled, and pairs with the JS-side dilation that handles
        the larger interface-contamination issue. */
     '  vec3 col;',
-    '  if (uViewMode > 1.5 && uViewMode < 2.5 && uStressUploaded > 0.5) {',
+    '  if (uViewMode > 2.5 && uThermOn > 0.5) {',
+    '    col = f13ShadeData(thermColor(pos), pos, n, rd, rot, H*0.3, uNrmStep, f13TMax);',
+    '  } else if (uViewMode > 1.5 && uViewMode < 2.5 && uStressUploaded > 0.5) {',
     '    float cAmpS = uDeformAmp * uDeformSign;',
     '    float mAmpS = ((uMacroAmp >= 0.0) ? uMacroAmp : uDeformAmp) * uDeformSign;',
     '    vec3 pos_unstretched = pos / (vec3(1.0) + mAmpS * uEpsBar);',
@@ -508,7 +583,24 @@ function buildLabRaymarcherFS(stepCount) {
     '    col = f13Shade(uBodyColor, pos, n, rd, rot, !hit, H*0.3, uNrmStep, f13TMax);',
     '  }',
     '  col = mix(bgCol, col, exp(-t * 0.010));',
-    '  fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);',
+    '  return vec4(clamp(col, 0.0, 1.0), 1.0);',
+    '}',
+    /* v0.21.0 — section plane outline and drag handle drawn over the image
+       in the axis colour (F13LD.tpms drawClipHandle: outline 1.5 px at 50 %,
+       ring r 9 px / 2 px at 95 %, centre dot r 3.2 px).  The page projects
+       the points (uClipHandle.x < 0 = nothing to draw). */
+    'void main() {',
+    '  vec4 c = renderPix();',
+    '  if (uClipAxis > 0.5 && uClipHandle.x >= 0.0) {',
+    '    vec2 q = gl_FragCoord.xy; float s = uClipDpr;',
+    '    float dl = min(min(segDist(q, uClipC0, uClipC1), segDist(q, uClipC1, uClipC2)), min(segDist(q, uClipC2, uClipC3), segDist(q, uClipC3, uClipC0)));',
+    '    float aL = 0.5 * (1.0 - smoothstep(0.75 * s - 0.5, 0.75 * s + 0.5, dl));',
+    '    float dh = length(q - uClipHandle);',
+    '    float aR = 0.95 * (1.0 - smoothstep(1.0 * s - 0.5, 1.0 * s + 0.5, abs(dh - 9.0 * s)));',
+    '    float aD = 1.0 - smoothstep(3.2 * s - 0.5, 3.2 * s + 0.5, dh);',
+    '    c.rgb = mix(c.rgb, uClipCol, max(aL, max(aR, aD)));',
+    '  }',
+    '  fragColor = c;',
     '}'
   ].join('\n');
 }
@@ -718,8 +810,13 @@ function LabRaymarcher() {
     macroAmp: -1.0,                /* #6 fix — <0 = use deformAmp (default); >=0 = bounded macro stretch */
     tint: [1, 1, 1],               /* #7 — per-design surface tint (geom/deform) */
     tintStrength: 0.0,
-    bodyColor: [0.78, 0.73, 0.67]  /* family color, set at bake (shared F13LD shading) */
+    bodyColor: [0.78, 0.73, 0.67], /* family color, set at bake (shared F13LD shading) */
+    /* v0.21.0 — thermal view (see uploadThermal / setThermalParams) */
+    thermOn: 0, thermView: 0, thermAxis: 0, thermScale: 0, thermHi: 1, dT: 10
   };
+  this._thermUploaded = false;
+  this._clipScreen = null;        /* projected clip handle (CSS px) for hit-testing */
+  this._scrub = false;
 
   /* 4b — Maximum |u'| component encountered at upload time, in world units
      (the same units as world position p in the shader, where the cell occupies
@@ -795,7 +892,10 @@ LabRaymarcher.prototype._compileShader = function() {
    /* #6 crush sign · #7 per-design surface tint */
    'uDeformSign','uTint','uTintStrength','uMacroAmp',
    /* shared F13LD shading */
-   'uBodyColor'].forEach(function(name){
+   'uBodyColor',
+   /* v0.21.0 — thermal view + clip plane */
+   'uThermOn','uThermView','uThermAxis','uThermScale','uThermHi','uDT','uTherm',
+   'uClipAxis','uClipPos','uClipSide','uClipC0','uClipC1','uClipC2','uClipC3','uClipHandle','uClipDpr','uClipCol'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -1306,6 +1406,78 @@ LabRaymarcher.prototype.updateScalarField = function(arr, N, capOverride) {
   this._dirty = true;
 };
 
+/* ── v0.21.0 — thermal field + section plane ─────────────────────
+   uploadThermal(arr, N): one scalar field in SOLVER order (converted to
+   texture order here) on an R16F texture — temperature correction T̃ (voxel
+   units) for the temperature / deviation views, flux ratio for the flux view.
+   setThermalParams({ view 0|1|2, axis 0|1|2, scale ΔT/N, hi, dT }). */
+LabRaymarcher.prototype.uploadThermal = function(arr, N) {
+  if (this.failed || !arr || arr.length !== N * N * N) return;
+  var gl = this.gl, tex = solverToTexOrder(arr, N);
+  if (!this._thermTex) this._thermTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, this._thermTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R16F, N, N, N, 0, gl.RED, gl.FLOAT, tex);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+  gl.bindTexture(gl.TEXTURE_3D, null);
+  this._thermUploaded = true;
+  this._dirty = true;
+};
+LabRaymarcher.prototype.setThermalParams = function(p) {
+  if (this.failed || !p) return;
+  var S = this._u;
+  S.thermView = p.view || 0; S.thermAxis = p.axis || 0; S.thermScale = p.scale || 0;
+  S.thermHi = (p.hi > 0) ? p.hi : 1; S.dT = (p.dT > 0) ? p.dT : 10;
+  this._dirty = true;
+};
+
+/* Section plane, shared by every thermal tile (one cut compared across the
+   designs).  Same state and pills as F13LD.tpms: axis 0 off / 1 x / 2 y / 3 z,
+   pos in half-cells (−1..1), side +1 keeps coord < pos. */
+var LAB_CLIP = { axis: 0, pos: 0.0, side: 1 };
+var LAB_CLIP_COLORS = { 1: [0.1333, 0.8275, 0.9333], 2: [0.9098, 0.4745, 0.9765], 3: [0.9804, 0.8000, 0.0824] };
+var LAB_CLIP_HEX = { 1: '#22d3ee', 2: '#e879f9', 3: '#facc15' };
+function labClipState() { return LAB_CLIP; }
+function onLabClipPill(axis) {
+  if (LAB_CLIP.axis === axis) LAB_CLIP.axis = 0;
+  else { LAB_CLIP.axis = axis; LAB_CLIP.pos = 0.0; LAB_CLIP.side = 1; }
+  labUpdateClipPills();
+}
+function labUpdateClipPills() {
+  var nm = { 1: 'x', 2: 'y', 3: 'z' }, pills = document.querySelectorAll('.lab-clip-pill');
+  for (var i = 0; i < pills.length; i++) {
+    var a = +pills[i].getAttribute('data-axis'), on = (LAB_CLIP.axis === a);
+    pills[i].classList.toggle('active', on);
+    pills[i].style.color = on ? LAB_CLIP_HEX[a] : '#555';
+    pills[i].style.borderColor = on ? LAB_CLIP_HEX[a] : '#2a2a3a';
+  }
+}
+/* Project the plane's centre, outline and drag direction to backbuffer px
+   (y up, gl_FragCoord), with the shader's camera: ro = R·(pan, zoom),
+   rd = R·(uv, −1.6), R column-major (F13LD.tpms drawClipHandle). */
+function labClipProject(rot, zoom, panX, panY, w, h, C) {
+  var m = Math.min(w, h);
+  function proj(p) {
+    var tx = rot[0] * p[0] + rot[1] * p[1] + rot[2] * p[2] - panX;
+    var ty = rot[3] * p[0] + rot[4] * p[1] + rot[5] * p[2] - panY;
+    var tz = rot[6] * p[0] + rot[7] * p[1] + rot[8] * p[2] - zoom;
+    if (tz > -0.1) return null;
+    return [w / 2 + (1.6 * tx / -tz) * m, h / 2 + (1.6 * ty / -tz) * m];
+  }
+  var H = Math.PI, a = C.axis - 1, cp = C.pos * H, free = [0, 1, 2].filter(function (k) { return k !== a; });
+  var c = [0, 0, 0]; c[a] = cp;
+  var hc = proj(c), sg = [[-1, -1], [1, -1], [1, 1], [-1, 1]], cs = [];
+  for (var s = 0; s < 4; s++) { var p = [0, 0, 0]; p[a] = cp; p[free[0]] = sg[s][0] * H; p[free[1]] = sg[s][1] * H; cs.push(proj(p) || [-1e4, -1e4]); }
+  var e = [0, 0, 0]; e[a] = cp + 0.4;
+  var he = proj(e), dir = [0, 0], len = 0;
+  if (hc && he) { var dx = he[0] - hc[0], dy = he[1] - hc[1]; len = Math.hypot(dx, dy) || 1; dir = [dx / len, dy / len]; }
+  return { ok: !!hc, h: hc || [-1, -1], c: cs, dir: dir, len: len };
+}
+
 /* setViewMode('geom'|'deform'|'stress') — selects shader behavior.
    Effective uViewMode is gated by uploaded data: deform requires
    _dispUploaded, stress requires _stressUploaded.  If the required
@@ -1317,6 +1489,7 @@ LabRaymarcher.prototype.setViewMode = function(mode) {
   var effective = 0;
   if (mode === 'deform' && this._dispUploaded) effective = 1;
   else if (mode === 'stress' && this._stressUploaded) effective = 2;
+  else if (mode === 'thermal' && this._thermUploaded) effective = 3;   /* v0.21.0 */
   this._u.viewMode = effective;
   this._dirty = true;
 };
@@ -1476,6 +1649,12 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
      drag).  Active only in deform/stress modes; geom mode auto-rotates. */
   this.canvas.addEventListener('pointerdown', function(e) {
     if (self._extControl || self._viewMode === 'geom') return;
+    /* v0.21.0 — grabbing the section-plane handle scrubs the plane (F13LD.tpms) */
+    var hs = self._clipScreen;
+    if (hs && self._viewMode === 'thermal') {
+      var rc = self.canvas.getBoundingClientRect();
+      if (Math.hypot(e.clientX - rc.left - hs.x, e.clientY - rc.top - hs.y) < 16) self._scrub = true;
+    }
     self._pointerDown = true;
     self._lastPointerX = e.clientX;
     self._lastPointerY = e.clientY;
@@ -1488,6 +1667,14 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     var dy = e.clientY - self._lastPointerY;
     self._lastPointerX = e.clientX;
     self._lastPointerY = e.clientY;
+    if (self._scrub) {
+      var hs2 = self._clipScreen, C = labClipState();
+      if (hs2 && C.axis > 0) {
+        var pd = dx * hs2.dirx + dy * hs2.diry;
+        C.pos = Math.max(-1, Math.min(1, C.pos + (pd * (hs2.axisStep / (hs2.len || 1))) / Math.PI));
+      }
+      return;
+    }
     /* Sensitivity: ~6 rad full canvas-width sweep at 400px → 0.015 rad/px.
        A.2.1 — Both axes flipped per Matt's testing: drag-right spins scene
        right-to-left, drag-down tilts scene up-to-down (touchscreen-style
@@ -1503,6 +1690,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
   var onPointerUp = function(e) {
     if (!self._pointerDown) return;
     self._pointerDown = false;
+    self._scrub = false;
     try { self.canvas.releasePointerCapture(e.pointerId); } catch (_e) { /* fine */ }
     self.canvas.style.cursor = '';
   };
@@ -1622,6 +1810,37 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform3f(u.uTint,           S.tint[0], S.tint[1], S.tint[2]);
   gl.uniform1f(u.uTintStrength,   S.tintStrength);
   gl.uniform3f(u.uBodyColor,      S.bodyColor[0], S.bodyColor[1], S.bodyColor[2]);
+  /* v0.21.0 — thermal field + section plane (thermal tab only) */
+  var thermalOn = (this._viewMode === 'thermal' && this._thermUploaded);
+  gl.uniform1f(u.uThermOn,    thermalOn ? 1 : 0);
+  gl.uniform1f(u.uThermView,  S.thermView);
+  gl.uniform1f(u.uThermAxis,  S.thermAxis);
+  gl.uniform1f(u.uThermScale, S.thermScale);
+  gl.uniform1f(u.uThermHi,    S.thermHi);
+  gl.uniform1f(u.uDT,         S.dT);
+  if (this._thermTex) {
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_3D, this._thermTex);
+    gl.uniform1i(u.uTherm, 4);
+  }
+  var C = (this._viewMode === 'thermal') ? labClipState() : null;
+  var cAx = (C && C.axis > 0) ? C.axis : 0;
+  gl.uniform1f(u.uClipAxis, cAx);
+  gl.uniform1f(u.uClipPos,  C ? C.pos : 0);
+  gl.uniform1f(u.uClipSide, C ? C.side : 1);
+  this._clipScreen = null;
+  if (cAx > 0) {
+    var pr = labClipProject(rot, S.zoom, S.panX || 0, S.panY || 0, w, h, C);
+    var cssPerPx = cssW / w, colv = LAB_CLIP_COLORS[cAx];
+    gl.uniform2f(u.uClipC0, pr.c[0][0], pr.c[0][1]); gl.uniform2f(u.uClipC1, pr.c[1][0], pr.c[1][1]);
+    gl.uniform2f(u.uClipC2, pr.c[2][0], pr.c[2][1]); gl.uniform2f(u.uClipC3, pr.c[3][0], pr.c[3][1]);
+    gl.uniform2f(u.uClipHandle, pr.ok ? pr.h[0] : -1, pr.h[1]);
+    gl.uniform1f(u.uClipDpr, dpr);
+    gl.uniform3f(u.uClipCol, colv[0], colv[1], colv[2]);
+    /* hit-test data in CSS px (y down), as F13LD.tpms window.__clipHandleScreen */
+    if (pr.ok) this._clipScreen = { x: pr.h[0] * cssPerPx, y: (h - pr.h[1]) * cssPerPx,
+                                    dirx: pr.dir[0], diry: -pr.dir[1], len: pr.len * cssPerPx, axisStep: 0.4 };
+  }
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_3D, this._fieldTex);
@@ -1678,6 +1897,7 @@ LabRaymarcher.prototype.destroy = function() {
   if (this._fieldBTex) gl.deleteTexture(this._fieldBTex);  /* v0.13.0 — field-pair field B */
   if (this._dispTex)   gl.deleteTexture(this._dispTex);    /* A.2 — displacement texture */
   if (this._stressTex) gl.deleteTexture(this._stressTex);  /* A.3 — stress texture */
+  if (this._thermTex)  gl.deleteTexture(this._thermTex);   /* v0.21.0 — thermal field */
   if (this._prog)      gl.deleteProgram(this._prog);
   if (this._quadBuf)   gl.deleteBuffer(this._quadBuf);
   /* Force-lose context to free GPU memory immediately */
@@ -1689,6 +1909,7 @@ LabRaymarcher.prototype.destroy = function() {
   this._fieldBTex = null;
   this._dispTex = null;     /* A.2 */
   this._stressTex = null;   /* A.3 */
+  this._thermTex = null;    /* v0.21.0 */
   this._quadBuf = null;
   this.canvas = null;
   this.failed = true;
@@ -1877,7 +2098,8 @@ function mountRaymarcherTiles() {
 
 /* Pause all when grid loses geom/deform/stress view (e.g. user clicks Buckle tab) */
 function pauseRaymarcherTilesForViewMode(mode) {
-  if (mode !== 'geom' && mode !== 'deform' && mode !== 'stress' && mode !== 'buckle') {
+  var kappaSurface = (mode === 'thermal' && typeof VIEW_STATE !== 'undefined' && VIEW_STATE.thermalView === 'kappa');   /* v0.21.0 — κ(n) uses the surface viewer */
+  if ((mode !== 'geom' && mode !== 'deform' && mode !== 'stress' && mode !== 'buckle' && mode !== 'thermal') || kappaSurface) {
     pauseAllRaymarchers();
   }
 }

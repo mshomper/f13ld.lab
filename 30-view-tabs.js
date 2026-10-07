@@ -16,8 +16,24 @@ var VIEW_STATE = {
   stressNormMode: 'per',                   // A.3.3 — 'per' (auto per-design) | 'shared' (global p95, linear)
   stressSat:  { /* designId: 0..2 */ },    // 4b — per-design saturation multiplier on auto p95 cap
   buckleExag: { /* designId: 0..30 */ },   // buckling tab mode-shape exaggeration (% of cell), default 10
-  thermalFiller: 'air'                      // v0.20.0 — which solved pore filler the thermal cards show
+  thermalFiller: 'air',                     // v0.20.0 — which solved pore filler the thermal cards show
+  thermalView: 'temp',                      // v0.21.0 — 'temp' | 'dev' | 'flux' | 'kappa' (all thermal tiles)
+  thermalAxis: 'x',                         // v0.21.0 — gradient axis of the map (all thermal tiles)
+  thermalDT: 10                             // v0.21.0 — ΔT across one cell, K (Matt: per cell, fixed default)
 };
+
+/* v0.21.0 — thermal map controls (shared by every thermal tile, so the
+   designs always show the same view, axis and filler). */
+function onThermalViewPick(v){
+  VIEW_STATE.thermalView = v;
+  var normGroup = document.getElementById('stressNormToggle');
+  if (normGroup) normGroup.classList.toggle('show', VIEW_STATE.mode === 'thermal' && (v === 'dev' || v === 'flux' || v === 'kappa'));
+  if (typeof renderDesignGrid === 'function') renderDesignGrid();
+}
+function onThermalAxisPick(a){
+  VIEW_STATE.thermalAxis = a;
+  if (typeof renderDesignGrid === 'function') renderDesignGrid();
+}
 
 /* v0.20.0 — "Pores filled with" switch (Thermal κ tab). */
 function onThermalFillerView(id){
@@ -51,7 +67,9 @@ function onViewModeClick(mode){
      state variable (stressNormMode) drives both. */
   var normGroup = document.getElementById('stressNormToggle');
   if (normGroup) {
-    normGroup.classList.toggle('show', (mode === 'stress' || mode === 'stiff'));
+    var tv = VIEW_STATE.thermalView;
+    normGroup.classList.toggle('show', (mode === 'stress' || mode === 'stiff' ||
+                                        (mode === 'thermal' && (tv === 'dev' || tv === 'flux' || tv === 'kappa'))));
     updateStressNormToggleVisual();
     /* Push 5 — swap the label text so the user knows what the toggle
        affects in the current mode.  The visible label is the first
@@ -60,6 +78,7 @@ function onViewModeClick(mode){
     if (labelEl) {
       if (mode === 'stiff')      labelEl.textContent = 'E surface scale';
       else if (mode === 'stress') labelEl.textContent = 'σ_VM scale';
+      else if (mode === 'thermal') labelEl.textContent = 'Map scale';
     }
   }
 

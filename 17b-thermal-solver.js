@@ -555,15 +555,54 @@ ThermalGPUSolver.prototype.solve = async function (kS, kF, opts) {
     this._pass(e2, [[this.pQmag, this._bgc('qmag', this.pQmag, [this.vox, this.T, this.r, this.uStats]), this.wgN[0], this.wgN[1]]]);
     d.queue.submit([e2.finish()]);
     var Qv = await this._readBuf(this.r, N3 * 16);
+    /* v0.21.0 — stored for the viewer at half precision (2 bytes / value,
+       solver order): Tc = T̃ averaged from each voxel's 8 corners to its
+       centre (the geometry texture's sample points; the average also cancels
+       the rotated grid's checkerboard modes, §11.5), in voxel units (mean
+       gradient 1 per voxel); q = |q| / (flux of a solid block under the same
+       mean gradient). */
     fields = {};
+    var N = this.N, NN = N * N, Tc = new Float32Array(N3);
     for (var l = 0; l < 3; l++) {
-      var Tn = new Float32Array(N3), qm = new Float32Array(N3);
-      for (var q = 0; q < N3; q++) { Tn[q] = Tv[4 * q + l]; qm[q] = Qv[4 * q + l] * kS; }
-      fields['xyz'.charAt(l)] = { Tn: Tn, qMag: qm };
+      for (var i = 0; i < N; i++) { var a0 = i * NN, a1 = ((i + 1) % N) * NN;
+        for (var j = 0; j < N; j++) { var b0 = j * N, b1 = ((j + 1) % N) * N;
+          for (var k = 0; k < N; k++) { var c0 = k, c1 = (k + 1) % N;
+            Tc[a0 + b0 + c0] = 0.125 * (Tv[4 * (a0 + b0 + c0) + l] + Tv[4 * (a1 + b0 + c0) + l] + Tv[4 * (a0 + b1 + c0) + l] + Tv[4 * (a0 + b0 + c1) + l] +
+                                        Tv[4 * (a1 + b1 + c0) + l] + Tv[4 * (a1 + b0 + c1) + l] + Tv[4 * (a0 + b1 + c1) + l] + Tv[4 * (a1 + b1 + c1) + l]);
+          } } }
+      var t16 = new Uint16Array(N3), q16 = new Uint16Array(N3);
+      for (var q = 0; q < N3; q++) { t16[q] = thermalF32ToF16(Tc[q]); q16[q] = thermalF32ToF16(Qv[4 * q + l]); }
+      fields['xyz'.charAt(l)] = { N: N, Tc: t16, q: q16 };
     }
   }
   return { K: K, perLC: perLC, asym: asym, energyErr: energyErr, fields: fields, readbacks: reads };
 };
+
+/* ── Half precision (IEEE 754 binary16) for the stored fields ───────── */
+var _thF32 = new Float32Array(1), _thU32 = new Uint32Array(_thF32.buffer);
+function thermalF32ToF16(v) {
+  _thF32[0] = v;
+  var x = _thU32[0], s = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112, m = x & 0x7fffff;
+  if (e <= 0) {                                   /* subnormal or zero */
+    if (e < -10) return s;
+    m = (m | 0x800000) >>> (1 - e);
+    return s | ((m + 0x1000) >>> 13);
+  }
+  if (e >= 31) return s | 0x7c00 | (((x >>> 23) & 0xff) === 0xff && m ? 0x200 : 0);   /* overflow → inf, NaN kept */
+  var h = s | (e << 10) | (m >>> 13);
+  return (m & 0x1000) ? h + 1 : h;                /* round half up; a carry into the exponent is correct */
+}
+function thermalF16ToF32(h) {
+  var s = (h & 0x8000) ? -1 : 1, e = (h >>> 10) & 0x1f, m = h & 0x3ff;
+  if (e === 0) return s * m * 5.960464477539063e-8;
+  if (e === 31) return m ? NaN : s * Infinity;
+  return s * (1 + m / 1024) * Math.pow(2, e - 15);
+}
+function thermalHalfToFloat(a) {
+  var out = new Float32Array(a.length);
+  for (var i = 0; i < a.length; i++) out[i] = thermalF16ToF32(a[i]);
+  return out;
+}
 
 /* ── Cache (one grid; dropped with the device) ─────────────────────── */
 function thermalGPUSolver(N) {
@@ -610,7 +649,10 @@ async function homogenizeThermalGPU(recipe, N, opts) {
   S.upload(vt);
   var out = { N: N, kS: kS, rho: vt.rho, rhoPhi: vt.rhoPhi, rhoRaw: nRaw / N3, trimLoss: nRaw > 0 ? 1 - nKept / nRaw : 0,
               nSurf: vt.nSurf, t_voxels_ms: tVox, voxReuse: vt.reused, voxWorkers: vt.workers, byFiller: {}, t_solve_ms: 0,
-              wraps: null, fragLoss: 0 };
+              wraps: null, fragLoss: 0, mask: null };
+  /* v0.21.0 — solid mask (half the voxel or more solid) for the viewer's
+     flux spread into the pores; 1 byte per voxel, solver order */
+  if (opts.capture) { var mk = new Uint8Array(N3); for (var pm = 0; pm < N3; pm++) mk[pm] = vt.phi[pm] >= 0.5 ? 1 : 0; out.mask = mk; }
   /* Which axes the kept solid runs across (wrap bits 1 x, 2 y, 4 z), and the
      share of the raw solid in tiny floating fragments (< 27 voxels, a 3³
      block).  Features thinner than a voxel shatter into such fragments on the
