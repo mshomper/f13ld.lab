@@ -485,7 +485,20 @@ Memory at N = 128: about 230 MB on the GPU (voxel data, four CG vectors, the bat
 - **Run loop** (solver stubbed): fillers solved per design, second run fully cached, unticking a filler re-solves nothing, a material without k_s refuses on the card, a material change re-solves, filler switch and flags render.
 - Not done here (Matt, on the RTX): timing, N = 32–128 checks, the worker pool and elastic reuse in a real browser, T12.
 
-### 12.4 For Matt's GPU (console on the lab page)
+### 12.4 Matt's GPU results (RTX, 2026-10-07)
+
+- `runThermalGPUCheck(32)`: **PASS**. GPU = Float64 reference to rounding on Schwarz P, BCC beams, hyperuniform, spinodoid and wave × air / water / tissue. Per filler (all three axes): 50–240 ms; air 78–104 iterations, water / tissue 20–25.
+- `runThermalBeamReference()` (three-tier walls, closes §11.4 †):
+
+  | BCC beams, κx (W/m·K) | N = 32 | N = 64 | N = 128 |
+  |---|---|---|---|
+  | Ti/air (250 : 1) | 0.2074 (−1.5 %) | 0.2098 (−0.3 %) | **0.2105** (86 it, 1.2 s) |
+  | Cu/air (15,000 : 1) | 10.43 (0.0 %) | 10.61 (+1.7 %) | **10.43** (541 it, 5.0 s) |
+
+  Ti converges smoothly. Cu is not monotone: at this contrast the struts carry nearly all the heat, so the junction voxels dominate and shift with the grid; the N = 32 match is a coincidence. Under 2 % throughout, as in Phase 0. Wall voxels for the beams at 128: 0.4 s.
+- `thermalVoxelSelfTest()`: **PASS**, identical to the single-thread build; hyperuniform N = 32: 7.4 s → 1.6 s on 8 workers. The wall build (∝ N³ on grain / hyperuniform fields) is now the slow part of a thermal run, not the solve.
+
+### 12.5 Console checks (lab page)
 
 - `await runThermalGPUCheck(32)`: T9 + T10 + T11 at N = 32 on five demos. PASS expected; prints per-solve ms.
 - `await runThermalBeamReference()`: BCC beams at N = 128 (§11.4 †), Ti/air and Cu/air κ_x, iterations, seconds.

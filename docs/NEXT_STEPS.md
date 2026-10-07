@@ -62,7 +62,7 @@
    - a normal Run All: stress and deformation views as before, run source reads "· partial volume"; `await runElasticFastTest(32)` passes (moduli and fields, fast vs legacy; spinodoid still unconverged on both paths, as before);
    - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
    - sweep builder → "by thinnest feature", and the new CSV columns.
-2. **Thermal Phase 1 — Matt's GPU checks on the branch preview** ([`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4): `await runThermalGPUCheck(32)`, `await runThermalBeamReference()` (replaces the node beam reference), `await thermalVoxelSelfTest()`, and a Run All with Thermal κ on. Then merge v0.20.0. **GPU checks and timing are Matt's; sessions don't run them headless** (Matt, 2026-10-07: SwiftShader is far too slow to be worth it).
+2. **Thermal Phase 1 — done and merged (v0.20.0).** Matt's RTX checks all PASS ([`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4). **GPU checks and timing are Matt's; sessions don't run them headless** (Matt, 2026-10-07: SwiftShader is far too slow to be worth it).
 3. **Thermal Phase 2** — temperature map on the Thermal κ tab (R16F signed scalar, three field views, isotherms, section plane, κ(n) surface), §3.7. Fields are already kept per design up to N = 64.
 4. **Dev cycle** — §1a.
 
