@@ -252,7 +252,7 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
    for FFT lattice homogenization).  Crush, buckling and connectivity keep
    the plain 0/1 cube.
    ============================================================ */
-function buildVoxelMargin(family, params, offset, N, mode, wt, nWeights, pipeR, phaseShift) {
+function buildVoxelMargin(family, params, offset, N, mode, wt, nWeights, pipeR, phaseShift, fnOnly) {
   var L = Math.PI, step = (2 * L) / N, N3 = N * N * N;
   var kernel = KERNELS[family || 'tpms'];
   if (!kernel) throw new Error('buildVoxelMargin: unknown family "' + family + '"');
@@ -316,6 +316,9 @@ function buildVoxelMargin(family, params, offset, N, mode, wt, nWeights, pipeR, 
     if (mode === 'noise-solid' || mode === 'grain-solid') return Math.abs(v - iso) - hw;
     return offset - v;
   }
+  /* v0.20.0 — fnOnly: the margin function without the corner grid (the
+     thermal voxel workers evaluate it on their own slab). */
+  if (fnOnly) return { m: null, fn: margin, step: step, L: L, N: N };
   var m = new Float32Array(N3);
   for (var i = 0; i < N; i++) {
     var x = -L + i * step;

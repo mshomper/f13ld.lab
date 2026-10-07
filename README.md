@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.19.3 · alpha · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.20.0 · alpha · **thermal conductivity on the GPU (air / water / tissue in the pores)** · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** [PolyForm Noncommercial 1.0.0](./LICENSE.md): free for research and non-commercial use; anyone may run it to reproduce published results (see [NOTICE](./NOTICE)). Commercial licences: matt@notarobot-eng.com
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,18 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Crush axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.20.0
+
+**Thermal conductivity, on the GPU.** Turn on **Thermal κ** next to Elastic, Buckling and Nonlinear, then Run All. Each design gets its effective conductivity along X, Y and Z in W/m·K, on the same grid as the stiffness run:
+- **Pore fillers: air, water and tissue**, all solved in one run (untick any under *Thermal fillers*). On the **Thermal κ** tab, *Pores filled with* switches every card between them without re-running.
+- **Card rows:** conductivity X / Y / Z (with the share of the solid metal's conductivity), the mean share of solid κ, **thermal efficiency** (κ as a share of the most any structure of this density can conduct, the Hashin–Shtrikman upper bound: sheet TPMS sit near the top, strut lattices lower), anisotropy κmax / κmin. Diffusivity shows "—" until the materials table has heat capacities (Phase 3).
+- **Flags:** not converged; no continuous solid path along an axis (κ there is mostly the filler); filler-dominated (κ within 2× of the filler's own); **under-resolved** when more than 5 % of the solid breaks into fragments smaller than 3 × 3 × 3 voxels that the island trim drops (features thinner than a voxel at this grid). Materials without conductivity data say so instead of guessing; designs without a library material use Ti-6Al-4V (6.7 W/m·K).
+- **How:** `17b-thermal-solver.js` solves all three axes at once (one per GPU vector lane) with the Phase 0 scheme: rotated grid, laminate composite voxels for walls, FFT-preconditioned CG, scalars kept on the GPU. It matches the Float64 reference (`17a`) to 6–7 digits. The wall data (solid fraction and normal per surface voxel) is built on a pool of CPU workers (`17c-thermal-voxel-pool.js`), reusing the elastic run's voxels when Run All just made them.
+- **Console:** `await runThermalGPUCheck(32)` (GPU vs the Float64 reference on the demos, all three fillers), `await runThermalBeamReference()` (BCC beams at N = 128), `await thermalVoxelSelfTest()` (worker pool vs single thread).
+- The 3-D temperature map is next (Phase 2); the Thermal κ viewport stays empty until then.
+
+Details and validation: [`docs/THERMAL_SCOPE.md`](./docs/THERMAL_SCOPE.md) §12.
 
 ## What's new in v0.19.3
 
