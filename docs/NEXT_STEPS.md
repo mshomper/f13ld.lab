@@ -1,5 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
+> **2026-10-07 · v0.20.0** — thermal Phase 1: GPU solver `17b` (three axes per CG, batch-2 FFT preconditioner, GPU-resident scalars), wall data on a worker pool reusing the elastic voxels (`17c`), Run All Phase 4 with air / water / tissue, card rows and flags (under-resolved = > 5 % of solid in sub-3³-voxel fragments), "Pores filled with" switch. GPU = Float64 CPU to rounding on all families at N = 16 (headless). Timing and N ≥ 32 checks are Matt's, on the RTX: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4.
+>
 
 > **2026-10-07 · v0.19.3** — thermal Phase 0: Float64 CPU reference (`17a-thermal-cpu-ref.js`) on the rotated grid with full-tensor laminate composite voxels (`14e-link-field.js` `buildVoxelTensors`; per-link crossings kept there for fluids); exact on flat walls at any angle, sheet gyroid within 1.1–2.6 % and BCC beams within 0.4–1.7 % of N = 128 at N = 64; the planned face-based scheme was built, read inclined walls 8–16 % low, and is kept in `proto/thermal/faces-tpfa.js`. Validation `proto/thermal/run_tests.js`, results [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §11. Nothing user-visible.
 >
@@ -13,7 +15,7 @@
 >
 > **2026-10-05 · v0.17.4** — wet foam field changed with F13LD.foam v0.7.0: it now includes the neighbouring bubbles (no jumps across cell faces) and honours `foam.edge_min` (cusp trim; sweepable, CSV column `edge_min`). Wet-foam lab results from before v0.17.4 were computed on the old field; re-run them if they feed a fit.
 
-**As of:** v0.19.3 · 2026-10-07 · thermal Phase 0 (CPU reference, sub-voxel walls) done; fields on the fast elastic path, feature size in mm (CSV + builder), partial-volume voxels (default on); crush verified on hardware; fluids scoped; foam laws still provisional (re-run moved down)
+**As of:** v0.20.0 · 2026-10-07 · thermal Phase 1 (GPU solver, cards, fillers) on branch `thermal-phase1`; thermal Phase 0 (CPU reference, sub-voxel walls) done; fields on the fast elastic path, feature size in mm (CSV + builder), partial-volume voxels (default on); crush verified on hardware; fluids scoped; foam laws still provisional (re-run moved down)
 **Suite on main (2026-10-04):** lab v0.17.3 · F13LD.foam v0.6.0 · F13LD.mesh v0.9.3 (fast weld export — see mesh `docs/SESSION_RECAP_2026-10-04.md`; no lab impact)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-03.md`](SESSION_RECAP_2026-10-03.md) (previous: [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md), [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
@@ -45,6 +47,7 @@
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
 | **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
 | **v0.17.2** | Tight crush = Newton tolerance only (NL_TIGHT_CG_TOL = null), retry reuses the first attempt's elastic setup (cache keyed by void + cgTol); foam: floor 0.3 %, ~45 s per axis (was setup 85.5 s). Nonlinear-tab cubes pause while a run is solving |
+| **v0.20.0** | Thermal Phase 1: `17b` GPU solver, `17c` wall-data worker pool (reuses 16b's voxels / margin via two stash hooks), Run All Phase 4, cards, fillers, flags, console checks. `THERMAL_SCOPE.md` §12 |
 | **v0.19.3** | Thermal Phase 0: CPU reference `17a` (rotated grid, full-tensor laminate composite voxels, PCG with FFT preconditioner), `14e-link-field.js` (`buildVoxelTensors` for thermal, `buildLinkField` for fluids), `proto/thermal/` (validation, face-based scheme kept for the record). `THERMAL_SCOPE.md` §11 |
 | **v0.19.1 / v0.19.2** | Crush: pre-yield divergence retried at the tight tolerance, partial curve kept; tight restart after 2 side-stress cutbacks |
 | **v0.19.0** | Field capture on the fast path (16i): normal runs use GPU-resident CG too, legacy 16b only as fallback; `runElasticFastTest` compares fields. Sweep CSV `thinnest_feature_T / _mm`, `median_feature_T / _mm`, `cell_mm`; builder "by thinnest feature" (bisection at the run grid, `sweepParamsForFeatures` in 14d). Partial-volume voxels (`buildVoxelMargin` / `voxelFractionsFromMargin` in 14-rasterizer, `pvC` blend in the stiffness kernel), **on by default** (Matt, after the GPU check), Surface voxels pill + sweep setting (0/1 cube reproduces pre-v0.19.0 results), CSV `partial_volume`, `vf_partial_pct`; `runPartialVolumeCheck()`. Fixed: 16i rebinds Γ by buffer, not key (a third grid evicted and rebuilt Γ under the same key). Local thickness tried for the flattened-tube bias and set aside (no gain, §1a item 5) |
@@ -59,8 +62,9 @@
    - a normal Run All: stress and deformation views as before, run source reads "· partial volume"; `await runElasticFastTest(32)` passes (moduli and fields, fast vs legacy; spinodoid still unconverged on both paths, as before);
    - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
    - sweep builder → "by thinnest feature", and the new CSV columns.
-2. **Thermal, Phase 1 (GPU)** — [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §11.6: `17b-thermal-solver.js` mirroring 17a (rotated-grid gather kernel with per-voxel phi + normal, scalar FFT preconditioner, two load cases per complex FFT), card rows, run phase, T9–T12, and the "under-resolved" card flag (thinnest feature under a voxel; island trim stays on — Matt, 2026-10-07). Matt runs the BCC beam N = 128 reference first: `node --max-old-space-size=8000 proto/thermal/beam_reference.js` (§11.4 †).
-3. **Dev cycle** — §1a.
+2. **Thermal Phase 1 — Matt's GPU checks on the branch preview** ([`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4): `await runThermalGPUCheck(32)`, `await runThermalBeamReference()` (replaces the node beam reference), `await thermalVoxelSelfTest()`, and a Run All with Thermal κ on. Then merge v0.20.0. **GPU checks and timing are Matt's; sessions don't run them headless** (Matt, 2026-10-07: SwiftShader is far too slow to be worth it).
+3. **Thermal Phase 2** — temperature map on the Thermal κ tab (R16F signed scalar, three field views, isotherms, section plane, κ(n) surface), §3.7. Fields are already kept per design up to N = 64.
+4. **Dev cycle** — §1a.
 
 **Done 2026-10-07 (Matt):** v0.17.x crush changes verified on the RTX machine — foam and PI-TPMS unblocked; some sparse foams still make several cutbacks, manageable. The Plotly stress–strain plot is good. **PI-TPMS paper finished** (other session) — removed from this list.
 **Moved down (Matt, 2026-10-07):** foam calibration re-run on the exact field and the refit (old §1 items 2–3) — the foam tool carries estimates and that is fine for now; kept in §2 Queued.

@@ -1,6 +1,6 @@
 # F13LD.lab — Thermal Conductivity and 3-D Temperature Map (Scope)
 
-**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done in v0.19.3**: CPU reference solver and sub-voxel walls, validated (§11). Phase 0 changed the discretization planned in §3.1–3.3; §11 has the reasons and the numbers. Phase 1 (GPU) is next.
+**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done in v0.19.3**: CPU reference solver and sub-voxel walls, validated (§11). Phase 0 changed the discretization planned in §3.1–3.3; §11 has the reasons and the numbers. **Phase 1 done in v0.20.0**: GPU solver, Run All phase, cards, fillers, flags (§12). Phase 2 (temperature map, section plane) is next.
 **Written against:** v0.18.0 (main `18ddbae`), 2026-10-07
 **Goal:** Fill the existing "Thermal κ" stubs with a working solver: the effective conductivity tensor of any lattice the lab can build (native recipes, foams, imported STL cells), a 3-D temperature map on the cell, and a heat-flux "hot spot" map. It should run in seconds, in the same Run All flow as stiffness.
 **Out of scope (this pass):**
@@ -238,7 +238,8 @@ The shared shading block (`20c-f13-shade.js`) stays byte-identical. Field colour
 | `14-rasterizer.js` | Nothing new: `buildVoxelMargin` (v0.19.0) already gives the continuous margin for every mode *(Phase 0)* |
 | `14e-link-field.js` (new, shared with fluids) | `buildVoxelTensors`: per-voxel solid fraction and wall normal (thermal); `buildLinkField`: per-link crossing fractions (fluids) *(done, v0.19.3)* |
 | `17a-thermal-cpu-ref.js` (new) | Float64 reference solver: rotated grid, full-tensor composite voxels, PCG *(done, v0.19.3)* |
-| `17b-thermal-solver.js` (new) | GPU solver mirroring 17a: per-voxel phi + normal, rotated-grid gradient / flux / divergence kernels, FFT preconditioner, CG, flux and field extraction |
+| `17b-thermal-solver.js` (new) | GPU solver mirroring 17a: per-voxel phi + normal, rotated-grid gather kernel, batch-2 FFT preconditioner, CG on all three axes at once, flux and field extraction *(done, v0.20.0)* |
+| `17c-thermal-voxel-pool.js` (new) | Wall data on a CPU worker pool, reusing the elastic run's voxels and margin *(done, v0.20.0)* |
 | `15c-materials.js`, `docs/MATERIALS.md` | Missing k_s, `cp_JkgK`, as-built notes, filler table (air, water, tissue) |
 | `50-controls.js` | Thermal phase block in `runRealSweep` (after Buckling), `doThermal` flag, filler checkboxes, timing calibration (replaces the fixed 1.0 s), remove "Thermal" from `notWired` |
 | `40-design-grid.js` | Card rows, readout, filler switch, flags (filler-dominated, no solid path, not converged), viewport gating, thermal controls |
@@ -451,3 +452,42 @@ The c = 0.1 sheet is 0.7 voxels thick at N = 32, 1.3 at 64 and 2.7 at 128. Sheet
 - **Memory at 128³:** about 40 MB of CG vectors, 32 MB of voxel data, 24 MB of flux and 16 MB of FFT slot, about 110 MB in all. No buffer is near the 128 MB binding limit.
 - **The voxel data build** (the margin plus 64 samples per surface voxel) is the slow part on the CPU for grain and hyperuniform fields: about 9 s at N = 32, almost all of it margin evaluation. It belongs in the geometry worker or on the GPU, alongside moving the partial-volume rasterization there (already queued).
 - **T9:** GPU vs `solveThermalCPU` within 0.1 % at N = 32, on all families including foam and STL import.
+
+---
+
+## 12. Phase 1 results (v0.20.0, 2026-10-07)
+
+### 12.1 What was built
+
+| File | Contents |
+|---|---|
+| `17b-thermal-solver.js` | `ThermalGPUSolver`: the 17a scheme on the GPU. All three axes in one CG (one per vec4 lane, lane 3 unused); a gather kernel per node computes its 8 voxels' fluxes from 27 node loads (no flux buffer, no atomics); FFT preconditioner with lanes x, y packed as one complex field and z as a second (batch-2 FFT); CG scalars on the GPU, 64-float readback per block. `homogenizeThermalGPU(recipe, N, opts)` (walls once, one solve per filler), `THERMAL_FILLERS`, console checks |
+| `17c-thermal-voxel-pool.js` | `buildVoxelTensorsParallel`: wall data in x-slabs on a worker pool (cores − 1, max 8); reuses the elastic run's raw / trimmed cubes and margin grid (`thermalStashVoxels` / `thermalStashMargin`, two hooks in 16b, 200 MB budget). Same functions as `buildVoxelTensors`, so results are identical |
+| `14-rasterizer.js` | `buildVoxelMargin(…, fnOnly)`: the margin function without the grid (for the workers) |
+| `14e-link-field.js` | `voxelTensorsFromMargin` takes `opts.iRange` (a slab) |
+| `50-controls.js` | Run All Phase 4 (after Buckling, same grid as elastic), `THERMAL_STATE` / `THERMAL_BY_DESIGN`, per-filler cache under one base signature, timing calibration per filler solve, run-complete flags |
+| `40-design-grid.js`, `30-view-tabs.js`, `index.html` | Card rows, readout, "Pores filled with" switch (VIEW strip, thermal tab), "Thermal fillers" checkboxes |
+
+Memory at N = 128: about 230 MB on the GPU (voxel data, four CG vectors, the batch-2 FFT pair); no buffer over 34 MB. Temperature fields (T̃ per axis and |q| per voxel) are kept for grids up to 64 (`THERMAL_STATE.captureMaxN`) for the Phase 2 map; at 128 they would be about 140 MB per design.
+
+### 12.2 Decisions taken in the build
+
+- **Under-resolved flag.** The sweep's thinnest-feature measure (14d) cannot read below about 2.5 voxels, so it cannot see "under a voxel". The trim loss alone misfires on real floating islands (hyperuniform demo 26–29 %, wave demo 17–19 % at both N = 32 and 64). The flag is instead the share of raw solid in **fragments smaller than 3³ voxels** that the trim drops: 100 % for the 0.7-voxel gyroid sheet at N = 32 (592 fragments), 0.8 % for the spinodoid at N = 32, 0 for every other demo at 32 and 64. Flag above 5 %.
+- **Bounds in the checks.** A directional cell (bundle demo) conducts more along its fibres than the isotropic Hashin–Shtrikman bound. The checks therefore hold the direction-averaged κ to HS (the trace bound) and each axis to the series / parallel limits. The card's efficiency is mean κ ÷ HS+.
+- **Solid conductivity.** Library materials with `ks_WmK: null` (12 of 45) refuse with "no conductivity data"; designs with no library material use Ti-6Al-4V, 6.7 W/m·K.
+- **One filler switch for all cards** (VIEW strip) rather than one per card, so the three designs compare in the same environment.
+- Tolerance 1e-5 on ‖r‖ / ‖b‖ (f32); the conductivity error goes as the square of it.
+
+### 12.3 Validation done headless (SwiftShader)
+
+- **T9, GPU vs `solveThermalCPU` (Float64), N = 16:** every demo (Schwarz P, spinodoid, hyperuniform, BCC beams, bundle, wave), a closed Kelvin foam and a synthetic imported cell, × air / water / tissue: all 24 within rounding (0.000 %); Schwarz P in water also at N = 32 (2.813573 both). Asymmetry ≤ 2e-7, energy check ≤ 4e-7.
+- **T11:** air < tissue < water on every axis of every design above.
+- **Run loop** (solver stubbed): fillers solved per design, second run fully cached, unticking a filler re-solves nothing, a material without k_s refuses on the card, a material change re-solves, filler switch and flags render.
+- Not done here (Matt, on the RTX): timing, N = 32–128 checks, the worker pool and elastic reuse in a real browser, T12.
+
+### 12.4 For Matt's GPU (console on the lab page)
+
+- `await runThermalGPUCheck(32)`: T9 + T10 + T11 at N = 32 on five demos. PASS expected; prints per-solve ms.
+- `await runThermalBeamReference()`: BCC beams at N = 128 (§11.4 †), Ti/air and Cu/air κ_x, iterations, seconds.
+- `await thermalVoxelSelfTest()`: worker pool vs single thread on the hyperuniform demo; PASS = identical, plus both times.
+- A normal Run All with Thermal κ on; the console prints walls / per-filler times per design.

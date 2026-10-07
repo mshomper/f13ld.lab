@@ -1581,6 +1581,9 @@ async function solveDesignElasticFull(recipe, N, opts) {
     solid = pruneVoxels(solid, N, family, opts);
   }
   var tRast = performance.now() - t0;
+  /* v0.20.0 — the thermal phase (17c) reuses this design's raw and trimmed
+     cubes instead of voxelizing it again (no effect on the elastic solve). */
+  if (typeof thermalStashVoxels === 'function') thermalStashVoxels(recipe, N, opts, rawSolid, solid);
 
   var inside = 0;
   for (var v = 0; v < solid.length; v++) inside += solid[v];
@@ -1632,6 +1635,7 @@ async function solveDesignElasticFull(recipe, N, opts) {
   if (opts.partialVolume && typeof buildVoxelMargin === 'function') {
     var tPv0 = performance.now();
     var mg = buildVoxelMargin(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+    if (typeof thermalStashMargin === 'function') thermalStashMargin(recipe, N, opts, mg.m);   /* v0.20.0 — thermal reuses it */
     solid = voxelFractionsFromMargin(mg, N, solid, rawSolid, opts.pvSub || (N >= 128 ? 3 : 4));
     var insidePv = 0, nPart = 0;
     for (var vp = 0; vp < solid.length; vp++) { insidePv += solid[vp]; if (solid[vp] > 0 && solid[vp] < 1) nPart++; }

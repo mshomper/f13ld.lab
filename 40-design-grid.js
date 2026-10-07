@@ -83,14 +83,7 @@ function densityText(d){
    the layout does not jump, but no numbers until a solve produces them. */
 function preRunStats(d, mode){
   var p = ['run to compute', 'neut'];
-  if (mode === 'thermal'){
-    return [
-      { lbl:'Thermal Conductivity', val:'\u2014', delta:['solver not yet available', 'neut'] },
-      { lbl:'Relative Density',     val:densityText(d), delta:p },
-      { lbl:'Modulus Z',            val:'\u2014', delta:p },
-      { lbl:'Anisotropy',           val:'\u2014', delta:p }
-    ];
-  }
+  if (mode === 'thermal') return thermalStats(d);
   if (mode === 'buckle'){
     return [
       { lbl:'Buckling Strength',       val:'\u2014', delta:p },
@@ -149,6 +142,7 @@ function elasticNotConvergedText(r){
 
 function statsForDesign(d, mode){
   var r = d.results;
+  if (mode === 'thermal') return thermalStats(d);   /* v0.20.0 — reads THERMAL_BY_DESIGN, not d.results */
   if (!r){
     /* Sprint A — was [] (no drawer).  With no elastic results but buckling /
        nonlinear data present (elastic toggled off), fall through with an
@@ -211,14 +205,7 @@ function statsForDesign(d, mode){
     ];
   }
   // Thermal mode prioritizes κ
-  if (mode === 'thermal'){
-    return [
-      { lbl:'Thermal Conductivity', val:'\u2014',                            delta:['solver not yet available', 'neut'] },
-      { lbl:'Relative Density',     val:densityText(d),                      delta:['solver voxel \u03c1','neut'] },
-      { lbl:'Modulus Z',            val:fmtEngMPa(r.E33 * 1000),            delta:dv('E33') },
-      { lbl:'Anisotropy',           val:zVal,                                delta:[zDesc, 'neut'] }
-    ];
-  }
+  if (mode === 'thermal') return thermalStats(d);
   // Buckling mode — reads BUCKLE_BY_DESIGN (Run All buckling phase), not d.results.
   if (mode === 'buckle'){
     var modZ = fmtEngMPa(isFinite(r.E33) ? r.E33 * 1000 : NaN);
@@ -246,6 +233,81 @@ function statsForDesign(d, mode){
     ];
   }
   return [];
+}
+
+/* ── v0.20.0 — thermal κ card (THERMAL_BY_DESIGN, 50-controls) ─────────
+   One filler at a time: the "Pores filled with" switch in the VIEW strip
+   (VIEW_STATE.thermalFiller) picks which of the solved fillers the cards
+   show.  Flags per axis: not converged, no continuous solid path along the
+   axis (κ then comes mostly from the filler), filler-dominated (κ within 2×
+   of the filler's own k).  Under-resolved: more than THERMAL_FRAG_FLAG of the
+   solid broke into fragments under 3³ voxels that the island trim dropped,
+   i.e. features thinner than a voxel at this grid (THERMAL_SCOPE.md §11.5). */
+function fmtKappa(v){
+  if (!isFinite(v)) return '\u2014';
+  if (v >= 100) return v.toFixed(0) + ' W/m\u00b7K';
+  if (v >= 10)  return v.toFixed(1) + ' W/m\u00b7K';
+  if (v >= 1)   return v.toFixed(2) + ' W/m\u00b7K';
+  return v.toPrecision(3) + ' W/m\u00b7K';
+}
+function thermalFillerView(th){
+  var want = (typeof VIEW_STATE !== 'undefined' && VIEW_STATE.thermalFiller) || 'air';
+  if (th && th.byFiller && th.byFiller[want]) return want;
+  var order = ['air', 'water', 'tissue'];
+  for (var i = 0; i < order.length; i++) if (th && th.byFiller && th.byFiller[order[i]]) return order[i];
+  return want;
+}
+function thermalAxisDelta(th, f, ax){
+  var idx = 'xyz'.indexOf(ax), lc = f.perLC && f.perLC[idx], kv = [f.kx, f.ky, f.kz][idx];
+  if (lc && !lc.converged) return ['not converged \u00b7 ' + lc.iters + ' it', 'warn'];
+  if (th.wraps != null && !(th.wraps & (1 << idx))) return ['no solid path \u00b7 mostly filler', 'warn'];
+  if (kv < 2 * f.kF) return ['filler-dominated', 'warn'];
+  return [(kv / th.kS * 100).toFixed(1) + '% of solid', 'neut'];
+}
+function thermalStats(d){
+  var th = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[d.id] : null;
+  var fid = thermalFillerView(th), fl = (typeof thermalFillerById === 'function') ? thermalFillerById(fid) : null;
+  var f = th && !th.error && th.byFiller ? th.byFiller[fid] : null;
+  var dens = (th && !th.error && isFinite(th.rhoPhi))
+    ? { lbl:'Relative Density', val:th.rhoPhi.toFixed(2), delta:['thermal grid, surface voxels by volume', 'neut'] }
+    : { lbl:'Relative Density', val:densityText(d), delta:['solver voxel \u03c1','neut'] };
+  if (!f){
+    var note, cls = 'neut';
+    if (th && th.error){ note = th.error; cls = 'warn'; }
+    else if (th && th.byFiller) note = (fl ? fl.label : fid) + ' not solved \u00b7 tick it and Run';
+    else note = (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.thermal) ? 'run to compute' : 'enable Thermal \u03ba + Run';
+    var dash = ['\u2014', 'neut'];
+    return [
+      { lbl:'Conductivity X', val:'\u2014', delta:[note, cls] },
+      { lbl:'Conductivity Y', val:'\u2014', delta:dash },
+      { lbl:'Conductivity Z', val:'\u2014', delta:dash },
+      { lbl:'Share of Solid \u03ba', val:'\u2014', delta:dash },
+      { lbl:'Thermal Efficiency', val:'\u2014', delta:dash },
+      { lbl:'Anisotropy', val:'\u2014', delta:dash },
+      { lbl:'Diffusivity', val:'\u2014', delta:['needs heat-capacity data', 'neut'] },
+      dens
+    ];
+  }
+  var shareDelta = th.underResolved
+    ? ['under-resolved \u00b7 features under a voxel \u00b7 ' + Math.round(th.fragLoss * 100) + '% of solid dropped \u00b7 raise the grid', 'warn']
+    : ['mean of X, Y, Z \u00b7 pores: ' + (fl ? fl.label.toLowerCase() : fid), 'neut'];
+  return [
+    { lbl:'Conductivity X', val:fmtKappa(f.kx), delta:thermalAxisDelta(th, f, 'x') },
+    { lbl:'Conductivity Y', val:fmtKappa(f.ky), delta:thermalAxisDelta(th, f, 'y') },
+    { lbl:'Conductivity Z', val:fmtKappa(f.kz), delta:thermalAxisDelta(th, f, 'z') },
+    { lbl:'Share of Solid \u03ba', val:(f.kRel * 100).toFixed(1) + '%', delta:shareDelta },
+    { lbl:'Thermal Efficiency', val:(f.eff * 100).toFixed(0) + '%', delta:['of the most this density can conduct', 'neut'] },
+    { lbl:'Anisotropy', val:isFinite(f.anis) ? f.anis.toFixed(2) : '\u221e', delta:['\u03ba max / \u03ba min', 'neut'] },
+    { lbl:'Diffusivity', val:'\u2014', delta:['needs heat-capacity data', 'neut'] },
+    dens
+  ];
+}
+function thermalReadout(d){
+  var th = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[d.id] : null;
+  var fid = thermalFillerView(th), f = th && !th.error && th.byFiller ? th.byFiller[fid] : null;
+  if (!f) return (th && th.error) ? ('\u03ba \u2014 ' + th.error) : '\u03ba = \u2014 \u00b7 enable Thermal \u03ba + Run';
+  return '\u03ba ' + fmtKappa(f.kx).replace(' W/m\u00b7K', '') + ' / ' + fmtKappa(f.ky).replace(' W/m\u00b7K', '') + ' / ' +
+         fmtKappa(f.kz) + ' \u00b7 ' + fid + ' \u00b7 N=' + th.N;
 }
 
 function zenerDescriptor(z){
@@ -476,9 +538,9 @@ function renderDesignGrid(){
       }
     }
     else if (VIEW_STATE.mode === 'thermal'){
-      /* Sprint A — svgThermal(zener) drew a κ surface faked from the ELASTIC
-         anisotropy.  No thermal solver is wired, so say so plainly. */
-      svgInner = svgEmptyViewport('Thermal κ solver not yet available');
+      /* v0.20.0 — κ numbers are on the card; the 3-D temperature map is
+         thermal Phase 2 (Matt, 2026-10-07: viewport stays empty until then). */
+      svgInner = svgEmptyViewport('3-D temperature map arrives in the next update');
     }
     else if (VIEW_STATE.mode === 'buckle'){
       if (!useRM) {
@@ -1017,7 +1079,7 @@ function readoutForDesign(d, mode){
     }
     return 'E_max = — (not computed)';
   }
-  if (mode === 'thermal') return 'κ = — (solver not yet available)';   /* Sprint A — no thermal solver; was kappa_z*1.04 of mock data */
+  if (mode === 'thermal') return thermalReadout(d);   /* v0.20.0 */
   if (mode === 'buckle' && LAB_STATE.runHasCompleted){
     return r.lambda_cr === 0 ? 'λ_cr = — (not computed)'
                               : 'λ_cr = ' + r.lambda_cr.toFixed(2);

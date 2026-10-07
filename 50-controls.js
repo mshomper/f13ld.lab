@@ -48,6 +48,34 @@ var MATERIAL_STORE_KEY = 'f13ld.lab.material.v1';
    sigma_y(z) metric, and the P_cr/P_y seam (replaces provisional SIGMA_Y_TI64_MPA). */
 var NONLIN_BY_DESIGN = {};
 
+/* v0.20.0 — thermal κ (17b GPU solver, docs/THERMAL_SCOPE.md).
+   THERMAL_BY_DESIGN[id] = { base, N, kS, rho, rhoPhi, trimLoss, wraps,
+   underResolved, byFiller: { air|water|tissue: {...} } } | { error }.  Kept
+   out of d.results (the elastic pass rebuilds it) and out of localStorage
+   (temperature fields).  Fillers are cached one by one under the same base
+   signature, so ticking a filler back on never re-solves the others.
+   Temperature fields are kept for grids up to captureMaxN (the Phase 2 map
+   reads them; at 128³ they would be ~140 MB per design). */
+var THERMAL_STATE = { fillers: { air: true, water: true, tissue: true }, tol: 1e-5, maxiter: 3000, captureMaxN: 64 };
+var THERMAL_BY_DESIGN = {};
+var THERMAL_FRAG_FLAG = 0.05;   /* > 5 % of the solid in sub-3³-voxel fragments the island trim drops → under-resolved (Matt, 2026-10-07: trim stays on, flag it) */
+function thermalFillersOn(){
+  if (typeof THERMAL_FILLERS === 'undefined') return [];
+  return THERMAL_FILLERS.filter(function(f){ return !!THERMAL_STATE.fillers[f.id]; });
+}
+/* Solid conductivity for a run: the selected library material's ks_WmK
+   (null in the library = no data → thermal refuses), or the F13LD default
+   Ti-6Al-4V Grade 5 (6.7 W/m·K) for a design without a library material. */
+function thermalKsFor(recipe){
+  var m = recipe && recipe.material;
+  if (m && Object.prototype.hasOwnProperty.call(m, 'ks_WmK')) return (isFinite(m.ks_WmK) && m.ks_WmK > 0) ? m.ks_WmK : null;
+  return 6.7;
+}
+function onThermalFillerToggle(id, on){
+  THERMAL_STATE.fillers[id] = !!on;
+  recomputeEstimate();
+}
+
 /* v0.16.0 — per-axis crush results (id -> { base, xx, yy, zz }).  base is the
    N|cap|prune|recipe part of the cache signature: a run with a different base
    clears the design's axes, so every stored axis belongs to the same settings.
@@ -167,7 +195,7 @@ var RUN_STATE = {
 
 /* Phase-6 tie-up #4 — last run's measured per-mode wall-times (ms), surfaced
    to the console and folded into the next estimate via RUN_CALIB. */
-var RUN_TIMING = { elastic: 0, nonlinear: 0, buckling: 0 };
+var RUN_TIMING = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0 };
 
 /* ============================================================
    PHYSICS TOGGLES
@@ -307,7 +335,8 @@ var RUN_REF = {
   elastic:   { sec: 2.0,  refN: 64 },   /* full-Voigt 6-LC @ N=64 */
   buckling:  { sec: 25.0, refN: 32 },   /* v0.8.0 voxel FE, 3-axis pool @ N=32: Schwarz P (dense) 34 s / axis in a
                                            slow single-thread sandbox, axes in parallel; sheets ~12 s */
-  nonlinear: { sec: 90.0, refN: 16, refCap: 0.05 }  /* sync-bound crush @ N=16, 5% cap */
+  nonlinear: { sec: 90.0, refN: 16, refCap: 0.05 }, /* sync-bound crush @ N=16, 5% cap */
+  thermal:   { sec: 2.0,  refN: 64 }   /* v0.20.0 — per filler, incl. its share of the wall-voxel build (uncalibrated guess) */
 };
 
 /* Calibration: measured seconds-per-design keyed by mode → { sec, N, cap }.
@@ -344,7 +373,10 @@ function modePerDesignSec(mode){
     if (cal){ return cal.sec * gridScale(nN, cal.N) * (cap / (cal.cap || 0.05)); }
     return ref.sec * gridScale(nN, ref.refN) * (cap / ref.refCap);
   }
-  if (mode === 'thermal') return 1.0;
+  if (mode === 'thermal'){
+    var tN = GRID_STATE.N, nF = Math.max(1, thermalFillersOn().length);
+    return nF * (cal ? cal.sec * gridScale(tN, cal.N) : ref.sec * gridScale(tN, ref.refN));
+  }
   return 0;
 }
 
@@ -498,18 +530,20 @@ async function runRealSweep(N, runToken){
      shared RUN_STATE.cancelled flag (which a new run used to reset to false,
      letting a cancelled sweep resume alongside it). */
   function stale(){ return runToken !== RUN_STATE.token; }
-  var nFresh = { elastic: 0, nonlinear: 0, buckling: 0 };   /* Sprint A — calibrate on fresh solves only */
+  var nFresh = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0 };   /* Sprint A — calibrate on fresh solves only (thermal: per filler) */
 
   var doElastic = !!PHYS_STATE.elastic;
   var doBuckle  = !!PHYS_STATE.buckle;
   var doNonlin  = !!PHYS_STATE.nonlin && typeof NonlinearSolverFull === 'function';
+  var thFill    = thermalFillersOn();
+  var doThermal = !!PHYS_STATE.thermal && typeof homogenizeThermalGPU === 'function' && thFill.length > 0;   /* v0.20.0 */
 
   /* WebGPU is required only for the elastic / GPU path. */
-  if ((doElastic || doNonlin) && typeof ensureDevice === 'function'){   /* Sprint A — nonlinear builds an FFTPlan too */
+  if ((doElastic || doNonlin || doThermal) && typeof ensureDevice === 'function'){   /* Sprint A — nonlinear builds an FFTPlan too */
     var ok = false;
     try { ok = await ensureDevice(); } catch (e) { ok = false; }
     if (stale()) return;
-    if (!ok && !doElastic){ doNonlin = false; ok = true; console.warn('[run] WebGPU unavailable — skipping nonlinear'); }
+    if (!ok && !doElastic){ doNonlin = false; doThermal = false; ok = true; console.warn('[run] WebGPU unavailable — skipping nonlinear and thermal'); }
     if (!ok){
       paintRunStatus('WebGPU unavailable — cannot run real elastic solver');
       paintSolverPill('webgpu unavailable', 'bad');
@@ -533,9 +567,11 @@ async function runRealSweep(N, runToken){
   var nNonlinDesigns = 0;
   if (doNonlin){ for (var npi = 0; npi < nDesigns; npi++){ if (recipes[npi]) nNonlinDesigns++; } }
   var nlRunAxes = nlAxesToRun();
+  var nThermalDesigns = 0;
+  if (doThermal){ for (var tpi = 0; tpi < nDesigns; tpi++){ if (recipes[tpi]) nThermalDesigns++; } }
 
   /* Progress in work-units: 1 per elastic design + 3 per buckled design. */
-  var totalUnits = (doElastic ? nDesigns : 0) + (doNonlin ? nNonlinDesigns * 4 * nlRunAxes.length : 0) + (doBuckle ? nBuckleDesigns * 3 : 0);
+  var totalUnits = (doElastic ? nDesigns : 0) + (doNonlin ? nNonlinDesigns * 4 * nlRunAxes.length : 0) + (doBuckle ? nBuckleDesigns * 3 : 0) + (doThermal ? nThermalDesigns * thFill.length : 0);
   if (totalUnits < 1) totalUnits = 1;
   var doneUnits = 0;
   function bumpProgress(){ RUN_STATE.progress = doneUnits / totalUnits; paintRunProgress(RUN_STATE.progress); }
@@ -817,9 +853,72 @@ async function runRealSweep(N, runToken){
   }
 
   RUN_TIMING.buckling = performance.now() - tBk0;
+  var tTh0 = performance.now();
+  /* ---------- Phase 4 · Thermal κ (GPU, 17b) — v0.20.0 ----------
+     Same grid as the elastic run.  Wall voxels (solid fraction + normal) are
+     built once per design on the CPU worker pool (17c, reusing the elastic
+     run's voxels and margin when it just made them), then one GPU solve per
+     ticked filler, all three axes together. */
+  if (doThermal && nThermalDesigns > 0){
+    for (var ti = 0; ti < nDesigns; ti++){
+      if (stale()) return;
+      var dt = designs[ti], rt = recipes[ti];
+      if (!rt) continue;
+      RUN_STATE.currentIndex = ti;
+      var kS = thermalKsFor(rt);
+      if (!(kS > 0)){
+        THERMAL_BY_DESIGN[dt.id] = { error: 'no conductivity data for this material', noData: true, N: N };
+        doneUnits += thFill.length; bumpProgress();
+        continue;
+      }
+      var thBase = 'N' + N + '|p' + GEOM_STATE.connectivity + '|tol' + THERMAL_STATE.tol + '|ks' + kS + '|' + THERMAL_GPU_VERSION + '|r' + recipeFp[ti];
+      var thEx = THERMAL_BY_DESIGN[dt.id];
+      if (!thEx || thEx.error || thEx.base !== thBase) thEx = { base: thBase, N: N, kS: kS, byFiller: {} };
+      var thNeed = thFill.filter(function(f){ return !thEx.byFiller[f.id]; });
+      THERMAL_BY_DESIGN[dt.id] = thEx;
+      doneUnits += thFill.length - thNeed.length; bumpProgress();
+      if (!thNeed.length){
+        paintRunStatus('<span class="v">Thermal</span> · Design ' + dletter(dt, ti) + ' · cached');
+        continue;
+      }
+      paintRunStatus('<span class="v">Thermal</span> · Design ' + dletter(dt, ti) + ' · N=' + N + ' · building wall voxels…');
+      renderDesignGrid();
+      var thCount = 0;
+      try {
+        var TR = await homogenizeThermalGPU(rt, N, Object.assign({}, connOpts(), {
+          kS: kS, fillers: thNeed, tol: THERMAL_STATE.tol, maxiter: THERMAL_STATE.maxiter, capture: N <= THERMAL_STATE.captureMaxN,
+          onVoxelProgress: (function(dd, ii){ return function(p){
+            if (!stale()) paintRunStatus('<span class="v">Thermal</span> · Design ' + dletter(dd, ii) + ' · N=' + N + ' · wall voxels ' + p.done + '/' + p.total);
+          }; })(dt, ti),
+          onProgress: (function(dd, ii){ return function(p){
+            if (stale()) return;
+            if (p.index > 0){ doneUnits++; thCount++; bumpProgress(); }
+            var fl = thermalFillerById(p.filler);
+            paintRunStatus('<span class="v">Thermal</span> · Design ' + dletter(dd, ii) + ' · N=' + N + ' · ' + (fl ? fl.label.toLowerCase() : p.filler) + ' in the pores (' + (p.index + 1) + '/' + p.total + ') · solving…');
+          }; })(dt, ti)
+        }));
+        if (stale()) return;
+        thEx.rho = TR.rho; thEx.rhoPhi = TR.rhoPhi; thEx.rhoRaw = TR.rhoRaw; thEx.trimLoss = TR.trimLoss; thEx.wraps = TR.wraps;
+        thEx.nSurf = TR.nSurf; thEx.t_voxels_ms = TR.t_voxels_ms; thEx.voxReuse = TR.voxReuse;
+        thEx.fragLoss = TR.fragLoss;
+        thEx.underResolved = TR.fragLoss > THERMAL_FRAG_FLAG;
+        for (var fk in TR.byFiller) thEx.byFiller[fk] = TR.byFiller[fk];
+        nFresh.thermal += thNeed.length;
+        console.log('[thermal] ' + (dt.label || dt.id) + ' · N=' + N + ' · walls ' + (TR.t_voxels_ms / 1000).toFixed(1) + ' s (' + TR.voxReuse + ' reused, ' + TR.voxWorkers + ' workers) · ' +
+                    thNeed.map(function(f){ var g = TR.byFiller[f.id]; return f.id + ' ' + (g.t_ms / 1000).toFixed(2) + ' s ' + g.perLC.map(function(q){ return q.iters; }).join('/') + ' it'; }).join(' · '));
+      } catch (err){
+        if (stale()) return;
+        console.error('[run] design ' + dt.id + ' thermal solve failed:', err);
+        THERMAL_BY_DESIGN[dt.id] = { error: 'thermal solve failed: ' + ((err && err.message) || err), N: N };
+      }
+      doneUnits += thNeed.length - thCount; bumpProgress();
+      renderDesignGrid();
+    }
+  }
+  RUN_TIMING.thermal = performance.now() - tTh0;
+
   /* ---------- Unimplemented modes: honest status, no fake numbers ---------- */
   var notWired = [];
-  if (PHYS_STATE.thermal) notWired.push('Thermal');
 
   /* tie-up #4 — fold measured per-mode wall-times into the calibration store
      so the next estimate is machine-accurate; log the actuals to the console. */
@@ -829,10 +928,12 @@ async function runRealSweep(N, runToken){
     if (doElastic && nFresh.elastic > 0)   RUN_CALIB.elastic   = { sec: (RUN_TIMING.elastic   / 1000) / nFresh.elastic,   N: N };
     if (doNonlin && nFresh.nonlinear > 0)  RUN_CALIB.nonlinear = { sec: (RUN_TIMING.nonlinear / 1000) / nFresh.nonlinear, N: NONLIN_STATE.N, cap: NONLIN_STATE.cap };
     if (doBuckle && nFresh.buckling > 0)   RUN_CALIB.buckling  = { sec: (RUN_TIMING.buckling  / 1000) / nFresh.buckling,  N: BUCKLE_STATE.N };
+    if (doThermal && nFresh.thermal > 0)   RUN_CALIB.thermal   = { sec: (RUN_TIMING.thermal   / 1000) / nFresh.thermal,   N: N };   /* per filler solve */
     saveRunCalib();
     console.log('[run] per-mode wall-time (s) — elastic ' + (RUN_TIMING.elastic/1000).toFixed(1) +
                 ' · nonlinear ' + (RUN_TIMING.nonlinear/1000).toFixed(1) +
-                ' · buckling ' + (RUN_TIMING.buckling/1000).toFixed(1));
+                ' · buckling ' + (RUN_TIMING.buckling/1000).toFixed(1) +
+                ' · thermal ' + (RUN_TIMING.thermal/1000).toFixed(1));
     recomputeEstimate();   /* refresh the headline Est. with the just-measured calibration */
   }
 
@@ -849,6 +950,17 @@ async function runRealSweep(N, runToken){
       if (br && br.skip_reason) bkSkipped.push(designs[bsk].label || designs[bsk].id);
     }
     if (bkSkipped.length) msg += ' · <span class="warn">Buckling under-resolved — raise grid: ' + bkSkipped.join(', ') + '</span>';
+  }
+  if (doThermal && nThermalDesigns > 0){   /* v0.20.0 */
+    var thUnder = [], thErr = [];
+    for (var tsk = 0; tsk < nDesigns; tsk++){
+      var tr = THERMAL_BY_DESIGN[designs[tsk].id];
+      if (!recipes[tsk] || !tr) continue;
+      if (tr.error) thErr.push(designs[tsk].label || designs[tsk].id);
+      else if (tr.underResolved) thUnder.push(designs[tsk].label || designs[tsk].id);
+    }
+    if (thUnder.length) msg += ' · <span class="warn">Thermal under-resolved — raise grid: ' + thUnder.join(', ') + '</span>';
+    if (thErr.length) msg += ' · <span class="warn">Thermal not computed: ' + thErr.join(', ') + '</span>';
   }
   paintRunStatus(msg);
   finishRun(runToken);

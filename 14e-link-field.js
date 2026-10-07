@@ -96,7 +96,10 @@ function voxelTensorsFromMargin(mg, N, kept, raw, opts) {
   var ns = LINK_CELL_SUB, hs = h / ns, gd = 0.25 * h, cm = new Float64Array(ns * ns * ns), c = new Float64Array(8);
   function isTrimmed(id) { return raw && raw[id] > 0.5 && !(kept[id] > 0.5); }
   var nSurf = 0, nPlane = 0;
-  for (var i = 0; i < N; i++) {
+  /* v0.20.0 — opts.iRange [i0, i1): only those x-slabs (the thermal voxel
+     workers split the grid this way; the caller merges the slabs). */
+  var iLo = opts.iRange ? opts.iRange[0] : 0, iHi = opts.iRange ? opts.iRange[1] : N;
+  for (var i = iLo; i < iHi; i++) {
     var i1 = (i + 1) % N;
     for (var j = 0; j < N; j++) {
       var j1 = (j + 1) % N;

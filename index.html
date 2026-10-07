@@ -43,7 +43,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.19.3</span>
+      <span class="fh-version">v0.20.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -79,6 +79,13 @@
       <button class="stress-norm-btn" data-norm="shared"
               onclick="onStressNormToggleClick('shared')"
               title="Shared scale across designs. Global p95 cap, linear cividis. 'Yellow' means the same σ_VM everywhere — for cross-design comparison.">shared</button>
+    </div>
+    <!-- v0.20.0 — which solved pore filler the thermal cards show (thermal tab only) -->
+    <div class="stress-norm-toggle-group" id="thermalFillerToggle">
+      <span class="stress-norm-label">Pores filled with</span>
+      <button class="stress-norm-btn active" data-filler="air" onclick="onThermalFillerView('air')" title="Air at 37 °C, k = 0.027 W/m·K: bench tests, heat exchangers, a part before implantation">air</button>
+      <button class="stress-norm-btn" data-filler="water" onclick="onThermalFillerView('water')" title="Water at 37 °C, k = 0.63 W/m·K: saline or culture medium in the pores, wet testing">water</button>
+      <button class="stress-norm-btn" data-filler="tissue" onclick="onThermalFillerView('tissue')" title="Soft tissue, k = 0.5 W/m·K: an implant in the body, pores filled with ingrown tissue or marrow">tissue</button>
     </div>
     <div class="right">
       <span class="pill" id="loadedPill">3 of 3 designs loaded</span>
@@ -118,6 +125,12 @@
         <div class="phys-toggle on" data-phys="buckle"  onclick="onPhysToggle(this)"><span class="check">✓</span>Buckling</div>
         <div class="phys-toggle on" data-phys="nonlin"  onclick="onPhysToggle(this)"><span class="check">✓</span>Nonlinear · J2 plasticity</div>
         <div class="phys-toggle"    data-phys="thermal" onclick="onPhysToggle(this)"><span class="check">✓</span>Thermal κ</div>
+        <div class="spec-pill" id="thermalFillPill" title="What fills the pores in the thermal κ solve. Each ticked filler is a separate, fast solve; the cards switch between them with 'Pores filled with' on the Thermal κ tab. No vacuum option: no real part sits in one.">
+          <span class="key">Thermal fillers</span>
+          <label style="margin-left:6px"><input type="checkbox" checked onchange="onThermalFillerToggle('air', this.checked)"> air</label>
+          <label style="margin-left:6px"><input type="checkbox" checked onchange="onThermalFillerToggle('water', this.checked)"> water</label>
+          <label style="margin-left:6px"><input type="checkbox" checked onchange="onThermalFillerToggle('tissue', this.checked)"> tissue</label>
+        </div>
         <div class="spec-pill" id="connPill" title="Which connected pieces of the voxelized cell are analyzed. All networks: every network that runs continuously through the tiled structure (e.g. both sides of an interwoven PI-TPMS), floating islands removed. Largest network: one side of a weave only. Keep everything: no removal (buckling still removes floating islands — they are free bodies).">
           <span class="key">Connectivity</span>
           <select id="connSel" onchange="onConnectivityChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;">
@@ -212,6 +225,8 @@
 <script src="16g-nonlinear-solver.js"></script>
 <script src="16i-elastic-fast.js"></script>
 <script src="17a-thermal-cpu-ref.js"></script>
+<script src="17b-thermal-solver.js"></script>
+<script src="17c-thermal-voxel-pool.js"></script>
 <script src="18-stokes-cpu-ref.js"></script>
 <script src="19-stokes-solver.js"></script>
 <script src="20-svg-mocks.js"></script>

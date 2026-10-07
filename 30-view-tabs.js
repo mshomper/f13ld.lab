@@ -15,8 +15,17 @@ var VIEW_STATE = {
   loadAxis:   { /* designId: 'xx'|'yy'|'zz'|'yz'|'xz'|'xy' */ },  // A.2.2 / Piece B — per-design active load axis (Voigt)
   stressNormMode: 'per',                   // A.3.3 — 'per' (auto per-design) | 'shared' (global p95, linear)
   stressSat:  { /* designId: 0..2 */ },    // 4b — per-design saturation multiplier on auto p95 cap
-  buckleExag: { /* designId: 0..30 */ }    // buckling tab mode-shape exaggeration (% of cell), default 10
+  buckleExag: { /* designId: 0..30 */ },   // buckling tab mode-shape exaggeration (% of cell), default 10
+  thermalFiller: 'air'                      // v0.20.0 — which solved pore filler the thermal cards show
 };
+
+/* v0.20.0 — "Pores filled with" switch (Thermal κ tab). */
+function onThermalFillerView(id){
+  VIEW_STATE.thermalFiller = id;
+  var btns = document.querySelectorAll('#thermalFillerToggle .stress-norm-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', btns[i].dataset.filler === id);
+  if (typeof renderDesignGrid === 'function') renderDesignGrid();
+}
 
 /* ----------------------------------------------------------
    Click handler for view tabs. Updates global mode and
@@ -53,6 +62,9 @@ function onViewModeClick(mode){
       else if (mode === 'stress') labelEl.textContent = 'σ_VM scale';
     }
   }
+
+  var fillGroup = document.getElementById('thermalFillerToggle');   /* v0.20.0 */
+  if (fillGroup) fillGroup.classList.toggle('show', mode === 'thermal');
 
   // Re-render
   if (typeof renderDesignGrid === 'function') renderDesignGrid();
