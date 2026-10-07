@@ -5,7 +5,7 @@ authors:
   - family-names: Shomper
     given-names: Matthew
     orcid: "https://orcid.org/0009-0002-5312-2864"
-version: "0.19.0"
+version: "0.19.1"
 date-released: "2026-10-07"
 license-url: "https://polyformproject.org/licenses/noncommercial/1.0.0"
 repository-code: "https://github.com/mshomper/f13ld.lab"

@@ -1075,7 +1075,10 @@ NonlinearSolverFull.prototype.crushStress = async function (axis, opts) {
         console.warn('[crush] salvaged sigma_y_eff=' + ySalv.sigma.toFixed(1) + ' MPa from ' + curve.length + ' steps (truncated at eps=' + eAxis.toFixed(4) + ')');
         return { rho: this.rho, axis: axis, control: 'stress', curve: curve, sigma_y_eff: ySalv.sigma, yielded: true, E0: E0, N: this.N, truncated: true, truncReason: 'diverged', atStep: step + 1, eAxisMax: eAxis, epsCap: capEps, alphaSteps: alphaSteps, alphaMax: alphaMax, lateralResMax: lateralResMax };
       }
-      return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis, atStep: step + 1, eAxis: eAxis, lastRelRes: res ? res.relRes : null };
+      /* v0.19.1 — carry what a partial (pre-yield) result needs, so the run
+         loop can keep the accepted steps instead of dropping the design */
+      return { error: 'newton_diverged', rho: this.rho, curve: curve, axis: axis, atStep: step + 1, eAxis: eAxis, lastRelRes: res ? res.relRes : null,
+               E0: E0, N: this.N, eAxisMax: eAxis, epsCap: capEps, alphaSteps: alphaSteps, alphaMax: alphaMax, lateralResMax: lateralResMax, lateralFloor: latFloor };
     }
     if (this._predictOn) {   /* shift the predictor history: pp <- field at this step's start */
       var encH = d.createCommandEncoder();

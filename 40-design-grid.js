@@ -193,8 +193,8 @@ function statsForDesign(d, mode){
       yDelta = [(nld.axis||'zz').toUpperCase() + (nld.truncated ? ' · partial' : (nAx > 1 ? ' · weakest of ' + nAx : ' · crush')), 'neut'];
     } else if (nld && !nld.error) {
       yVal = isFinite(nld.sigmaCap) ? ('> ' + fmtEngMPa(nld.sigmaCap)) : 'no yield';
-      yDelta = (nld.truncReason === 'step-budget' && isFinite(nld.eAxisMax))
-        ? ['stopped at ε=' + (nld.eAxisMax*100).toFixed(2) + '% (step budget) · no yield in range reached', 'warn']
+      yDelta = ((nld.truncReason === 'step-budget' || nld.truncReason === 'diverged') && isFinite(nld.eAxisMax))
+        ? ['stopped at ε=' + (nld.eAxisMax*100).toFixed(2) + '% (' + (nld.truncReason === 'diverged' ? 'solver diverged' : 'step budget') + ') · no yield reached', 'warn']
         : ['no yield · ≤ ' + Math.round((nld.epsCap||0.05)*100) + '% strain', 'neut'];
     } else {
       yVal = fmtComputed(r.sigma_y_z, ' MPa', 1);

@@ -713,6 +713,25 @@ async function runRealSweep(N, runToken){
             paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · ' + axLbl + ' · tighter solve…');
             nlOut = await runCrush(true, axKey, axStore, nlVoid, onNlStep);
           }
+          /* v0.19.1 — a crush whose field solve diverges before yield is retried
+             once at the tighter step tolerance (compliant designs creep up to the
+             f32 precision floor — the same cure as the side-stress restart above) */
+          if (nlOut && nlOut.error === 'newton_diverged' && !nlTight && !stale()){
+            console.log('[run] ' + dn.id + ' ' + axKey + ': field solve diverged at ε=' + ((nlOut.eAxis || 0) * 100).toFixed(2) + '% before yield — re-running the crush at the tighter step tolerance (newtonTol ' + NL_TIGHT_NEWTON_TOL + '), reusing the elastic setup');
+            paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · ' + axLbl + ' · diverged · tighter solve…');
+            axStore._tight = nlTight = true;
+            var firstDiv = nlOut;
+            nlOut = await runCrush(true, axKey, axStore, nlVoid, onNlStep);
+            /* the tight run diverging earlier than the first: keep the longer curve */
+            if (nlOut && nlOut.error === 'newton_diverged' && firstDiv.curve && nlOut.curve && firstDiv.curve.length > nlOut.curve.length) nlOut = firstDiv;
+          }
+          /* v0.19.1 — still diverged: keep the accepted steps as a partial curve
+             (no yield reached, stopped at eAxisMax) instead of dropping the design */
+          if (nlOut && nlOut.error === 'newton_diverged' && nlOut.curve && nlOut.curve.length >= 2 && isFinite(nlOut.E0)){
+            var lastPt = nlOut.curve[nlOut.curve.length - 1];
+            console.warn('[run] ' + dn.id + ' ' + axKey + ': crush stopped at ε=' + (lastPt.eps * 100).toFixed(2) + '% (σ=' + lastPt.sigma.toFixed(1) + ' MPa) before yield — kept as a partial curve');
+            nlOut = Object.assign({}, nlOut, { error: null, sigma_y_eff: lastPt.sigma, yielded: false, truncated: true, truncReason: 'diverged' });
+          }
         } catch (e){ nlErr = e; if (!stale()) console.error('[run] nonlinear solve failed for ' + dn.id + ' (' + axKey + '):', e); }
         if (stale()) return;
 

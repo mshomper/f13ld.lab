@@ -1,6 +1,8 @@
 # F13LD.lab — Next Steps (session handoff)
 
 
+> **2026-10-07 · v0.19.1** — crush: a field-solve divergence before yield is retried once at the tight step tolerance (reusing the elastic setup), and if it still diverges the accepted steps are kept as a partial curve (`truncReason: 'diverged'`, no yield) instead of an error that dropped the design from the plot (Matt's compliant design, N = 64, Z, diverged at ε 3.83 %).
+>
 > **2026-10-07 · v0.19.0** — normal runs (with fields) on the fast elastic path; thinnest feature in cell units and mm in the sweep CSV; sweep builder steps by thinnest feature (mm); partial-volume voxels, on by default — grid-converged by N = 64 on the GPU check ([`PARTIAL_VOLUME.md`](PARTIAL_VOLUME.md)); fast-path Γ rebind fix. Scopes for the next physics: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md), [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md).
 >
 > **2026-10-06 · v0.18.0** — viewer: design cards use the shared F13LD shading (`20c-f13-shade.js`, same block as every F13LD tool) in each design's family color, with a shared "◐ view" menu in the VIEW strip; stress/buckling colormaps keep neutral lighting. Geometry texture is now R16F (was R8) and foam/noise/grain refine to 96³/96³/80³ in the background after the 48³ preview (display only — the solver voxelizes separately).
