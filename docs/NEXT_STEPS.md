@@ -194,8 +194,8 @@ Also:
 
 **New solvers**
 
-- **Thermal κ** — scalar subset of the elastic FFT-CG; a stub today.
-- **Stokes** — wire it in; needs a preconditioner (the default maxiter 100 returns K 2.7× low).
+- **Thermal κ** — scalar subset of the elastic FFT-CG; a stub today. Scoped in [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) (2026-10-07): conductivity tensor, 3-D temperature map, sub-voxel walls.
+- **Fluids (LBM)** — replaces the Stokes solver, which Matt does not trust and nothing calls. Scoped in [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md) (2026-10-07): wall shear stress for biocompatibility, permeability, live flow-rate and direction rescaling. Thermal goes first (shared signed-field and section-plane work).
 
 **UI and roadmap**
 
