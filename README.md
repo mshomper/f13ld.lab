@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.19.2 · alpha · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.19.3 · alpha · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** [PolyForm Noncommercial 1.0.0](./LICENSE.md): free for research and non-commercial use; anyone may run it to reproduce published results (see [NOTICE](./NOTICE)). Commercial licences: matt@notarobot-eng.com
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -39,6 +39,10 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckle pill now offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (the Nonlin pill, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Crush axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.19.3
+
+**Thermal, Phase 0 (groundwork, nothing visible yet).** A Float64 reference solver for the effective thermal conductivity tensor (`17a-thermal-cpu-ref.js`) and the sub-voxel wall data it needs (`14e-link-field.js`). Each voxel the surface passes through gets its solid fraction and wall normal, and conducts as a small laminate: freely along the wall, in series across it. The solver works on the same rotated grid as the stiffness solver, so walls at any angle to the grid are exact, and a 6 % sheet gyroid is within 3 % of its N = 128 value at N = 64. Pore fillers: air, water and tissue (0.5 W/m·K). Validation and results: [`docs/THERMAL_SCOPE.md`](./docs/THERMAL_SCOPE.md) §11. The GPU solver, cards and the 3-D temperature map follow in v0.20.0.
 
 ## What's new in v0.19.2
 
