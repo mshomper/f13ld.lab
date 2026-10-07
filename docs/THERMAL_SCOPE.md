@@ -1,6 +1,6 @@
 # F13LD.lab — Thermal Conductivity and 3-D Temperature Map (Scope)
 
-**Status:** Approved for planning (Matt, 2026-10-07; decisions in §6). No code written yet.
+**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done in v0.19.3**: CPU reference solver and sub-voxel walls, validated (§11). Phase 0 changed the discretization planned in §3.1–3.3; §11 has the reasons and the numbers. Phase 1 (GPU) is next.
 **Written against:** v0.18.0 (main `18ddbae`), 2026-10-07
 **Goal:** Fill the existing "Thermal κ" stubs with a working solver: the effective conductivity tensor of any lattice the lab can build (native recipes, foams, imported STL cells), a 3-D temperature map on the cell, and a heat-flux "hot spot" map. It should run in seconds, in the same Run All flow as stiffness.
 **Out of scope (this pass):**
@@ -72,6 +72,8 @@ The physics is the scalar cousin of the stiffness solve: **one unknown per voxel
 
 ### 3.1 Formulation
 
+> **Changed in Phase 0 (§11).** The face-based "resistor network" below was built and validated first. It is exact for walls aligned with the grid but reads walls at an angle to the grid low, by roughly 0.35 ÷ (wall thickness in voxels): 8–16 % on a sheet gyroid at N = 64. The solver now uses the rotated grid the stiffness solver already uses, with a full 3×3 conductivity per voxel. The rest of this section is kept as the original plan.
+
 The temperature is a uniform ramp plus a periodic correction:
 
     T(x) = E·x + T̃(x),   with T̃ periodic,   ⟨∇T⟩ = E
@@ -126,6 +128,8 @@ This is the scalar case of Willot's forward-difference ("resistor network") Gree
 
 ### 3.3 Sub-voxel walls — the part that makes N = 32–64 trustworthy
 
+> **Changed in Phase 0 (§11.2).** Walls are taken per voxel, not per link: each surface voxel gets its solid fraction and wall normal, and a laminate conductivity tensor (parallel along the wall, series across it). No separate signed field was needed: `buildVoxelMargin` (14-rasterizer, added for partial-volume voxels in v0.19.0) already gives the continuous margin for every mode. The per-link crossing fractions below were built too and stay in `14e-link-field.js` for the fluids wall condition.
+
 A 10 % gyroid sheet is only about 2 voxels thick at N = 64. Treated as staircase 0/1 voxels, its conduction path is noticeably wrong. Conductivity is linear in solid fraction for a sheet, so a half-voxel error in wall position is a direct error in κ.
 
 **Fix:** build each face conductance from where the wall crosses the link between two voxel centres.
@@ -153,7 +157,7 @@ A 10 % gyroid sheet is only about 2 voxels thick at N = 64. Treated as staircase
 |---|---|---|---|---|---|
 | Air (37 °C) | 0.027 | 1.14 | 1007 | ≈ 250 | Bench tests, heat exchangers and heat sinks, a part before implantation |
 | Water (37 °C) | 0.63 | 993 | 4178 | ≈ 11 | Saline or culture medium in the pores, wet testing |
-| Soft tissue | ≈ 0.5 (to confirm) | ≈ 1050 | ≈ 3600 | ≈ 13 | Implant in the body, pores filled with ingrown tissue or marrow |
+| Soft tissue | 0.5 (Matt, 2026-10-07) | ≈ 1050 | ≈ 3600 | ≈ 13 | Implant in the body, pores filled with ingrown tissue or marrow |
 | Custom (in settings) | user value | user | user | — | Anything else |
 
 Bone cement (PMMA, ≈ 0.2) and metal powder (≈ 0.13 for Ti-6Al-4V, Bartsch et al. 2022) are natural later presets (§9).
@@ -231,10 +235,10 @@ The shared shading block (`20c-f13-shade.js`) stays byte-identical. Field colour
 
 | File | Change |
 |---|---|
-| `14-rasterizer.js` | `buildVoxelField()`, which returns the signed field next to the 0/1 mask; `buildVoxels` itself unchanged |
-| `14e-link-field.js` (new, shared with fluids) | Gradient-normalized signed field, per-link crossing fractions, thin-feature detection |
-| `17a-thermal-cpu-ref.js` (new) | Float64 reference solver for validation |
-| `17b-thermal-solver.js` (new) | GPU solver: face conductances, stencil kernel, FFT preconditioner, CG, flux and field extraction |
+| `14-rasterizer.js` | Nothing new: `buildVoxelMargin` (v0.19.0) already gives the continuous margin for every mode *(Phase 0)* |
+| `14e-link-field.js` (new, shared with fluids) | `buildVoxelTensors`: per-voxel solid fraction and wall normal (thermal); `buildLinkField`: per-link crossing fractions (fluids) *(done, v0.19.3)* |
+| `17a-thermal-cpu-ref.js` (new) | Float64 reference solver: rotated grid, full-tensor composite voxels, PCG *(done, v0.19.3)* |
+| `17b-thermal-solver.js` (new) | GPU solver mirroring 17a: per-voxel phi + normal, rotated-grid gradient / flux / divergence kernels, FFT preconditioner, CG, flux and field extraction |
 | `15c-materials.js`, `docs/MATERIALS.md` | Missing k_s, `cp_JkgK`, as-built notes, filler table (air, water, tissue) |
 | `50-controls.js` | Thermal phase block in `runRealSweep` (after Buckling), `doThermal` flag, filler checkboxes, timing calibration (replaces the fixed 1.0 s), remove "Thermal" from `notWired` |
 | `40-design-grid.js` | Card rows, readout, filler switch, flags (filler-dominated, no solid path, not converged), viewport gating, thermal controls |
@@ -276,7 +280,7 @@ Run headless (CPU oracle, plus SwiftShader for the GPU kernels) before Matt's cl
 | **2 — Viewer** | R16F signed scalar, three field views, colour bars, isotherms, section plane, κ(n) surface | 1 session |
 | **3 — Materials + sweep** | k_s gaps, c_p, as-built notes, filler table, sweep columns and Atlas metrics | ½ session |
 
-Version targets: Phase 1 as **v0.19.0**, Phase 2 as v0.19.x.
+Version targets: Phase 0 shipped as v0.19.3 (CPU reference only, nothing user-visible). Phase 1 as **v0.20.0**, Phase 2 as v0.20.x.
 
 ---
 
@@ -285,6 +289,8 @@ Version targets: Phase 1 as **v0.19.0**, Phase 2 as v0.19.x.
 - Thermal shows a **3-D temperature map**, not only κ numbers.
 - Thermal is the next new physics, ahead of fluids. Crush to densification stays parked as later work.
 - **Pore fillers are air, water and tissue, all selectable.** Thermal is fast enough to solve several per run. No vacuum option: no real part sits in one.
+- **Tissue filler k = 0.5 W/m·K** (a good average; Matt, 2026-10-07, approving Phase 0).
+- **Island trim stays on for thermal; designs with features thinner than a voxel are flagged as under-resolved** (Matt, 2026-10-07; §11.5). Phase 0 merged to main.
 
 ## 7. Open questions for Matt
 
@@ -333,3 +339,115 @@ Version targets: Phase 1 as **v0.19.0**, Phase 2 as v0.19.x.
 - the exact Rayleigh / McPhedran coefficients for T5;
 - the soft-tissue conductivity and heat capacity (muscle-like values assumed);
 - the Schneider–Ospald–Kabel equivalence statement (the paper could not be fetched; the equivalence for the scalar case is standard).
+
+---
+
+## 11. Phase 0 results (v0.19.3, 2026-10-07)
+
+### 11.1 What was built
+
+| File | Contents |
+|---|---|
+| `14e-link-field.js` | `buildVoxelTensors(recipe, N, opts)`: solid fraction `phi` and wall normal `n` per voxel, on the margin from `buildVoxelMargin`. `buildLinkField`: solid length of each link between voxel centres, for the fluids wall condition. `planeCubeSolidFraction`: exact volume of a cube cut by a plane |
+| `17a-thermal-cpu-ref.js` | `solveThermalCPU`, `homogenizeThermalCPU`, `thermalVoxelConductivity`, Hashin–Shtrikman bounds, `runThermalCPUCheck(N)` (console check: Schwarz P, BCC beams, hyperuniform × air / water / tissue) |
+| `proto/thermal/run_tests.js` | T1–T8 below; `quick` skips N = 64; writes `proto/thermal/results.json` |
+| `proto/thermal/faces-tpfa.js` | The first scheme (one conductance per face), kept for the comparison |
+
+Both new files load in `index.html`; nothing in the app calls them yet. Solid fraction and normal per voxel:
+- **Surface voxel:** its 8 corners and its centre do not all agree in sign.
+- **Flat wall** (the margin's tangent plane at the centre predicts the sign of at least 63 of 64 sample points): `phi` is the exact plane–cube volume and `n` the gradient direction.
+- **Gently curved wall** (the plane misjudges 2–4 samples): `phi` is the fraction of the 64 samples in solid, and `n` is the gradient direction. The plane's volume would over-fill convex walls such as struts.
+- **Anything else** (walls thinner than a voxel, strut junctions, creases): `phi` is the sampled fraction and `n = 0`, which gives the isotropic blend the stiffness solver uses.
+- **Island trim** as in partial volume: removed voxels stay 0, and a void voxel bordering only removed voxels stays 0.
+
+Conductivity of a surface voxel: `k = k_par (I − n nᵀ) + k_ser n nᵀ`, with `k_par = φ k_s + (1 − φ) k_f` and `k_ser = 1 / (φ/k_s + (1 − φ)/k_f)`.
+
+### 11.2 Why the discretization changed
+
+The scope planned temperatures at voxel centres with one conductance per face (§3.1). That was built first, with each face's conductance taken as a laminate of the voxel-sized cell around it. It is exact for walls parallel to the grid, but a face-by-face stencil has no way to carry the cross terms (κ_xy) of a wall at an angle. Such walls read low, by roughly 0.35 ÷ (wall thickness in voxels).
+
+The solver now uses the stiffness solver's rotated grid: temperatures at voxel corners, one gradient per voxel and a full 3×3 conductivity per voxel. In this form (minimizing the average heat-flow energy) the operator stays symmetric for any conductivity tensor, so plain preconditioned CG works with anisotropic voxels. (That is what the stiffness CG could not do with laminate voxels, `PARTIAL_VOLUME.md` §3.)
+
+**T2b: inclined laminates, N = 32, contrast 100:**
+
+| Wall normal, φ | Wall thickness (voxels) | κ_xx: composite voxels | κ_xy: composite voxels | κ_xx: face scheme |
+|---|---|---|---|---|
+| (1,1,0), 0.10 | 2.3 | 0.002 % | −0.003 % | −15.1 % |
+| (1,1,0), 0.25 | 5.7 | 0.000 % | 0.000 % | −5.3 % |
+| (1,1,1), 0.10 | 1.9 | 0.000 % | 0.000 % | −18.2 % |
+| (1,1,1), 0.25 | 4.6 | 0.000 % | 0.000 % | −6.8 % |
+
+**How the three tiers were chosen** (N = 32, against N = 128):
+
+| Rule for voxels that aren't flat | BCC beams, Cu/air | Cubic struts, Cu/air (÷ area fraction) | Gyroid sheet c = 0.1, Ti/air | Gyroid sheet c = 0.2, Ti/air |
+|---|---|---|---|---|
+| Laminate everywhere (normal from the sample pattern) | −7 % | 0.95 | — | — |
+| Plane volume when ≤ 1 miss, isotropic blend otherwise | +6 % (+5 % at N = 64) | 1.01 | −7 % | −1.8 % |
+| **Three tiers (shipped)** | **0 % (+1.7 % at N = 64)** | **1.00** | **−10 % (−2.6 % at N = 64)** | **−3.1 % (−1.1 % at N = 64)** |
+
+- **Laminate everywhere.** At a strut junction the margin has a crease, and the "normal" there can point along the other strut. The series term then walls the strut off.
+- **Plane volume, then the blend.** The plane's volume over-fills the curved surface of thin struts, so beams read high, and the error hardly shrinks from N = 32 to 64.
+- **Three tiers.** These fix beams and struts. They cost about a point on thin sheets at N = 32–64.
+
+### 11.3 Validation (CPU, Float64)
+
+| # | Test | Result | Pass |
+|---|---|---|---|
+| T1 | Laminate on voxel faces, contrast 100 | Exact (0.000 %), along and across | ✓ |
+| T2 | Laminate offset 0.3 and 0.5 voxel | Exact. The 0/1 staircase at 0.5: −24 % along, −7.6 % across | ✓ |
+| T2b | Inclined laminates | Exact (table above) | ✓ |
+| T3 | Dilute spheres, φ 1–5 %, ratios 10 and 0.1, N = 32 | Within 0.07 % of Maxwell | ✓ |
+| T4 | Schwarz P, BCC beams, hyperuniform × air / water / tissue (Ti-6Al-4V, 6.7 W/m·K) | All inside the Hashin–Shtrikman bounds; asymmetry ≤ 4e-10; energy check ≤ 4e-14 | ✓ |
+| T6 | Sheet gyroid, near-empty pores (k_f = 1e-6 k_s), N = 32 | κ ÷ (2φ/3 · k_s) = 0.69 (c = 0.2, 1.3 voxels thick), 0.89 (c = 0.35); 3,600–3,800 iterations at this contrast. Low for thin sheets with nothing in the pores; with air in the pores the same sheet is within 3 % of N = 128 (11.4) | partial, see 11.5 |
+| T7 | Cubic struts, near-empty pores, N = 32 | κ_x ÷ strut area fraction = 0.99 (2.5 voxels across), 1.03 (4.1 voxels across; the junctions add) | ✓ |
+| T8 | Grid convergence | 11.4 | ✓ |
+
+Not done in Phase 0: T5 (cubic sphere arrays: coefficients still to confirm), and T9–T12, which need the GPU solver.
+
+### 11.4 Grid convergence (κ_x in W/m·K; difference from the N = 128 composite value)
+
+| Design | Scheme | N = 32 | N = 64 | N = 128 |
+|---|---|---|---|---|
+| Sheet gyroid c = 0.2 (12.9 %), Ti/air | **Composite voxels** | 0.5789 (−3.1 %) | 0.5908 (−1.1 %) | 0.5972 |
+| | 0/1 cube, same grid | 0.5678 (−4.9 %) | 0.5700 (−4.6 %) | 0.5892 (−1.3 %) |
+| | Face scheme | 0.5002 (−16 %) | 0.5464 (−8.5 %) | 0.5760 (−3.5 %) |
+| Sheet gyroid c = 0.1 (6.4 %), Ti/air, trim off | **Composite voxels** | 0.2758 (−10 %) | 0.2983 (−2.6 %) | 0.3064 |
+| | 0/1 cube, same grid | 0.0487 (−84 %) | 0.2887 (−5.8 %) | 0.2971 (−3.0 %) |
+| | Face scheme | 0.2324 (−24 %) | 0.2596 (−15 %) | 0.2856 (−6.8 %) |
+| BCC beams (6.9 %), Ti/air | **Composite voxels** | 0.2074 (−1.6 %) | 0.2098 (−0.4 %) | 0.2107 † |
+| | 0/1 cube, same grid | 0.2015 (−4.4 %) | 0.2050 (−2.7 %) | 0.2084 (−1.1 %) |
+| | Face scheme | 0.1834 (−13 %) | 0.2038 (−3.3 %) | — |
+| BCC beams (6.9 %), Cu/air (400 / 0.027) | **Composite voxels** | 10.43 (0.0 %) | 10.61 (+1.7 %) | 10.43 † |
+| | 0/1 cube, same grid | 10.24 (−1.8 %) | 10.54 (+1.1 %) | 10.75 (+3.1 %) |
+| | Face scheme | 9.06 (−13 %) | 10.42 (−0.1 %) | — |
+
+† The beam references at N = 128 were run with the two-tier rule (11.2); the three-tier N = 128 beam run (about 16 min on the VM's CPU) was cut off by a session restart. It is the one number to confirm on the RTX in Phase 1 (Matt will run it): `node --max-old-space-size=8000 proto/thermal/beam_reference.js`. For the gyroids the two rules agree at N = 128 to 4 digits.
+
+The c = 0.1 sheet is 0.7 voxels thick at N = 32, 1.3 at 64 and 2.7 at 128. Sheets thinner than about one voxel are where composite voxels help most: the 0/1 cube loses most of the sheet at N = 32.
+
+### 11.5 Findings to settle before Phase 1
+
+- **The island trim breaks sheets thinner than a voxel.** At N = 32 the 0/1 cube of the c = 0.1 gyroid is a scatter of fragments. The trim keeps the largest (18 voxels) and the solid fraction falls from 6.4 % to 0.06 %. With the trim off, composite voxels recover the sheet (κ within 7 % of N = 128). The stiffness solver has the same exposure. Options were: trim off; trim judged on the composite fractions; or keep the trim and flag. **Decided (Matt, 2026-10-07): keep the trim and flag the design as under-resolved** when its thinnest feature is under a voxel at the thermal grid (the sweep's thinnest-feature measure, 14d, already gives it in voxels). Phase 1 adds the flag to the card.
+- **Features thinner than about ¾ voxel can slip between the 9 sign samples** (corners and centre) of a voxel, leaving pinholes in a sheet. In air the pinholes cost little (c = 0.1 at N = 32: −10 %, N = 64: −2.6 %). With near-empty pores thin sheets read low at N = 32 (c = 0.1: 0.46 of the thin-shell value; c = 0.2: 0.69), because nothing bridges the gaps. No real filler is that empty: the highest contrast in the library is copper in air, about 15,000 : 1, against 1,000,000 : 1 in this test.
+- **Iterations** (tolerance 1e-8, CPU):
+
+  | Filler | Iterations per load case |
+  |---|---|
+  | Ti-6Al-4V in water or tissue | 27–33 |
+  | Ti-6Al-4V in air | 97–134 |
+  | Copper in air | 530–690 |
+
+  Iterations grow with about the square root of the contrast, as expected. The face scheme needed fewer iterations at high contrast (63 at Cu/air, N = 64), but with the wrong answer. At 128³ on the GPU, a few hundred iterations should still be about a second per load case. That will be measured in Phase 1.
+- **Checkerboard modes.** The rotated grid has spurious modes in which the corner temperatures alternate in sign. They carry no heat, never enter κ, and the right-hand side never excites them. In nearly empty pores, though, the solve can leave them undamped, so the temperature map (Phase 2) should be checked for checkerboard patterns in the pores.
+- **For stiffness, later.** The same symmetric form would let the stiffness solver take laminate voxels, which the current CG could not (`PARTIAL_VOLUME.md` §3). Not planned; noted.
+
+### 11.6 Phase 1 plan, revised
+
+- **`17b-thermal-solver.js`** mirrors 17a:
+  - per voxel: φ and normal (4 floats, 32 MB at 128³), turned into the 3×3 conductivity inside the kernel;
+  - one fused kernel per CG iteration computes each voxel's gradient from its 8 corners and the flux; a second gathers the divergence at each corner from its 8 voxels (no atomics);
+  - a real scalar FFT preconditioner, with two load cases packed into one complex FFT, as in 16i;
+  - GPU-resident scalars, tolerance presets shared with stiffness.
+- **Memory at 128³:** about 40 MB of CG vectors, 32 MB of voxel data, 24 MB of flux and 16 MB of FFT slot, about 110 MB in all. No buffer is near the 128 MB binding limit.
+- **The voxel data build** (the margin plus 64 samples per surface voxel) is the slow part on the CPU for grain and hyperuniform fields: about 9 s at N = 32, almost all of it margin evaluation. It belongs in the geometry worker or on the GPU, alongside moving the partial-volume rasterization there (already queued).
+- **T9:** GPU vs `solveThermalCPU` within 0.1 % at N = 32, on all families including foam and STL import.

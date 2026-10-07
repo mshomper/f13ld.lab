@@ -1,0 +1,326 @@
+[
+ {
+  "test": "T1 laminate on faces",
+  "N": 16,
+  "Kxx_err": "-0.000 %",
+  "Kzz_err": "0.000 %",
+  "iters": "0/0/1",
+  "asym": "0.0e+0"
+ },
+ {
+  "test": "T1 laminate on faces · staircase",
+  "N": 16,
+  "Kxx_err": "-0.000 %",
+  "Kzz_err": "0.000 %",
+  "iters": "0/0/1",
+  "asym": "0.0e+0"
+ },
+ {
+  "test": "T2 laminate offset 0.3 voxel",
+  "N": 16,
+  "Kxx_err": "-0.000 %",
+  "Kzz_err": "-0.000 %",
+  "iters": "0/0/3",
+  "asym": "0.0e+0"
+ },
+ {
+  "test": "T2 laminate offset 0.3 voxel · staircase",
+  "N": 16,
+  "Kxx_err": "-0.000 %",
+  "Kzz_err": "0.000 %",
+  "iters": "0/0/1",
+  "asym": "0.0e+0"
+ },
+ {
+  "test": "T2 laminate offset 0.5 voxel",
+  "N": 16,
+  "Kxx_err": "-0.000 %",
+  "Kzz_err": "-0.000 %",
+  "iters": "0/0/2",
+  "asym": "0.0e+0"
+ },
+ {
+  "test": "T2 laminate offset 0.5 voxel · staircase",
+  "N": 16,
+  "Kxx_err": "-24.029 %",
+  "Kzz_err": "-7.598 %",
+  "iters": "0/0/1",
+  "asym": "0.0e+0"
+ },
+ {
+  "test": "T2b laminate normal (1,1,0) φ=0.1",
+  "N": 32,
+  "wall_voxels": 2.26,
+  "Kxx_err": "0.002 %",
+  "Kxy_err": "-0.003 %",
+  "faces_Kxx_err": "-15.105 %",
+  "iters": "6/6/0"
+ },
+ {
+  "test": "T2b laminate normal (1,1,0) φ=0.25",
+  "N": 32,
+  "wall_voxels": 5.66,
+  "Kxx_err": "0.000 %",
+  "Kxy_err": "0.000 %",
+  "faces_Kxx_err": "-5.276 %",
+  "iters": "7/7/0"
+ },
+ {
+  "test": "T2b laminate normal (1,1,1) φ=0.1",
+  "N": 32,
+  "wall_voxels": 1.85,
+  "Kxx_err": "0.000 %",
+  "Kxy_err": "-0.000 %",
+  "faces_Kxx_err": "-18.157 %",
+  "iters": "9/9/9"
+ },
+ {
+  "test": "T2b laminate normal (1,1,1) φ=0.25",
+  "N": 32,
+  "wall_voxels": 4.62,
+  "Kxx_err": "0.000 %",
+  "Kxy_err": "-0.000 %",
+  "faces_Kxx_err": "-6.764 %",
+  "iters": "10/10/10"
+ },
+ {
+  "test": "T3 sphere φ=0.01 k_in/k_out=10",
+  "N": 32,
+  "K_err_vs_Maxwell": "0.063 %",
+  "iters": "32/32/32"
+ },
+ {
+  "test": "T3 sphere φ=0.03 k_in/k_out=10",
+  "N": 32,
+  "K_err_vs_Maxwell": "0.071 %",
+  "iters": "33/33/33"
+ },
+ {
+  "test": "T3 sphere φ=0.03 k_in/k_out=0.1",
+  "N": 32,
+  "K_err_vs_Maxwell": "-0.036 %",
+  "iters": "33/33/33"
+ },
+ {
+  "test": "T3 sphere φ=0.05 k_in/k_out=0.1",
+  "N": 32,
+  "K_err_vs_Maxwell": "-0.043 %",
+  "iters": "33/33/33"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "schwarzP",
+  "filler": "air",
+  "solid_pct": 50,
+  "kx": 2.2196,
+  "ky": 2.2196,
+  "kz": 2.2196,
+  "HS_low": 0.1061,
+  "HS_high": 2.6994,
+  "inside": true,
+  "iters": "125/125/125",
+  "asym": "1.1e-17",
+  "energy": "1.4e-14",
+  "s": "1.7"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "schwarzP",
+  "filler": "water",
+  "solid_pct": 50,
+  "kx": 2.8136,
+  "ky": 2.8136,
+  "kz": 2.8136,
+  "HS_low": 1.7947,
+  "HS_high": 3.1252,
+  "inside": true,
+  "iters": "28/28/28",
+  "asym": "5.4e-18",
+  "energy": "2.8e-14",
+  "s": "0.5"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "schwarzP",
+  "filler": "tissue",
+  "solid_pct": 50,
+  "kx": 2.6942,
+  "ky": 2.6942,
+  "kz": 2.6942,
+  "HS_low": 1.5109,
+  "HS_high": 3.0347,
+  "inside": true,
+  "iters": "31/31/31",
+  "asym": "2.8e-18",
+  "energy": "2.4e-14",
+  "s": "0.5"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "beamBCC",
+  "filler": "air",
+  "solid_pct": 6.86,
+  "kx": 0.2074,
+  "ky": 0.2074,
+  "kz": 0.2074,
+  "HS_low": 0.0329,
+  "HS_high": 0.3398,
+  "inside": true,
+  "iters": "111/111/111",
+  "asym": "4.1e-17",
+  "energy": "1.8e-14",
+  "s": "1.7"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "beamBCC",
+  "filler": "water",
+  "solid_pct": 6.86,
+  "kx": 0.8508,
+  "ky": 0.8508,
+  "kz": 0.8508,
+  "HS_low": 0.7343,
+  "HS_high": 0.9267,
+  "inside": true,
+  "iters": "27/27/27",
+  "asym": "1.7e-18",
+  "energy": "2.2e-14",
+  "s": "0.4"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "beamBCC",
+  "filler": "tissue",
+  "solid_pct": 6.86,
+  "kx": 0.7159,
+  "ky": 0.7159,
+  "kz": 0.7159,
+  "HS_low": 0.5877,
+  "HS_high": 0.8004,
+  "inside": true,
+  "iters": "30/30/30",
+  "asym": "4.7e-18",
+  "energy": "2.0e-14",
+  "s": "0.5"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "hyperuniform",
+  "filler": "air",
+  "solid_pct": 13.5,
+  "kx": 0.095,
+  "ky": 0.1084,
+  "kz": 0.26,
+  "HS_low": 0.0395,
+  "HS_high": 0.6572,
+  "inside": true,
+  "iters": "128/129/135",
+  "asym": "7.9e-10",
+  "energy": "3.7e-15",
+  "s": "9.8"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "hyperuniform",
+  "filler": "water",
+  "solid_pct": 13.5,
+  "kx": 0.9115,
+  "ky": 0.9254,
+  "kz": 1.1015,
+  "HS_low": 0.847,
+  "HS_high": 1.2264,
+  "inside": true,
+  "iters": "29/29/29",
+  "asym": "5.3e-12",
+  "energy": "1.5e-14",
+  "s": "7.7"
+ },
+ {
+  "test": "T4 HS envelope + iterations",
+  "design": "hyperuniform",
+  "filler": "tissue",
+  "solid_pct": 13.5,
+  "kx": 0.755,
+  "ky": 0.7701,
+  "kz": 0.9527,
+  "HS_low": 0.683,
+  "HS_high": 1.1041,
+  "inside": true,
+  "iters": "32/32/33",
+  "asym": "1.4e-11",
+  "energy": "1.4e-14",
+  "s": "7.7"
+ },
+ {
+  "test": "T6 sheet gyroid c=0.1 (island trim on)",
+  "N": 32,
+  "solid_pct": 0.06,
+  "k_over_kS": 0,
+  "ratio_to_2phi_3": 0.0027,
+  "ratio_to_HS": 0.0027,
+  "iters": "277/280/279"
+ },
+ {
+  "test": "T6 sheet gyroid c=0.2 (island trim on)",
+  "N": 32,
+  "solid_pct": 12.88,
+  "k_over_kS": 0.05951,
+  "ratio_to_2phi_3": 0.6931,
+  "ratio_to_HS": 0.6634,
+  "iters": "3820/3819/3815"
+ },
+ {
+  "test": "T6 sheet gyroid c=0.35 (island trim on)",
+  "N": 32,
+  "solid_pct": 22.53,
+  "k_over_kS": 0.1342,
+  "ratio_to_2phi_3": 0.8936,
+  "ratio_to_HS": 0.8265,
+  "iters": "3613/3597/3618"
+ },
+ {
+  "test": "T6 sheet gyroid c=0.1 (island trim off)",
+  "N": 32,
+  "solid_pct": 6.43,
+  "k_over_kS": 0.01976,
+  "ratio_to_2phi_3": 0.4609,
+  "ratio_to_HS": 0.451,
+  "iters": "3560/3561/3707"
+ },
+ {
+  "test": "T7 cubic struts r=0.25 (2.5 voxels across)",
+  "N": 32,
+  "Kx": 0.00492,
+  "strut_area_fraction": 0.00497,
+  "ratio": 0.9887,
+  "iters": "464/458/442"
+ },
+ {
+  "test": "T7 cubic struts r=0.4 (4.1 voxels across)",
+  "N": 32,
+  "Kx": 0.01314,
+  "strut_area_fraction": 0.01273,
+  "ratio": 1.0316,
+  "iters": "576/576/573"
+ },
+ {
+  "test": "T8 sheet gyroid c=0.2, Ti/air, trim networks",
+  "N": 32,
+  "composite": 0.57894,
+  "staircase": 0.5678,
+  "faces": 0.50024,
+  "solid_pct": 12.878,
+  "iters": "135/135/135",
+  "link_s": 0.11
+ },
+ {
+  "test": "T8 sheet gyroid c=0.1, Ti/air, trim off",
+  "N": 32,
+  "composite": 0.2758,
+  "staircase": 0.0487,
+  "faces": 0.23244,
+  "solid_pct": 6.43,
+  "iters": "111/111/111",
+  "link_s": 0.05
+ }
+]
