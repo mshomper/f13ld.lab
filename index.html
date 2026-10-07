@@ -126,11 +126,11 @@
             <option value="off">Keep everything</option>
           </select>
         </div>
-        <div class="spec-pill" id="pvPill" title="How voxels on the surface are treated in the stiffness solve. 0/1 cube (default): every voxel is fully solid or fully void; thin walls and struts read low on coarse grids. Partial volume: each voxel the surface passes through carries its true solid fraction and blends solid and void stiffness; the solid fraction is exact and N = 32 reads about as well as the cube at 64, but stiffness reads a few percent high. The two bracket the converged value. Crush and buckling always use the 0/1 cube.">
+        <div class="spec-pill" id="pvPill" title="How voxels on the surface are treated in the stiffness solve. Partial volume (default): each voxel the surface passes through carries its true solid fraction and blends solid and void stiffness — the solid fraction is exact and stiffness is grid-converged by N = 64 on thin walls and struts. 0/1 cube: every voxel fully solid or fully void, the behaviour before v0.19.0 — thin features read low on coarse grids; use it to reproduce earlier results. Crush and buckling always use the 0/1 cube.">
           <span class="key">Surface voxels</span>
           <select id="pvSel" onchange="onSurfaceVoxelChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;">
-            <option value="binary" selected>0/1 cube</option>
-            <option value="pv">Partial volume (reads high)</option>
+            <option value="pv" selected>Partial volume</option>
+            <option value="binary">0/1 cube (before v0.19.0)</option>
           </select>
         </div>
       </div>

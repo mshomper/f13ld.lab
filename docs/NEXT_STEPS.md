@@ -1,13 +1,13 @@
 # F13LD.lab — Next Steps (session handoff)
 
 
-> **2026-10-07 · v0.19.0** — normal runs (with fields) on the fast elastic path; thinnest feature in cell units and mm in the sweep CSV; sweep builder steps by thinnest feature (mm); partial-volume voxels as an option, off by default (they read high — see [`PARTIAL_VOLUME.md`](PARTIAL_VOLUME.md)). Scopes for the next physics: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md), [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md).
+> **2026-10-07 · v0.19.0** — normal runs (with fields) on the fast elastic path; thinnest feature in cell units and mm in the sweep CSV; sweep builder steps by thinnest feature (mm); partial-volume voxels, on by default — grid-converged by N = 64 on the GPU check ([`PARTIAL_VOLUME.md`](PARTIAL_VOLUME.md)); fast-path Γ rebind fix. Scopes for the next physics: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md), [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md).
 >
 > **2026-10-06 · v0.18.0** — viewer: design cards use the shared F13LD shading (`20c-f13-shade.js`, same block as every F13LD tool) in each design's family color, with a shared "◐ view" menu in the VIEW strip; stress/buckling colormaps keep neutral lighting. Geometry texture is now R16F (was R8) and foam/noise/grain refine to 96³/96³/80³ in the background after the 48³ preview (display only — the solver voxelizes separately).
 >
 > **2026-10-05 · v0.17.4** — wet foam field changed with F13LD.foam v0.7.0: it now includes the neighbouring bubbles (no jumps across cell faces) and honours `foam.edge_min` (cusp trim; sweepable, CSV column `edge_min`). Wet-foam lab results from before v0.17.4 were computed on the old field; re-run them if they feed a fit.
 
-**As of:** v0.19.0 · 2026-10-07 · fields on the fast elastic path, feature size in mm (CSV + builder), partial-volume voxels (option, off); crush verified on hardware; thermal and fluids scoped; foam laws still provisional (re-run moved down)
+**As of:** v0.19.0 · 2026-10-07 · fields on the fast elastic path, feature size in mm (CSV + builder), partial-volume voxels (default on); crush verified on hardware; thermal and fluids scoped; foam laws still provisional (re-run moved down)
 **Suite on main (2026-10-04):** lab v0.17.3 · F13LD.foam v0.6.0 · F13LD.mesh v0.9.3 (fast weld export — see mesh `docs/SESSION_RECAP_2026-10-04.md`; no lab impact)
 **Full history of the last session:** [`SESSION_RECAP_2026-10-03.md`](SESSION_RECAP_2026-10-03.md) (previous: [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md), [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
@@ -39,7 +39,7 @@
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
 | **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
 | **v0.17.2** | Tight crush = Newton tolerance only (NL_TIGHT_CG_TOL = null), retry reuses the first attempt's elastic setup (cache keyed by void + cgTol); foam: floor 0.3 %, ~45 s per axis (was setup 85.5 s). Nonlinear-tab cubes pause while a run is solving |
-| **v0.19.0** | Field capture on the fast path (16i): normal runs use GPU-resident CG too, legacy 16b only as fallback; `runElasticFastTest` compares fields. Sweep CSV `thinnest_feature_T / _mm`, `median_feature_T / _mm`, `cell_mm`; builder "by thinnest feature" (bisection at the run grid, `sweepParamsForFeatures` in 14d). Partial-volume voxels (`buildVoxelMargin` / `voxelFractionsFromMargin` in 14-rasterizer, `pvC` blend in the stiffness kernel), **off by default**, Surface voxels pill + sweep setting, CSV `partial_volume`, `vf_partial_pct`; `runPartialVolumeCheck()`. Local thickness tried for the flattened-tube bias and set aside (no gain, §1a item 5) |
+| **v0.19.0** | Field capture on the fast path (16i): normal runs use GPU-resident CG too, legacy 16b only as fallback; `runElasticFastTest` compares fields. Sweep CSV `thinnest_feature_T / _mm`, `median_feature_T / _mm`, `cell_mm`; builder "by thinnest feature" (bisection at the run grid, `sweepParamsForFeatures` in 14d). Partial-volume voxels (`buildVoxelMargin` / `voxelFractionsFromMargin` in 14-rasterizer, `pvC` blend in the stiffness kernel), **on by default** (Matt, after the GPU check), Surface voxels pill + sweep setting (0/1 cube reproduces pre-v0.19.0 results), CSV `partial_volume`, `vf_partial_pct`; `runPartialVolumeCheck()`. Fixed: 16i rebinds Γ by buffer, not key (a third grid evicted and rebuilt Γ under the same key). Local thickness tried for the flattened-tube bias and set aside (no gain, §1a item 5) |
 | **v0.18.0** | Shared F13LD viewer shading (`20c-f13-shade.js`), R16F geometry texture, 96³ background refine for foam / noise / grain |
 | **v0.17.3** | F13LD.foam v0.6.0 exact field (`geometry.field: 2`, `buildFoamSDF2`, byte-identical in lab / mesh / foam); v0.6.0 foams (wet Plateau borders, fillet / node, two-size mix, mirror / cubic symmetric seeds, FCC / C15 + disorder); sweep CSV `field`, `fillet`, `node`, `border`, `size_ratio`, `large_fraction`, `jitter`; calibration generators write `_field2` run lists; `validate-foam.js` §8. Older foam recipes build exactly as before. (Built in a separate session; `FOAM_CALIBRATION.md` §11) |
 
@@ -48,8 +48,8 @@
 ## 1. PICK UP HERE (2026-10-07)
 
 1. **Click-test v0.19.0** on the branch preview (or main once merged):
-   - a normal Run All: stress and deformation views as before, run source reads "· 0/1 cube"; `await runElasticFastTest(32)` passes (moduli and fields, fast vs legacy);
-   - `await runPartialVolumeCheck()` on the RTX: confirms the bracket on GPU at 32 / 64 / 128 (`PARTIAL_VOLUME.md` §4);
+   - a normal Run All: stress and deformation views as before, run source reads "· partial volume"; `await runElasticFastTest(32)` passes (moduli and fields, fast vs legacy; spinodoid still unconverged on both paths, as before);
+   - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
    - sweep builder → "by thinnest feature", and the new CSV columns.
 2. **Thermal, Phase 0** in a fresh session — [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §5 (shared signed field `buildVoxelField` / `14e-link-field.js`; note 14-rasterizer's `buildVoxelMargin` already mirrors every mode's continuous test and is the natural base for it).
 3. **Dev cycle** — §1a.
@@ -75,14 +75,14 @@ Re-run on the exact field, refit and update F13LD.foam per §1 items 2–3. The 
 3. **Plot follow-ups:** use `Plotly.toImage` for the future PDF report; reuse `20b-curve-plotly.js` patterns for the Sweep Atlas line chart (Plotly-style hover was already on its wish list); retire the SVG plot once the Plotly one has been used for a while (keep it as the offline fallback until then).
 4. ~~Normal (non-sweep) elastic runs on the fast path~~ — done v0.19.0. Compliant designs still capture fields on their first solve too (the void decision needs all six load cases); fields are only discarded on those designs.
 5. **Thinnest feature** — (a) and (c) done v0.19.0. (b) the PI flattened-tube low bias: **local thickness** (Hildebrand & Rüegsegger, BoneJ) was built and tested — A4 0.114 vs 0.113 T at N = 128 (truth 0.117–0.120), C4 reads *thicker* (0.139 vs 0.131; volume weighting favours nodes), 1.5–3× slower — set aside. The real fix is a width measured on the continuous field (Matt's chord method), cheap once the shared signed field exists (thermal Phase 0).
-6. **Partial-volume voxels** — shipped as an option, off by default ([`PARTIAL_VOLUME.md`](PARTIAL_VOLUME.md)): exact solid fraction, N = 32 ≈ cube at 64, but reads 2–9 % high at 64 (the cube reads 1–11 % low; the pair brackets the converged value). The proper fix, **laminate voxels**, needs a non-symmetric Krylov solver (BiCGSTAB / GMRES) — the current CG stalls on anisotropic voxels.
+6. **Partial-volume voxels** — done v0.19.0, on by default ([`PARTIAL_VOLUME.md`](PARTIAL_VOLUME.md)): grid-converged by N = 64 (within 0.5 % of 128 on A4m / C4 / D7; the cube still moves 2–11 %). Follow-up: move the partial-volume rasterization (up to ~8 s for PI-TPMS at 128, main thread) into the geometry worker. Laminate voxels would need a non-symmetric Krylov solver and are not needed now. Note: `SWEEP.md` §8–§9's cube extrapolations are probably a few percent low (D7 measured convergence order ≈ 0.6, not 2); the paper is left as is (Matt).
 7. **Foam preview at 96³** in the lab (deferred by Matt until his foam testing is done); spinodoid demo does not converge on either elastic path — look at it.
 8. **Main-lab axis triad check** (triad from rotation-matrix columns vs the ray-marcher's transpose).
 9. **Sprint B2 — buckling speed** (§2).
 
 ## 1c. PI-TPMS paper — finished (2026-10-07)
 
-Written up in another session. The numbers and methods stay in [`SWEEP.md`](SWEEP.md) §4–§9. To reproduce them with v0.19.0+, keep **Surface voxels = 0/1 cube** (the default).
+Written up in another session. The numbers and methods stay in [`SWEEP.md`](SWEEP.md) §4–§9. To reproduce them with v0.19.0+, set **Surface voxels = 0/1 cube** (partial volume is the default from v0.19.0).
 
 ## 1b. STL unit-cell import (done, v0.9.0–v0.9.1)
 
@@ -215,7 +215,7 @@ Also:
 | `runNonlinearFastOpTest()` | Fast nonlinear operator vs the reference |
 | `window.NL_TRACE` / `NL_FAST` / `NL_PREDICT` / `NL_EW` | Nonlinear logging and A/B switches |
 | `await runElasticFastTest(64)` | Fast elastic path (16i) vs 16b on demo recipes — moduli, and (v0.19.0) captured von Mises and u′ fields |
-| `await runPartialVolumeCheck()` | v0.19.0 — A4m / C4 / D7 at 32 / 64 / 128, 0/1 cube vs partial volume vs the extrapolated cube (`PARTIAL_VOLUME.md` §4) |
+| `await runPartialVolumeCheck()` | v0.19.0 — A4m / C4 / D7 at 32 / 64 / 128, 0/1 cube vs partial volume; pass = partial volume within 1 % between 64 and 128 (`PARTIAL_VOLUME.md` §4) |
 | `node validate-foam.js` | Foam kernel byte-match across lab / mesh / foam, field parity, import, sweep |
 | `NL_LATERAL_*`, `NL_TIGHT_*`, `VOID_FLOOR`, `VOID_SCALE_FRAC` | Crush side-stress limits, tight-solve tolerances, void rule (recap §8) |
 | `[crush-timing]` / `[crush]` console lines | Per-step macro corrections, cutbacks, step-1 lateral floor, tight restarts |

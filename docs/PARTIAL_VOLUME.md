@@ -1,6 +1,6 @@
 # F13LD.lab — Partial-Volume Voxels (v0.19.0)
 
-**Status:** Shipped as an option, **off by default**. Stiffness only; crush, buckling and connectivity always use the 0/1 cube.
+**Status:** Shipped, **on by default** (Matt, 2026-10-07, after the GPU check in §2). Stiffness only; crush, buckling and connectivity always use the 0/1 cube. The 0/1 cube stays selectable for reproducing earlier results, including the PI-TPMS paper.
 **Written:** 2026-10-07
 **Goal:** Cut the staircase error that makes thin walls and struts read low at N = 32–64 (11–14 % at N = 64 on the PI-TPMS paper runs, `SWEEP.md` §8).
 
@@ -21,9 +21,27 @@ Settings: **Surface voxels** pill in the run controls, and **Surface voxels** in
 
 ---
 
-## 2. Results (CPU reference, ν 0.3, void 1e-6, tolerance 1e-5, island trim on)
+## 2. Results
 
-The reference is Matt's extrapolated values from `SWEEP.md` §8 (GPU, 64 ↔ 128 pair, order 2).
+### 2.1 GPU, N = 32 / 64 / 128 (Matt's RTX, 2026-10-07 — the deciding check)
+
+`runPartialVolumeCheck()`: ν 0.3, void 1e-6, tolerance 1e-5, island trim on. Ex ÷ E solid, with the change from the previous grid in brackets.
+
+| Design | 0/1 cube: 32 → 64 → 128 | Partial volume: 32 → 64 → 128 |
+|---|---|---|
+| A4m (PI) | 0.00341 → 0.00457 → 0.00498 (+9 %) | 0.00559 → 0.00534 → 0.00532 (−0.5 %) |
+| C4 (sheet) | 0.1607 → 0.1826 → 0.1859 (+1.8 %) | 0.1927 → 0.1893 → 0.1890 (−0.2 %) |
+| D7 (skeletal) | 0.00217 → 0.00261 → 0.00289 (+11 %) | 0.00311 → 0.00307 → 0.00305 (−0.5 %) |
+
+**What it shows:**
+- **Partial volume is grid-converged by N = 64**: within 0.5 % of its N = 128 value on all three designs. The 0/1 cube is still climbing 2–11 % between 64 and 128.
+- As the grid refines, partial voxels shrink to a small share of the grid (1.4–4.7 % at 128), so both methods head to the same limit. Partial volume is simply there already.
+- Taking partial volume at 128 as the reference, the 0/1 cube reads **−6 / −2 / −5 %** at 128 and **−14 / −3 / −15 %** at 64 (A4m / C4 / D7).
+- Ez behaves the same (A4m: partial volume 0.001358 → 0.001346, −0.9 %).
+
+**Correction of §2.2.** The CPU comparison below judged partial volume against an order-2 extrapolation of the cube, and so concluded it "reads high". The cube converges more slowly than order 2 on these designs: D7's measured order from 32 / 64 / 128 is about 0.6. That put the reference low. The extrapolated stiffnesses in `SWEEP.md` §8–§9 are therefore probably a few percent low, most on the skeletal designs. Matt decided to leave the paper as is.
+
+### 2.2 CPU reference, N = 32 / 64 (first look)
 
 **Solid fraction** (vs the 0/1 count at N = 256):
 
@@ -34,38 +52,26 @@ The reference is Matt's extrapolated values from `SWEEP.md` §8 (GPU, 64 ↔ 128
 | D7 (skeletal) | −0.6 % | +0.1 % | −0.8 % | 0.0 % |
 | A1 (thin PI) | +15.2 % | +0.1 % | +2.8 % | 0.0 % |
 
-**Stiffness**, error vs the extrapolated reference:
+The CPU stiffness values match the GPU table in §2.1 (same designs and settings).
 
-| Design | 0/1 cube, N = 32 | Partial volume, N = 32 | 0/1 cube, N = 64 | Partial volume, N = 64 |
-|---|---|---|---|---|
-| A4m Ex / Ez | −33 % / −29 % | +9 % / +14 % | −11 % / −5 % | +4 % / +9 % |
-| C4 Ex | −13 % | +4 % | −1 % | +2 % |
-| D7 Ex | −25 % | +7 % | −10 % | +6 % |
-
-**What these tables show:**
-- Partial volume makes N = 32 about as good as the 0/1 cube at N = 64, and the solid fraction is exact at any grid.
-- It **reads high**: a half-filled voxel is given half the solid stiffness in every direction, though across the wall it should carry almost nothing.
-- At N = 64 its error is about the size of the cube's, with the opposite sign. On these three designs **the converged value lies between the two every time**, so the pair brackets it.
-- That is why it ships off by default.
-
-**Cost:** the extra rasterization is one more pass over the voxel corners plus 64 samples per surface voxel (3–10 % of the grid at N = 64). It is negligible for most designs; for PI-TPMS at N = 128 it is a few seconds on the CPU. CG iterations roughly double (about 450–740 vs 210–320 over six load cases at N = 64), because partial voxels add intermediate stiffnesses.
+**Cost:** the extra rasterization is one more pass over the voxel corners plus 64 samples per surface voxel (3–10 % of the grid at N = 64; 27 samples at 128). On Matt's machine it is under 1 s at N = 64 except PI-TPMS (2.7 s), and 0.5–8 s at 128 (PI-TPMS 7.7 s), on the main thread. Moving it into the geometry worker is a follow-up. CG iterations roughly double (about 450–740 vs 210–320 over six load cases at N = 64), because partial voxels add intermediate stiffnesses.
 
 ---
 
 ## 3. What was tried and set aside
 
 - **Trilinear fractions from the corners only.** Fast, but read tubes and struts 4–5 % light at N = 32. A tube's margin is cone-shaped, and interpolating it between corners under-fills the tube. Replaced by exact sampling.
-- **Laminate composite voxels** (Kabel, Merkert & Schneider 2015). Each partial voxel was treated as a two-layer solid / void laminate across the local wall normal: stiff along the wall, nearly free across it. This is the standard cure for the overshoot.
+- **Laminate composite voxels** (Kabel, Merkert & Schneider 2015). Each partial voxel was treated as a two-layer solid / void laminate across the local wall normal: stiff along the wall, nearly free across it. This is the standard refinement of simple mixing.
   - It **does not converge with the lab's CG**: normal load cases hit the 3000-iteration cap at N = 16, where the plain cube needs 69.
   - The CG used here (Zeman et al. 2010) relies on every voxel's stiffness being a scaled copy of the reference medium. The 0/1 cube and the Voigt blend both satisfy that; an anisotropic laminate voxel doesn't, which makes the operator non-symmetric.
   - Projecting the laminate to the nearest isotropic stiffness converges, but reads as low as the plain cube (−27 % / −31 % / −15 % at N = 32), because it throws away the along-the-wall stiffness that matters.
-- **Next step, if wanted:** a non-symmetric Krylov solver (BiCGSTAB or GMRES) on the same operator, then the laminate voxels. The laminate formulas are standard: in-plane strains and out-of-plane stresses continuous across the layers, giving a transversely isotropic 6×6 built from the layer averages of 1/M, λ/M, M − λ²/M (M = λ + 2μ), 1/μ and μ.
+- **If ever needed:** a non-symmetric Krylov solver (BiCGSTAB or GMRES) on the same operator, then the laminate voxels. The laminate formulas are standard: in-plane strains and out-of-plane stresses continuous across the layers, giving a transversely isotropic 6×6 built from the layer averages of 1/M, λ/M, M − λ²/M (M = λ + 2μ), 1/μ and μ.
 
 ---
 
 ## 4. Checking it on your GPU
 
-In the browser console, run `await runPartialVolumeCheck()`. It takes about 1–2 minutes and covers A4m, C4 and D7 at N = 32, 64 and 128, with the cube and with partial volume. The reference is the cube extrapolated from 64 and 128. The check passes when, at 64, the reference lies between the cube (low) and partial volume (high).
+In the browser console, run `await runPartialVolumeCheck()`. It takes about 2 minutes and covers A4m, C4 and D7 at N = 32, 64 and 128, with the cube and with partial volume. The reference is partial volume at 128. The check passes when partial volume changes by less than 1 % between 64 and 128.
 
 ---
 

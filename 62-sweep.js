@@ -47,7 +47,7 @@ var SWEEP_STATE = {
   voidRatio: 1e-6,                 /* void stiffness ÷ solid (Matt, 2026-10-01: 1e-6 for sweeps) */
   refine: 'off',                   /* 'off' | 'coarser' | 'finer' | 'pair' (64 ↔ 128) — second grid for extrapolation */
   order: 2,                        /* assumed convergence order for the extrapolation */
-  partialVolume: false,            /* v0.19.0 — surface voxels carry their solid fraction in the stiffness solve (off by default) */
+  partialVolume: true,             /* v0.19.0 — surface voxels carry their solid fraction in the stiffness solve (default on; saved sweeps from before keep the cube) */
   previewing: false, previewDone: 0, previewTotal: 0,
   current: null, startedAt: 0, log: []
 };
@@ -1160,8 +1160,8 @@ function sweepRenderSettings() {
       [['off', 'off'], ['coarser', 'one coarser'], ['finer', 'one finer'], ['pair', '64 ↔ 128 pair']].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === SWEEP_STATE.refine ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
     (SWEEP_STATE.refine !== 'off' ? '<label class="imp-sub" title="Assumed convergence order. The F set measured about 2 for PI-gyroid Ex and Ey, 1.4 for Ez and 1.2 for the sheet gyroid.">order <select onchange="sweepSetOpt(\'order\', +this.value)"' + dis + '>' +
       [1, 2].map(function (o) { return '<option' + (o === SWEEP_STATE.order ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></label>' : '') +
-    '<label class="imp-sub" title="0/1 cube (default, as before v0.19.0): reads low on thin features at coarse grids. Partial volume: voxels the surface passes through carry their solid fraction; exact solid fraction, reads a few percent high. Together they bracket the converged value.">Surface voxels <select onchange="sweepSetOpt(\'partialVolume\', this.value === \'pv\')"' + dis + '>' +
-      '<option value="binary"' + (SWEEP_STATE.partialVolume !== true ? ' selected' : '') + '>0/1 cube</option><option value="pv"' + (SWEEP_STATE.partialVolume === true ? ' selected' : '') + '>partial volume (reads high)</option></select></label>' +
+    '<label class="imp-sub" title="Partial volume (default): voxels the surface passes through carry their solid fraction — exact solid fraction, stiffness grid-converged by N = 64. 0/1 cube: the behaviour before v0.19.0; use it to reproduce earlier results such as the PI-TPMS paper.">Surface voxels <select onchange="sweepSetOpt(\'partialVolume\', this.value === \'pv\')"' + dis + '>' +
+      '<option value="pv"' + (SWEEP_STATE.partialVolume === true ? ' selected' : '') + '>partial volume</option><option value="binary"' + (SWEEP_STATE.partialVolume !== true ? ' selected' : '') + '>0/1 cube (before v0.19.0)</option></select></label>' +
     '<span class="imp-sub" title="Set by the Connectivity selector in the run controls">Islands: ' + connTxt + '</span>' +
     '<span class="imp-sub">Stiffness ÷ solid modulus</span>';
 }
@@ -1218,7 +1218,7 @@ function sweepNew() {
   var hasRes = Object.keys(SWEEP_STATE.results).length > 0;
   if (!confirm('Start a new sweep? This clears the run list' + (hasRes ? ' and its results (export them first if you need them)' : '') + ', the builder and the run settings.')) return;
   sweepResetRuns();
-  SWEEP_STATE.builder = {}; SWEEP_STATE.precision = 'standard'; SWEEP_STATE.voidRatio = 1e-6; SWEEP_STATE.refine = 'off'; SWEEP_STATE.order = 2; SWEEP_STATE.partialVolume = false;
+  SWEEP_STATE.builder = {}; SWEEP_STATE.precision = 'standard'; SWEEP_STATE.voidRatio = 1e-6; SWEEP_STATE.refine = 'off'; SWEEP_STATE.order = 2; SWEEP_STATE.partialVolume = true;
   SWEEP_UI.tab = 'build'; SWEEP_UI.notesOpen = false;
   sweepSave(); sweepRenderSources(); sweepRenderBuilder(); sweepRender();
 }

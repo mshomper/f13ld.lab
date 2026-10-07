@@ -100,7 +100,7 @@ Checked at N = 64, 5 mm cell:
 
 About 0.7–4 s per base design in the background worker.
 
-**CSV (v0.19.0):** `thinnest_feature_T` and `median_feature_T` (fraction of the cell edge), `thinnest_feature_mm`, `median_feature_mm` and `cell_mm`, next to the existing `_vox` columns. With **Surface voxels = partial volume** (run settings): `partial_volume = yes` and `vf_partial_pct`, the fraction-weighted solid. `vf_measured_pct` stays the 0/1 voxel count after the trim. See `PARTIAL_VOLUME.md`.
+**CSV (v0.19.0):** `thinnest_feature_T` and `median_feature_T` (fraction of the cell edge), `thinnest_feature_mm`, `median_feature_mm` and `cell_mm`, next to the existing `_vox` columns. With **Surface voxels = partial volume** (run settings; the default from v0.19.0 — saved sweeps from before keep the 0/1 cube): `partial_volume = yes` and `vf_partial_pct`, the fraction-weighted solid. `vf_measured_pct` stays the 0/1 voxel count after the trim. See `PARTIAL_VOLUME.md`.
 ## 2. Settings
 
 - **Precision:** *Standard* — CG tolerance 1e-4, up to 1,000 iterations per load case (300 before v0.16.0; the export's `cg_maxiter` column records which). *High* — 1e-5, up to 1,000 iterations. A6 at N = 64 on the CPU reference took ~60 iterations per load case at 1e-5.

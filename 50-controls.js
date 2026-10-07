@@ -137,7 +137,7 @@ var SIGMA_Y_TI64_MPA = (typeof NL_MAT_DEFAULT !== 'undefined' && isFinite(NL_MAT
      'largest'  keep only the largest network — one side of an interwoven weave
      'off'      keep everything (buckling still drops floating islands: they are free bodies)
    pruneLargest mirrors "not off" for solvers/tests that only read the old flag. */
-var GEOM_STATE = { connectivity: 'networks', pruneLargest: true, partialVolume: false };   /* v0.19.0 — partial-volume voxels for stiffness (off by default) */
+var GEOM_STATE = { connectivity: 'networks', pruneLargest: true, partialVolume: true };   /* v0.19.0 — partial-volume voxels for stiffness (default on) */
 function connOpts(){ return { connectivity: GEOM_STATE.connectivity, pruneLargest: GEOM_STATE.connectivity !== 'off', partialVolume: !!GEOM_STATE.partialVolume }; }
 
 var RUN_STATE = {
@@ -178,12 +178,11 @@ function onConnectivityChange(v){
   GEOM_STATE.pruneLargest = (v !== 'off');
 }
 
-/* v0.19.0 — surface voxels for the stiffness solve: the plain 0/1 cube
-   (default) or partial volume (each voxel the surface passes through carries
-   its solid fraction and blends solid and void stiffness).  On the PI-TPMS
-   paper's trio the cube reads low and partial volume reads high, so the two
-   bracket the converged value (docs/PARTIAL_VOLUME.md).  Crush and buckling
-   always use the 0/1 cube. */
+/* v0.19.0 — surface voxels for the stiffness solve: partial volume (default;
+   each voxel the surface passes through carries its solid fraction and blends
+   solid and void stiffness — grid-converged at N = 64 on the PI-TPMS paper's
+   trio, docs/PARTIAL_VOLUME.md) or the plain 0/1 cube (behaviour before
+   v0.19.0).  Crush and buckling always use the 0/1 cube. */
 function onSurfaceVoxelChange(v){
   GEOM_STATE.partialVolume = (v !== 'binary');
 }
