@@ -486,6 +486,7 @@ var SWEEP_WORKER_ONMESSAGE =
   '    if (m.importGrid) registerImportGrid(m.importGrid);\n' +
   '    if (m.type === "stats") postMessage({ id: m.id, ok: true, stats: sweepGeometryStats(m.recipe, m.N, m.connectivity) });\n' +
   '    else if (m.type === "target") postMessage({ id: m.id, ok: true, values: sweepParamsForFractions(m.recipe, m.spec, m.N, m.fractions) });\n' +
+  '    else if (m.type === "geom") postMessage({ id: m.id, ok: true, geom: designGeometryMetrics(m.recipe, m.N, { connectivity: m.connectivity }) });\n' +
   '    else if (m.type === "review") postMessage({ id: m.id, ok: true, combos: sweepReviewCombos(m, function(p){ postMessage({ id: m.id, progress: p }); }) });\n' +
   '  } catch (err){ postMessage({ id: m.id, ok: false, message: (err && err.message) || String(err) }); }\n' +
   '};\n';

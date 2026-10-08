@@ -42,6 +42,7 @@ var SWEEP_STATE = {
   results: {},                     /* run_id → result record */
   selected: {},                    /* run_id → bool */
   precision: 'standard',
+  physics: 'stiffness',            /* v0.23.0 — 'stiffness' | 'thermal' (stiffness + thermal κ per filler) */
   preview: {},                     /* run_id → geometry stats (14d-voxel-stats.js) */
   builder: {},                     /* last builder settings (kept across redraws and reloads) */
   voidRatio: 1e-6,                 /* void stiffness ÷ solid (Matt, 2026-10-01: 1e-6 for sweeps) */
@@ -74,7 +75,7 @@ function sweepSnapshot() {
     results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
     preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder,
     voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order, timing: SWEEP_STATE.timing,
-    partialVolume: SWEEP_STATE.partialVolume };
+    partialVolume: SWEEP_STATE.partialVolume, physics: SWEEP_STATE.physics };
 }
 function sweepSave() {
   if (_swSaveT) return;
@@ -101,6 +102,7 @@ function sweepApplySaved(p) {
   if (p.voidRatio > 0) SWEEP_STATE.voidRatio = p.voidRatio;
   SWEEP_STATE.refine = p.refine || 'off'; SWEEP_STATE.order = p.order || 2;
   SWEEP_STATE.partialVolume = p.partialVolume === true;
+  SWEEP_STATE.physics = p.physics === 'thermal' ? 'thermal' : 'stiffness';
   SWEEP_STATE.timing = p.timing || SWEEP_STATE.timing || {};
   return true;
 }
@@ -431,6 +433,10 @@ async function sweepRunOne(run) {
   if (recipe.family === 'import' && !(typeof importGridReady === 'function' && importGridReady(recipe)))
     throw new Error('imported geometry is not loaded');
   var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
+  /* v0.23.0 — geometry columns (surface area, open pores) on the geometry
+     worker while the GPU solves; a failure only blanks those columns */
+  var geomP = sweepGeomCall({ type: 'geom', recipe: recipe, N: run.N, connectivity: conn })
+    .then(function (m) { return m.geom; }, function (e) { return { error: (e && e.message) || String(e) }; });
   var A = await sweepSolveAt(recipe, run.N, prec, conn), R = A.R;
   /* v0.19.0 — vf_solved stays the 0/1 voxel count after the trim; with
      partial-volume voxels the fraction-weighted solid is vf_partial */
@@ -469,8 +475,51 @@ async function sweepRunOne(run) {
     res.ext = { order: SWEEP_STATE.order, fineN: fine.N, coarseN: coarse.N, C: Cu };
     if (ce) for (var q in ce) res.ext[q] = ce[q];
   }
+  /* v0.23.0 — geometry columns: porosity from the solve's solid fraction
+     (partial volume when on, after the island trim, so trimmed islands
+     count as pore space); area and open pores from the worker */
+  var G = await geomP, cellMm = sweepCellMm(sweepRecipeForRun(run));
+  var vfSolid = (res.vf_partial != null ? res.vf_partial : res.vf_solved) / 100;
+  res.geom = { porosity: 1 - vfSolid, cell_mm: cellMm, error: G && G.error ? G.error : null };
+  if (G && !G.error) {
+    res.geom.area = G.area; res.geom.open = G.open;
+    res.geom.sad_m2m3 = G.area > 0 ? G.area / (cellMm / 1000) : null;
+    res.geom.dh_mm = G.area > 0 ? 4 * res.geom.porosity * cellMm / G.area : null;
+  }
+  if (SWEEP_STATE.physics === 'thermal') {
+    try { res.thermal = await sweepThermalOne(run, recipe); res.wall_s += res.thermal.wall_s || 0; }
+    catch (e) { res.thermal = { error: (e && e.message) || String(e) }; }
+  }
   res.notes = sweepNotesFor(run, res);
   return res;
+}
+
+/* v0.23.0 — thermal κ for one sweep run: the material and pore fillers set
+   in the Configure drawer, the run's own grid (no second grid: the
+   composite wall voxels are grid-converged by N = 64, THERMAL_SCOPE.md §11). */
+async function sweepThermalOne(run, recipe) {
+  var mat = (typeof applySelectedMaterial === 'function') ? applySelectedMaterial(sweepRecipeForRun(run)) : sweepRecipeForRun(run);
+  var kS = thermalKsFor(mat), cpS = thermalCpFor(mat), rhoS = thermalRhoFor(mat);
+  var name = (mat && mat.material && mat.material.name) || 'Ti-6Al-4V (default)';
+  var basis = (mat && mat.material && mat.material.ksBasis) || (mat && mat.material && mat.material.ks_WmK != null ? '' : 'wrought (default)');
+  if (!(kS > 0)) throw new Error('no conductivity data for ' + name);
+  var fillers = thermalFillersOn();
+  if (!fillers.length) throw new Error('no pore filler ticked (Configure → Thermal κ)');
+  var t0 = performance.now();
+  var TR = await homogenizeThermalGPU(recipe, run.N, Object.assign({}, connOpts(), {
+    kS: kS, fillers: fillers, tol: THERMAL_STATE.tol, maxiter: THERMAL_STATE.maxiter, capture: false }));
+  var out = { material: name, kS: kS, basis: basis, cpS: cpS, rhoS: rhoS, rhoPhi: TR.rhoPhi, wraps: TR.wraps,
+              fragLoss: TR.fragLoss, underResolved: TR.fragLoss > THERMAL_FRAG_FLAG, byFiller: {}, wall_s: (performance.now() - t0) / 1000 };
+  fillers.forEach(function (f) {
+    var g = TR.byFiller[f.id];
+    if (!g) return;
+    var kMean = (g.kx + g.ky + g.kz) / 3;
+    var rc = (cpS > 0 && rhoS > 0) ? TR.rhoPhi * rhoS * cpS + (1 - TR.rhoPhi) * f.rho * f.cp : null;
+    out.byFiller[f.id] = { kx: g.kx, ky: g.ky, kz: g.kz, kMean: kMean, kRel: g.kRel, eff: g.eff,
+      rhoc: rc, alpha: rc ? kMean / rc : null,
+      iters: g.perLC.map(function (q) { return q.iters; }).join('/'), converged: g.converged };
+  });
+  return out;
 }
 
 function sweepNotesFor(run, r) {
@@ -481,6 +530,13 @@ function sweepNotesFor(run, r) {
     n.push('island trim removed ' + r.trim_removed_pct.toFixed(2) + ' % of the solid (' + r.vf_voxel.toFixed(2) + ' → ' + r.vf_solved.toFixed(2) + ' % of the cell)');
   if (!r.converged) n.push('did not converge to ' + r.tol + ' in ' + r.maxiter + ' iterations per load case');
   if (r.extNote) n.push(r.extNote);
+  if (r.geom && r.geom.error) n.push('geometry columns not computed: ' + r.geom.error);
+  if (r.thermal && r.thermal.error) n.push('thermal not computed: ' + r.thermal.error);
+  if (r.thermal && r.thermal.underResolved) n.push('thermal under-resolved: ' + Math.round(r.thermal.fragLoss * 100) + ' % of the solid in fragments under 3³ voxels — raise the grid');
+  if (r.thermal && r.thermal.byFiller) {
+    var nc = Object.keys(r.thermal.byFiller).filter(function (f) { return !r.thermal.byFiller[f].converged; });
+    if (nc.length) n.push('thermal did not converge (' + nc.join(', ') + ')');
+  }
   if (r.noLoad) n.push('no load on ' + r.noLoad.map(function (b) { return b.axis; }).join(', ') + ': ' +
     r.noLoad.map(function (b) { return 'E' + b.axis + ' reads ' + b.E.toExponential(1); }).join(', ') +
     ' ÷ E solid, i.e. zero within solver noise — kept (the solver alone would reject it)');
@@ -504,13 +560,13 @@ function sweepNotesFor(run, r) {
 }
 
 /* ── Geometry checks (worker) ─────────────────────────────── */
-var SWEEP_GEOM_VERSION = 'swg-4';
+var SWEEP_GEOM_VERSION = 'swg-5';   /* v0.23.0 — 14e geometry metrics (surface area, open pores) */
 var SWEEP_THIN_VOX = 6;          /* Matt, 2026-10-01: flag under 6 voxels across the thinnest feature */
 var _swWorker = null, _swJobs = {}, _swNext = 1;
 function sweepGeomWorker() {
   if (_swWorker) return _swWorker;
   var base = (typeof document !== 'undefined' && document.baseURI) ? document.baseURI : location.href;
-  var files = ['14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js', '13c-import-kernel.js', '13d-foam-kernel.js', '14c-stl-import.js', '14d-voxel-stats.js'];
+  var files = ['14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js', '13c-import-kernel.js', '13d-foam-kernel.js', '14c-stl-import.js', '14d-voxel-stats.js', '14e-link-field.js'];
   var urls = files.map(function (f) { var u = new URL(f, base); u.search = '?v=' + SWEEP_GEOM_VERSION; return JSON.stringify(u.href); });
   var body = 'importScripts(' + urls.join(',') + ');\n' + SWEEP_WORKER_ONMESSAGE;
   _swWorker = new Worker(URL.createObjectURL(new Blob([body], { type: 'application/javascript' })));
@@ -644,7 +700,20 @@ function sweepExportCsv() {
     'ext_order', 'ext_from_grids']);
   for (var ie = 1; ie <= 6; ie++) for (var je = ie; je <= 6; je++) cols.push('ext_C' + ie + je);
   cols = cols.concat(['ext_Ex', 'ext_Ey', 'ext_Ez', 'ext_Gyz', 'ext_Gxz', 'ext_Gxy', 'ext_nu_xy', 'ext_nu_xz', 'ext_nu_yz',
-    'ext_ratio_Ex', 'ext_ratio_Ey', 'ext_ratio_Ez', 'solver', 'gamma_build_s', 'notes', 'error']);
+    'ext_ratio_Ex', 'ext_ratio_Ey', 'ext_ratio_Ez', 'solver', 'gamma_build_s']);
+  /* v0.23.0 — geometry columns (heat-exchanger / surrogate use) and thermal
+     columns, one set per pore filler solved in this sweep */
+  cols = cols.concat(['porosity', 'surface_area_density_m2m3', 'hydraulic_diameter_mm', 'open_x', 'open_y', 'open_z']);
+  var thFillers = ['air', 'water', 'tissue'].filter(function (f) {
+    return SWEEP_STATE.runs.some(function (run) { var r = SWEEP_STATE.results[run.id]; return r && r.thermal && r.thermal.byFiller && r.thermal.byFiller[f]; });
+  });
+  if (thFillers.length) {
+    cols = cols.concat(['thermal_material', 'ks_WmK', 'ks_basis', 'cp_s_JkgK', 'rho_s_kgm3', 'thermal_under_resolved', 'thermal_wall_time_s']);
+    thFillers.forEach(function (f) {
+      ['kx_WmK', 'ky_WmK', 'kz_WmK', 'k_rel', 'k_eff_hs', 'rhoc_eff_MJm3K', 'alpha_mm2s', 'k_iters', 'k_converged'].forEach(function (c) { cols.push(c + '_' + f); });
+    });
+  }
+  cols = cols.concat(['notes', 'error']);
   var lines = [cols.join(',')];
   SWEEP_STATE.runs.forEach(function (run) {
     var r = SWEEP_STATE.results[run.id];
@@ -686,6 +755,21 @@ function sweepExportCsv() {
         row['ratio_' + q] = (ref[q] != null && Math.abs(ref[q]) > 1e-5) ? r[q] / ref[q] : null;
       });
       row.notes = (r.notes || []).join('; ');
+      if (r.geom) {
+        row.porosity = r.geom.porosity; row.surface_area_density_m2m3 = r.geom.sad_m2m3; row.hydraulic_diameter_mm = r.geom.dh_mm;
+        if (r.geom.open) { row.open_x = r.geom.open.x ? 'yes' : 'no'; row.open_y = r.geom.open.y ? 'yes' : 'no'; row.open_z = r.geom.open.z ? 'yes' : 'no'; }
+      }
+      if (r.thermal && !r.thermal.error) {
+        var T = r.thermal;
+        row.thermal_material = T.material; row.ks_WmK = T.kS; row.ks_basis = T.basis; row.cp_s_JkgK = T.cpS; row.rho_s_kgm3 = T.rhoS;
+        row.thermal_under_resolved = T.underResolved ? 'yes' : 'no'; row.thermal_wall_time_s = T.wall_s;
+        for (var tf in T.byFiller) {
+          var g = T.byFiller[tf];
+          row['kx_WmK_' + tf] = g.kx; row['ky_WmK_' + tf] = g.ky; row['kz_WmK_' + tf] = g.kz; row['k_rel_' + tf] = g.kRel; row['k_eff_hs_' + tf] = g.eff;
+          row['rhoc_eff_MJm3K_' + tf] = g.rhoc != null ? g.rhoc / 1e6 : null; row['alpha_mm2s_' + tf] = g.alpha != null ? g.alpha * 1e6 : null;
+          row['k_iters_' + tf] = g.iters; row['k_converged_' + tf] = g.converged ? 'yes' : 'no';
+        }
+      }
     }
     var st = SWEEP_STATE.preview[run.id];
     if (st && !st.error) {
@@ -1106,8 +1190,15 @@ function sweepHasTiming() { var t = SWEEP_STATE.timing || {}; return Object.keys
 function sweepEta(todoRuns) {
   return todoRuns.reduce(function (s, run) {
     var N2 = sweepCompanionN(run.N, SWEEP_STATE.refine);
-    return s + sweepSecPerSolve(run.N) + (N2 ? sweepSecPerSolve(N2) : 0);
+    return s + sweepSecPerSolve(run.N) + (N2 ? sweepSecPerSolve(N2) : 0) + sweepThermalSec(run.N);
   }, 0);
+}
+/* v0.23.0 — thermal seconds per run: measured per-filler time (RUN_CALIB) or the default, × ticked fillers */
+function sweepThermalSec(N) {
+  if (SWEEP_STATE.physics !== 'thermal' || typeof thermalFillersOn !== 'function' || typeof gridScale !== 'function') return 0;
+  var cal = (typeof RUN_CALIB !== 'undefined') ? RUN_CALIB.thermal : null, ref = (typeof RUN_REF !== 'undefined') ? RUN_REF.thermal : null;
+  var per = cal ? cal.sec * gridScale(N, cal.N) : (ref ? ref.sec * gridScale(N, ref.refN) : 1);
+  return per * Math.max(1, thermalFillersOn().length);
 }
 function sweepFmtDur(s) { return s < 90 ? Math.round(s) + ' s' : (s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h'); }
 
@@ -1150,7 +1241,11 @@ function sweepRenderSettings() {
   var dis = SWEEP_STATE.running ? ' disabled' : '';
   var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
   var connTxt = { networks: 'all networks · islands removed', largest: 'largest network only', off: 'keep everything' }[conn] || conn;
+  var thFill = (typeof thermalFillersOn === 'function') ? thermalFillersOn().map(function (f) { return f.id; }).join(', ') : '';
   el.innerHTML =
+    '<label class="imp-sub" title="Stiffness + thermal also solves thermal conductivity for every run, with the material and pore fillers set in Configure (Model, Thermal κ). About 1–3 s per filler at 64³.">Physics <select onchange="sweepSetOpt(\'physics\', this.value)"' + dis + '>' +
+      '<option value="stiffness"' + (SWEEP_STATE.physics !== 'thermal' ? ' selected' : '') + '>stiffness</option>' +
+      '<option value="thermal"' + (SWEEP_STATE.physics === 'thermal' ? ' selected' : '') + '>stiffness + thermal' + (thFill ? ' (' + thFill + ')' : '') + '</option></select></label>' +
     '<label class="imp-sub">Precision <select id="swPrec" onchange="sweepSetPrecision(this.value)"' + dis + '>' +
       Object.keys(SWEEP_PRECISION).map(function (k) { return '<option value="' + k + '"' + (k === SWEEP_STATE.precision ? ' selected' : '') + '>' + SWEEP_PRECISION[k].label + '</option>'; }).join('') +
     '</select></label>' +

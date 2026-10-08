@@ -648,7 +648,7 @@ async function homogenizeThermalGPU(recipe, N, opts) {
   var S = thermalGPUSolver(N);
   S.upload(vt);
   var out = { N: N, kS: kS, rho: vt.rho, rhoPhi: vt.rhoPhi, rhoRaw: nRaw / N3, trimLoss: nRaw > 0 ? 1 - nKept / nRaw : 0,
-              nSurf: vt.nSurf, t_voxels_ms: tVox, voxReuse: vt.reused, voxWorkers: vt.workers, byFiller: {}, t_solve_ms: 0,
+              nSurf: vt.nSurf, area: vt.area, t_voxels_ms: tVox, voxReuse: vt.reused, voxWorkers: vt.workers, byFiller: {}, t_solve_ms: 0,
               wraps: null, fragLoss: 0, phi8: null };
   /* v0.21.0 — solid fraction per voxel (0–255, 1 byte, solver order) for the
      viewer's solid-weighted flux smoothing */

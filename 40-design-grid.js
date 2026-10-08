@@ -264,6 +264,21 @@ function thermalAxisDelta(th, f, ax){
   if (kv < 2 * f.kF) return ['filler-dominated', 'warn'];
   return [(kv / th.kS * 100).toFixed(1) + '% of solid', 'neut'];
 }
+/* v0.23.0 — surface area density (m²/m³) and diffusivity (mm²/s) rows */
+function thermalAreaRow(d, th){
+  var cell = (typeof labCellMm === 'function') ? labCellMm(d) : null;
+  if (!th || th.error || !(th.area > 0) || !(cell > 0))
+    return { lbl:'Surface Area Density', val:'\u2014', delta:[th && !th.error && th.byFiller ? 'run again to measure' : '\u2014', 'neut'] };
+  var sad = th.area / (cell / 1000);
+  return { lbl:'Surface Area Density', val:(sad >= 100 ? Math.round(sad).toLocaleString('en-US') : sad.toPrecision(3)) + ' m\u00b2/m\u00b3',
+           delta:['wall area \u00f7 cell volume \u00b7 ' + cell + ' mm cell', 'neut'] };
+}
+function thermalDiffRow(th, f, fl){
+  var a = (typeof thermalDiffusivity === 'function' && f && fl) ? thermalDiffusivity((f.kx + f.ky + f.kz) / 3, th.rhoPhi, th.rhoS, th.cpS, fl) : null;
+  if (!(a > 0)) return { lbl:'Diffusivity', val:'\u2014', delta:[th && th.cpS === null ? 'no heat-capacity data for this material' : 'run again to compute', 'neut'] };
+  var mm2 = a * 1e6;
+  return { lbl:'Diffusivity', val:(mm2 >= 10 ? mm2.toFixed(1) : mm2.toPrecision(3)) + ' mm\u00b2/s', delta:['\u03ba \u00f7 (\u03c1c) of metal + ' + fl.label.toLowerCase(), 'neut'] };
+}
 function thermalStats(d){
   var th = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[d.id] : null;
   var fid = thermalFillerView(th), fl = (typeof thermalFillerById === 'function') ? thermalFillerById(fid) : null;
@@ -284,7 +299,8 @@ function thermalStats(d){
       { lbl:'Share of Solid \u03ba', val:'\u2014', delta:dash },
       { lbl:'Thermal Efficiency', val:'\u2014', delta:dash },
       { lbl:'Anisotropy', val:'\u2014', delta:dash },
-      { lbl:'Diffusivity', val:'\u2014', delta:['needs heat-capacity data', 'neut'] },
+      { lbl:'Diffusivity', val:'\u2014', delta:dash },
+      thermalAreaRow(d, th),
       dens
     ];
   }
@@ -298,7 +314,8 @@ function thermalStats(d){
     { lbl:'Share of Solid \u03ba', val:(f.kRel * 100).toFixed(1) + '%', delta:shareDelta },
     { lbl:'Thermal Efficiency', val:(f.eff * 100).toFixed(0) + '%', delta:['of the most this density can conduct', 'neut'] },
     { lbl:'Anisotropy', val:isFinite(f.anis) ? f.anis.toFixed(2) : '\u221e', delta:['\u03ba max / \u03ba min', 'neut'] },
-    { lbl:'Diffusivity', val:'\u2014', delta:['needs heat-capacity data', 'neut'] },
+    thermalDiffRow(th, f, fl),
+    thermalAreaRow(d, th),
     dens
   ];
 }

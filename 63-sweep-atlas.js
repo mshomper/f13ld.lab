@@ -94,6 +94,10 @@ function atlasRows() {
     var cls = cnt >= 6 ? 2 : (cnt <= 1 ? 0 : 1);
     rows.push({ run: run, res: r, idx: idx, vf: (r.vf_partial != null ? r.vf_partial : r.vf_solved) / 100, C: C, eig: eig, cls: cls, ext: src !== r,
       Ex: src.Ex, Ey: src.Ey, Ez: src.Ez, Gyz: src.Gyz, Gxz: src.Gxz, Gxy: src.Gxy });
+    /* v0.23.0 — geometry and thermal metrics (missing values leave holes) */
+    var row = rows[rows.length - 1], G = r.geom, T = r.thermal;
+    if (G) { row.porosity = G.porosity; row.sad = G.sad_m2m3; row.dh = G.dh_mm; }
+    if (T && T.byFiller) for (var tf in T.byFiller) { row['k_' + tf] = T.byFiller[tf].kMean; row['eff_' + tf] = T.byFiller[tf].eff; }
   });
   return rows;
 }
@@ -535,7 +539,8 @@ function atlasMapValue(r) {
     case 'max': return Math.max.apply(null, e);
     case 'min': return Math.min.apply(null, e);
     case 'z': return r.Ez;
-    default: return r.cls;
+    case 'class': return r.cls;
+    default: return r[ATLAS.mapMetric];   /* v0.23.0 — geometry / thermal metrics */
   }
 }
 function atlasMap(rows, cur) {
@@ -559,7 +564,7 @@ function atlasMap(rows, cur) {
     return;
   }
   title.textContent = 'Parameter map';
-  ctl.innerHTML = '<select onchange="atlasSet(\'mapMetric\', this.value)">' + [['class', 'Connectivity'], ['vf', 'Solid fraction'], ['max', 'Stiffest axis'], ['min', 'Softest axis'], ['z', 'Ez']].map(function (o) {
+  ctl.innerHTML = '<select onchange="atlasSet(\'mapMetric\', this.value)">' + [['class', 'Connectivity'], ['vf', 'Solid fraction'], ['max', 'Stiffest axis'], ['min', 'Softest axis'], ['z', 'Ez']].concat(ATLAS_GEO_THERMAL_METRICS).map(function (o) {
     return '<option value="' + o[0] + '"' + (ATLAS.mapMetric === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>';
   var a1 = axes[0], a2 = axes[1], n1 = a1.values.length, n2 = a2 ? a2.values.length : 1;
   var byIJ = {}; rows.forEach(function (r) { if (r.run.grid) byIJ[r.run.grid[0] + ',' + r.run.grid[1]] = r; });
@@ -730,8 +735,12 @@ function atlasScatter(rows, S, cur) {
    Two-parameter builder sweeps only: parameter 1 across, parameter 2 in depth,
    stiffness up (log by default).  Lab-native canvas 2-D (painter's algorithm), so it
    needs no extra WebGL context.  Same CAD tumble as the other views. */
+/* v0.23.0 — geometry and thermal metrics (Atlas surface and parameter map) */
+var ATLAS_GEO_THERMAL_METRICS = [['porosity', 'Porosity'], ['sad', 'Surface area density (m²/m³)'], ['dh', 'Hydraulic diameter (mm)'],
+  ['k_air', 'Conductivity · air (W/m·K)'], ['k_water', 'Conductivity · water (W/m·K)'], ['k_tissue', 'Conductivity · tissue (W/m·K)'],
+  ['eff_air', 'Thermal efficiency · air'], ['eff_water', 'Thermal efficiency · water'], ['eff_tissue', 'Thermal efficiency · tissue']];
 var ATLAS_S3_METRICS = [['max', 'Stiffest axis'], ['min', 'Softest axis'], ['Ex', 'Ex'], ['Ey', 'Ey'], ['Ez', 'Ez'], ['xyz', 'Ex, Ey, Ez together'],
-  ['mean', 'Mean of Ex, Ey, Ez'], ['Gyz', 'Gyz'], ['Gxz', 'Gxz'], ['Gxy', 'Gxy'], ['vf', 'Solid fraction']];
+  ['mean', 'Mean of Ex, Ey, Ez'], ['Gyz', 'Gyz'], ['Gxz', 'Gxz'], ['Gxy', 'Gxy'], ['vf', 'Solid fraction']].concat(ATLAS_GEO_THERMAL_METRICS);
 var ATLAS_S3_HOME = atlasM3mul(atlasRotX(0.42), atlasRotY(-0.62));
 var ATLAS_S3_EXT = [1, 0.7, 1];   /* half-extents of the plot box: parameter 1, value, parameter 2 */
 

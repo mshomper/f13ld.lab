@@ -1,6 +1,6 @@
 # F13LD.lab — Thermal Conductivity and 3-D Temperature Map (Scope)
 
-**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done in v0.19.3**: CPU reference solver and sub-voxel walls, validated (§11). Phase 0 changed the discretization planned in §3.1–3.3; §11 has the reasons and the numbers. **Phase 1 done in v0.20.0**: GPU solver, Run All phase, cards, fillers, flags (§12). **Phase 2 built in v0.21.0** (branch `thermal-phase2`, awaiting Matt's click-test): temperature / deviation / flux map, κ(n) surface, section plane (§13). Phase 3 (materials + sweep) is next.
+**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done in v0.19.3**: CPU reference solver and sub-voxel walls, validated (§11). Phase 0 changed the discretization planned in §3.1–3.3; §11 has the reasons and the numbers. **Phase 1 done in v0.20.0**: GPU solver, Run All phase, cards, fillers, flags (§12). **Phase 2 built in v0.21.0** (branch `thermal-phase2`, awaiting Matt's click-test): temperature / deviation / flux map, κ(n) surface, section plane (§13). **Phase 3 built in v0.23.0** (branch `thermal-phase3`, awaiting Matt's review): materials, sweep thermal option and columns, geometry columns, surface area density and diffusivity on the cards (§14).
 **Written against:** v0.18.0 (main `18ddbae`), 2026-10-07
 **Goal:** Fill the existing "Thermal κ" stubs with a working solver: the effective conductivity tensor of any lattice the lab can build (native recipes, foams, imported STL cells), a 3-D temperature map on the cell, and a heat-flux "hot spot" map. It should run in seconds, in the same Run All flow as stiffness.
 **Out of scope (this pass):**
@@ -548,3 +548,54 @@ The shared shading block (`20c-f13-shade.js`) is unchanged; thermal colour goes 
 - **Page freeze on Windows (preview only).** The isotherm lines used a screen-space derivative (`fwidth`). Chrome on Windows compiles WebGL through Direct3D, whose compiler tries to unroll the 192-step march loop to make a derivative legal there, and the compile hangs the page. Fixed: isotherms are a fixed soft band (6 % of each ΔT/10 step), and the thermal texture is read with `textureLod`. No derivative or implicit-level sampling is left in the thermal path.
 - **Speckle on the flux view.** Walls are 1–2 voxels thick at N = 64; partial voxels carry less flux than their solid neighbours (series term), so the raw flux jumps voxel to voxel and trilinear sampling across a curved wall turns it into a dotted moiré. Fixed: displayed flux = blur(φ·q) ÷ blur(φ) with a periodic [1 2 1]³ kernel (`thermalSmoothFlux`, solid fraction stored as 1 byte per voxel), sampled with the 8-tap cubic B-spline the stress view uses (now for every thermal view). Peaks read slightly lower; the p99 scale follows.
 - Still to check on the live site: the freeze is gone, and the flux map is smooth.
+
+## 14. Phase 3: materials, sweep and geometry (v0.23.0, 2026-10-08)
+
+### 14.1 Decisions (Matt, 2026-10-08)
+
+- Plan approved as proposed.
+- **Thermal falls back to wrought.** Every material uses its as-built AM conductivity where one is published, otherwise the wrought / handbook value. A material with no value at all (Ti2448, PEKK) still refuses with a message.
+- **Surface area density on the cards** (Thermal κ tab). Porosity, hydraulic diameter and open pore axes only in the sweep CSV and the Atlas.
+
+### 14.2 Materials
+
+- `ks_WmK` revised for every entry from a literature search (sources per entry in `docs/MATERIALS.md` *Thermal properties*); new fields `ksBasis`, `cp_JkgK`, `thermalSource`, `cpSource`; density filled for MS1 (8050), A20X (2850) and PEKK (1270).
+- Largest changes: LPBF Ti-6Al-4V as built 7.1 → **5.4** (Bartsch et al. 2022, measured); CuCrZr null → **315** (Wiedemann–Franz from 76 %IACS; Candela et al. 2024 measured 309–320); MS1 aged null → 20 (EOS); Ta 57.5 → 45 (Elmet LPBF sheet); 316L as built 15 → 15.3 and annealed 16.3; Hastelloy X 9.7 → 9.2; Inconel 718 aged 11.4.
+- Low confidence, flagged in the notes: AlSi10Mg T6 (140, cast handbook), A20X T7 (130, A206-T7 stand-in).
+- **Diffusivity** on the cards: α = κ̄ ÷ (ρc)_eff with (ρc)_eff = φ ρ_s c_s + (1 − φ) ρ_f c_f (φ the composite-voxel solid fraction). "From design" materials use Ti-6Al-4V Grade 5 (556 J/kg·K, 4430 kg/m³), matching the 6.7 W/m·K default.
+
+### 14.3 Geometry metrics (`14e-link-field.js`)
+
+- **Surface area:** marching tetrahedra (6 per voxel around the main diagonal, no lookup tables, watertight) on the corner margin grid the wall data already uses, with the wall data's island-trim rules, so removed islands add no area and count as pore space. Area per cell edge²; surface area density = area ÷ cell edge; hydraulic diameter = 4 · porosity ÷ surface area density.
+- **Open pore axes:** periodic connectivity on the pore space (everything the kept solid does not occupy).
+- **Where it runs:** the thermal voxel workers add each slab's area (cards, no extra pass); the sweep runs it on its geometry worker during the GPU stiffness solve (`designGeometryMetrics`), so it adds no wall time.
+- **Porosity** in the sweep is 1 − the solve's solid fraction (partial volume when on, after the trim).
+
+Validation (`validate-geometry.js`, node, CPU):
+
+| Check | Result |
+|---|---|
+| Sphere r = 0.3, area vs 4πr² | −1.12 / −0.28 / −0.07 / −0.02 % at N = 16 / 32 / 64 / 128 |
+| Two spheres, one trimmed | trimmed sphere adds no area (0.282 vs 0.283) |
+| Schwarz P nodal solid | 2.3550 / 2.3532 / 2.3527 at N = 32 / 64 / 128; minimal surface 2.3451 (+0.33 %, the nodal approximation) |
+| Gyroid nodal solid | 3.0974 / 3.0931 / 3.0920; minimal surface 3.0919 |
+| Diamond nodal solid | 3.8525 / 3.8416 / 3.8389; minimal surface 3.8377 |
+| Sheet Schwarz P (wall 0.3) | 1.97 × the solid's area |
+| Open pores | Schwarz P at offset 0 open on x, y, z; at offset 2.2 (96 % solid) closed |
+
+Cost on the cloud VM (one core): about 1 s per design at 64³ for the full geometry pass (voxels, margin, area, connectivity), run in parallel with the GPU solve.
+
+### 14.4 Sweep
+
+- Run settings: **Physics — stiffness / stiffness + thermal**. Thermal uses the material and pore fillers set in the Configure drawer and the run's own grid (no second grid: the composite wall voxels are grid-converged by N = 64, §11). The ETA adds the measured per-filler thermal time.
+- New CSV columns: `porosity`, `surface_area_density_m2m3`, `hydraulic_diameter_mm`, `open_x/y/z` on every run; with thermal, `thermal_material`, `ks_WmK`, `ks_basis`, `cp_s_JkgK`, `rho_s_kgm3`, `thermal_under_resolved`, `thermal_wall_time_s`, and per filler solved (`_air`, `_water`, `_tissue`): `kx/ky/kz_WmK`, `k_rel`, `k_eff_hs`, `rhoc_eff_MJm3K`, `alpha_mm2s`, `k_iters`, `k_converged`.
+- Notes: geometry or thermal failure, thermal under-resolved, thermal not converged.
+- Atlas (3-D surface and parameter map): porosity, surface area density, hydraulic diameter, conductivity and thermal efficiency per filler.
+
+### 14.5 For Matt's check
+
+- Run All with Thermal κ on: Surface Area Density and Diffusivity rows on the Thermal κ cards.
+- Sweep with Physics = stiffness + thermal on a small builder sweep; Export CSV; Atlas metrics.
+- Pick Ti2448 or PEKK in the material list: thermal should refuse with "no conductivity data".
+- Review the thermal values table in `docs/MATERIALS.md` before merge.
+

@@ -1,5 +1,9 @@
 # F13LD.lab — Next Steps (session handoff)
 
+> **2026-10-08 · v0.23.0** — thermal Phase 3 (branch `thermal-phase3`): material conductivities revised from the literature (as-built AM where published, else wrought — Matt), heat capacity for every entry; Surface Area Density and Diffusivity rows on the Thermal κ cards; sweep *Physics: stiffness + thermal* with per-filler columns; geometry columns (porosity, surface area density, hydraulic diameter, open pore axes) on every sweep run; Atlas metrics. [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §14.
+>
+> **2026-10-07 · v0.22.0** — bottom dock + Configure drawer, physics icons, Lab red per the brand guidelines (`51-dock.js`).
+>
 > **2026-10-07 · v0.21.0** — thermal Phase 2, merged after Matt's click-test: temperature / deviation / flux map on the Thermal κ tab, κ(n) surface (left as is), section plane matching F13LD.tpms (handle feels the same — Matt), filler's field on the cut, fields at half precision. Fixes from the test: a Windows page freeze (screen-space derivative in the shader → Direct3D tried to unroll the march loop; removed) and flux speckle (solid-weighted smoothing + cubic sampling). **Stokes solver removed**; CPU FFT moved to `12b-fft-cpu.js`. Heat-exchanger phases added to the fluids scope after a user request (§11). Recap: [`SESSION_RECAP_2026-10-07.md`](SESSION_RECAP_2026-10-07.md).
 >
 > **2026-10-07 · v0.20.0** — thermal Phase 1: GPU solver `17b` (three axes per CG, batch-2 FFT preconditioner, GPU-resident scalars), wall data on a worker pool reusing the elastic voxels (`17c`), Run All Phase 4 with air / water / tissue, card rows and flags (under-resolved = > 5 % of solid in sub-3³-voxel fragments), "Pores filled with" switch. GPU = Float64 CPU to rounding on all families at N = 16 (headless). Timing and N ≥ 32 checks are Matt's, on the RTX: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4.
@@ -49,6 +53,8 @@
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
 | **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
 | **v0.17.2** | Tight crush = Newton tolerance only (NL_TIGHT_CG_TOL = null), retry reuses the first attempt's elastic setup (cache keyed by void + cgTol); foam: floor 0.3 %, ~45 s per axis (was setup 85.5 s). Nonlinear-tab cubes pause while a run is solving |
+| **v0.23.0** | Thermal Phase 3: materials (k basis, c_p), sweep thermal columns, geometry columns (`14e` surface area, open pores), card rows, Atlas metrics. `THERMAL_SCOPE.md` §14 |
+| **v0.22.0** | Bottom dock + Configure drawer (`51-dock.js`), physics icons, Lab red |
 | **v0.21.0** | Thermal Phase 2: map (T / Δ / q), κ(n) surface, section plane as in F13LD.tpms, half-precision fields. `THERMAL_SCOPE.md` §13 |
 | **v0.20.0** | Thermal Phase 1: `17b` GPU solver, `17c` wall-data worker pool (reuses 16b's voxels / margin via two stash hooks), Run All Phase 4, cards, fillers, flags, console checks. `THERMAL_SCOPE.md` §12 |
 | **v0.19.3** | Thermal Phase 0: CPU reference `17a` (rotated grid, full-tensor laminate composite voxels, PCG with FFT preconditioner), `14e-link-field.js` (`buildVoxelTensors` for thermal, `buildLinkField` for fluids), `proto/thermal/` (validation, face-based scheme kept for the record). `THERMAL_SCOPE.md` §11 |
@@ -66,7 +72,7 @@
    - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
    - sweep builder → "by thinnest feature", and the new CSV columns.
 2. **Thermal Phase 1 — done and merged (v0.20.0).** Matt's RTX checks all PASS ([`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4). **GPU checks and timing are Matt's; sessions don't run them headless** (Matt, 2026-10-07: SwiftShader is far too slow to be worth it).
-3. **Thermal Phase 2 — done (v0.21.0, merged).** Recheck on the live site that the Windows freeze is gone and the flux speckle is smoothed (§13.4). Next: **Phase 3** — materials (fill k_s gaps, add c_p for diffusivity, as-built notes; AlSi10Mg and CuCrZr as-built and treated matter for heat exchangers) and sweep columns / Atlas metrics, **plus the geometry columns** (porosity, surface area density, hydraulic diameter, open axes) (§3.8–3.9).
+3. **Thermal Phase 2 — done (v0.21.0, merged).** Recheck on the live site that the Windows freeze is gone and the flux speckle is smoothed (§13.4). **Phase 3 — built (v0.23.0, branch `thermal-phase3`)**: materials, sweep thermal columns, geometry columns, card rows, Atlas (§14). Next after merge: **fluids v1** (`FLUIDS_LBM_SCOPE.md`), then the heat-exchanger phases.
 4. **Then fluids version 1** ([`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md)), **then the heat-exchanger phases** HX-1 inertial pressure drop and HX-2 convective heat transfer (§11; Matt, 2026-10-07, after a user request for a lattice heat-exchanger database).
 5. **Dev cycle** — §1a.
 

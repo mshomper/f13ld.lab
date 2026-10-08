@@ -53,6 +53,18 @@
            nExamined, nMulti, t_ms }
      buildLinkFieldFromFn(fn, N, kept, raw, mCorner, opts)
      planeCubeSolidFraction(m0, gx, gy, gz)
+     marginSurfaceArea(m, N, kept, raw, iRange)   (v0.23.0) wall area ÷ cell edge²
+     voidOpenAxes(kept, N)                        (v0.23.0) pores run through x / y / z
+     designGeometryMetrics(recipe, N, opts)       (v0.23.0) both, built from the recipe
+
+   3. Surface area (v0.23.0, thermal Phase 3 — THERMAL_SCOPE.md §3.9, §14).
+      Marching tetrahedra on the corner margin grid: each voxel cube is
+      split into 6 tetrahedra around its main diagonal and the zero level of
+      the linearly interpolated margin is triangulated (watertight across
+      faces, no lookup tables).  The same island-trim rules as the wall data
+      apply, so floating islands the trim removes add no area (they count as
+      pore space).  Area is reported per cell edge²; surface area density =
+      area ÷ cell edge, hydraulic diameter = 4 · porosity ÷ that.
    Index order: i·N² + j·N + k with x on i (solver order, as buildVoxels).
    ============================================================ */
 
@@ -153,7 +165,97 @@ function voxelTensorsFromMargin(mg, N, kept, raw, opts) {
   var ps = 0;
   for (var p1 = 0; p1 < N3; p1++) ps += phi[p1];
   res.rhoPhi = ps / N3; res.nSurf = nSurf; res.nPlane = nPlane;
+  /* v0.23.0 — wall area of the same slab range (summed by the worker pool) */
+  if (opts.area !== false) res.area = marginSurfaceArea(m, N, kept, raw, [iLo, iHi]);
   return res;
+}
+
+/* ── v0.23.0 — surface area, pore connectivity ─────────────────────────── */
+/* Tetrahedra around the cube diagonal 0–7, corners indexed x + 2y + 4z. */
+var MT_TETS = [[0, 7, 1, 3], [0, 7, 3, 2], [0, 7, 2, 6], [0, 7, 6, 4], [0, 7, 4, 5], [0, 7, 5, 1]];
+var MT_CX = [0, 1, 0, 1, 0, 1, 0, 1], MT_CY = [0, 0, 1, 1, 0, 0, 1, 1], MT_CZ = [0, 0, 0, 0, 1, 1, 1, 1];
+
+function _mtTriArea(ax, ay, az, bx, by, bz, cx, cy, cz) {
+  var ux = bx - ax, uy = by - ay, uz = bz - az, vx = cx - ax, vy = cy - ay, vz = cz - az;
+  var wx = uy * vz - uz * vy, wy = uz * vx - ux * vz, wz = ux * vy - uy * vx;
+  return 0.5 * Math.sqrt(wx * wx + wy * wy + wz * wz);
+}
+
+/* Wall area over x-slabs iRange [i0, i1) (default the whole grid), in units
+   of the cell edge², on the corner margin grid m (solid ⟺ m > 0, periodic).
+   kept / raw: the island-trimmed and raw 0/1 voxels (raw may be null). */
+function marginSurfaceArea(m, N, kept, raw, iRange) {
+  var NN = N * N, area = 0, c = new Float64Array(8), P = new Float64Array(12);
+  var iLo = iRange ? iRange[0] : 0, iHi = iRange ? iRange[1] : N;
+  function isTrimmed(id) { return raw && raw[id] > 0.5 && !(kept[id] > 0.5); }
+  for (var i = iLo; i < iHi; i++) {
+    var i1 = (i + 1) % N;
+    for (var j = 0; j < N; j++) {
+      var j1 = (j + 1) % N;
+      for (var k = 0; k < N; k++) {
+        var k1 = (k + 1) % N, id = i * NN + j * N + k;
+        /* corner order x + 2y + 4z, with x on i (solver order) */
+        c[0] = m[i * NN + j * N + k];   c[1] = m[i1 * NN + j * N + k];
+        c[2] = m[i * NN + j1 * N + k];  c[3] = m[i1 * NN + j1 * N + k];
+        c[4] = m[i * NN + j * N + k1];  c[5] = m[i1 * NN + j * N + k1];
+        c[6] = m[i * NN + j1 * N + k1]; c[7] = m[i1 * NN + j1 * N + k1];
+        var pos = 0;
+        for (var q = 0; q < 8; q++) if (c[q] > 0) pos++;
+        if (pos === 0 || pos === 8) continue;
+        if (isTrimmed(id)) continue;
+        if (!(kept[id] > 0.5) && raw && raw !== kept) {            /* void next to a removed island only */
+          var nearKept = false, nearTrim = false;
+          for (var a = -1; a <= 1 && !nearKept; a++) for (var b = -1; b <= 1 && !nearKept; b++) for (var e = -1; e <= 1 && !nearKept; e++) {
+            var nb = ((i + a + N) % N) * NN + ((j + b + N) % N) * N + ((k + e + N) % N);
+            if (kept[nb] > 0.5) nearKept = true; else if (isTrimmed(nb)) nearTrim = true;
+          }
+          if (!nearKept && nearTrim) continue;
+        }
+        for (var t = 0; t < 6; t++) {
+          var T = MT_TETS[t], inn = [], out = [];
+          for (var v = 0; v < 4; v++) (c[T[v]] > 0 ? inn : out).push(T[v]);
+          if (!inn.length || !out.length) continue;
+          var np = 0;
+          /* crossing points on every inside–outside edge */
+          for (var ia = 0; ia < inn.length; ia++) for (var ob = 0; ob < out.length; ob++) {
+            var A = inn[ia], B = out[ob], sa = c[A], sb = c[B], f = sa / (sa - sb);
+            P[np++] = MT_CX[A] + f * (MT_CX[B] - MT_CX[A]);
+            P[np++] = MT_CY[A] + f * (MT_CY[B] - MT_CY[A]);
+            P[np++] = MT_CZ[A] + f * (MT_CZ[B] - MT_CZ[A]);
+          }
+          if (np === 9) area += _mtTriArea(P[0], P[1], P[2], P[3], P[4], P[5], P[6], P[7], P[8]);
+          else {
+            /* 2 in, 2 out: points (a,c) (a,d) (b,c) (b,d) → quad a-c, a-d, b-d, b-c */
+            area += _mtTriArea(P[0], P[1], P[2], P[3], P[4], P[5], P[9], P[10], P[11]);
+            area += _mtTriArea(P[0], P[1], P[2], P[9], P[10], P[11], P[6], P[7], P[8]);
+          }
+        }
+      }
+    }
+  }
+  return area / NN;
+}
+
+/* Does the pore space (everything the kept solid does not occupy, trimmed
+   islands included) run continuously through the cell along each axis? */
+function voidOpenAxes(kept, N) {
+  var N3 = N * N * N, v = new Uint8Array(N3), any = false;
+  for (var p = 0; p < N3; p++) if (!(kept[p] > 0.5)) { v[p] = 1; any = true; }
+  if (!any) return { x: false, y: false, z: false, bits: 0 };
+  var pc = periodicComponents(v, N), bits = 0;
+  for (var c = 1; c <= pc.count; c++) bits |= pc.wraps[c];
+  return { x: !!(bits & 1), y: !!(bits & 2), z: !!(bits & 4), bits: bits };
+}
+
+/* Geometry metrics for the sweep (no solver): wall area per cell edge²,
+   0/1 solid fraction after the trim, and open pore axes.  Porosity for
+   reporting comes from the solve's partial-volume solid fraction. */
+function designGeometryMetrics(recipe, N, opts) {
+  var t0 = linkNowMs(), d = designMarginSetup(recipe, N, opts || {});
+  var N3 = N * N * N, solid = 0;
+  for (var p = 0; p < N3; p++) if (d.kept[p] > 0.5) solid++;
+  return { N: N, area: marginSurfaceArea(d.mg.m, N, d.kept, d.raw), vfKept: solid / N3,
+           open: voidOpenAxes(d.kept, N), t_ms: linkNowMs() - t0 };
 }
 
 function buildLinkField(recipe, N, opts) {
@@ -249,5 +351,6 @@ function planeCubeSolidFraction(m0, gx, gy, gz) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { buildVoxelTensors: buildVoxelTensors, voxelTensorsFromMargin: voxelTensorsFromMargin, buildLinkField: buildLinkField,
-    buildLinkFieldFromFn: buildLinkFieldFromFn, planeCubeSolidFraction: planeCubeSolidFraction };
+    buildLinkFieldFromFn: buildLinkFieldFromFn, planeCubeSolidFraction: planeCubeSolidFraction,
+    marginSurfaceArea: marginSurfaceArea, voidOpenAxes: voidOpenAxes, designGeometryMetrics: designGeometryMetrics };
 }

@@ -71,6 +71,36 @@ function thermalKsFor(recipe){
   if (m && Object.prototype.hasOwnProperty.call(m, 'ks_WmK')) return (isFinite(m.ks_WmK) && m.ks_WmK > 0) ? m.ks_WmK : null;
   return 6.7;
 }
+/* v0.23.0 — heat capacity and density of the solid for diffusivity: the
+   library material's cp_JkgK / rho_kgm3, or Ti-6Al-4V Grade 5 (556 J/kg·K,
+   4430 kg/m³) for a design without a library material.  null = no data. */
+function thermalCpFor(recipe){
+  var m = recipe && recipe.material;
+  if (m && Object.prototype.hasOwnProperty.call(m, 'cp_JkgK')) return (isFinite(m.cp_JkgK) && m.cp_JkgK > 0) ? m.cp_JkgK : null;
+  return 556;
+}
+function thermalRhoFor(recipe){
+  var m = recipe && recipe.material;
+  if (m && Object.prototype.hasOwnProperty.call(m, 'rho_kgm3')) return (isFinite(m.rho_kgm3) && m.rho_kgm3 > 0) ? m.rho_kgm3 : null;
+  return 4430;
+}
+/* Effective diffusivity (m²/s) of a solved filler: κ mean ÷ the
+   volume-weighted heat capacity of solid + filler, (ρc) = φ ρs cs + (1 − φ) ρf cf. */
+function thermalDiffusivity(kMean, phi, rhoS, cpS, filler){
+  if (!(kMean > 0) || !(rhoS > 0) || !(cpS > 0) || !filler || !isFinite(phi)) return null;
+  var rc = phi * rhoS * cpS + (1 - phi) * filler.rho * filler.cp;
+  return rc > 0 ? kMean / rc : null;
+}
+/* Cell edge in mm for a lab design (cards): the design's own cell_mm, else
+   the recipe's cell / foam tile size, else 5 mm (as the sweep). */
+function labCellMm(d){
+  if (d && isFinite(d.cell_mm) && d.cell_mm > 0) return d.cell_mm;
+  var rc = null;
+  try { rc = (typeof recipeForDesign === 'function') ? recipeForDesign(d) : null; } catch (e) { rc = null; }
+  var gm = (rc && rc.geometry) || {};
+  if (rc && rc.family === 'foam' && gm.tile_mm > 0) return gm.tile_mm;
+  return gm.cellSizeMm > 0 ? gm.cellSizeMm : 5;
+}
 function onThermalFillerToggle(id, on){
   THERMAL_STATE.fillers[id] = !!on;
   recomputeEstimate();
@@ -889,6 +919,7 @@ async function runRealSweep(N, runToken){
         if (stale()) return;
         thEx.rho = TR.rho; thEx.rhoPhi = TR.rhoPhi; thEx.rhoRaw = TR.rhoRaw; thEx.trimLoss = TR.trimLoss; thEx.wraps = TR.wraps;
         thEx.nSurf = TR.nSurf; thEx.t_voxels_ms = TR.t_voxels_ms; thEx.voxReuse = TR.voxReuse;
+        thEx.area = TR.area; thEx.rhoS = thermalRhoFor(rt); thEx.cpS = thermalCpFor(rt);   /* v0.23.0 — surface area, diffusivity inputs */
         if (TR.phi8) thEx.phi8 = TR.phi8;
         thEx._tex = null;   /* v0.21.0 — viewer texture cache */
         thEx.fragLoss = TR.fragLoss;

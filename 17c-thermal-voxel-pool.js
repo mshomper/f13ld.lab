@@ -26,7 +26,7 @@
      thermalStashMargin(recipe, N, opts, m)              (16b, partial volume)
      buildVoxelTensorsParallel(recipe, N, opts, onProgress) → Promise<vt>
          vt as buildVoxelTensors: { N, kept, raw, phi, n, rho, rhoPhi,
-           nSurf, nPlane, t_ms, t_setup_ms, t_sample_ms, workers, reused }
+           nSurf, nPlane, area (wall area ÷ cell edge², v0.23.0), t_ms, t_setup_ms, t_sample_ms, workers, reused }
      thermalVoxelPoolInfo()  → { size, spawned }
      thermalVoxelSelfTest(recipe, N)  → Promise<{ maxDiff, ... }>  (console)
    ============================================================ */
@@ -35,7 +35,7 @@ var THERMAL_VOXEL_FILES = [
   '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
   '13c-import-kernel.js', '13d-foam-kernel.js', '14e-link-field.js'
 ];
-var THERMAL_VOXEL_VERSION = 'tv-1';   /* bump when a worker file changes (blob workers cache separately) */
+var THERMAL_VOXEL_VERSION = 'tv-2';   /* v0.23.0 — slabs also return wall area */   /* bump when a worker file changes (blob workers cache separately) */
 
 /* ── Stash: the elastic solves of this Run All ───────────────────────
    Entries { recipe, N, conn, raw, kept, m }, newest last, matched by the
@@ -94,7 +94,7 @@ var THERMAL_VOXEL_ONMESSAGE =
   '      var vt = voxelTensorsFromMargin({ m: job.m, fn: fn }, N, job.kept, job.raw, { iRange: [job.i0, job.i1] });\n' +
   '      var a0 = job.i0*NN, a1 = job.i1*NN;\n' +
   '      var phi = vt.phi.slice(a0, a1), nrm = vt.n.slice(3*a0, 3*a1);\n' +
-  '      postMessage({ id: job.id, ok: true, phi: phi, n: nrm, nSurf: vt.nSurf, nPlane: vt.nPlane }, [phi.buffer, nrm.buffer]);\n' +
+  '      postMessage({ id: job.id, ok: true, phi: phi, n: nrm, nSurf: vt.nSurf, nPlane: vt.nPlane, area: vt.area }, [phi.buffer, nrm.buffer]);\n' +
   '    }\n' +
   '  } catch (err){ postMessage({ id: job.id, ok: false, message: (err && err.message) || String(err) }); }\n' +
   '};\n';
@@ -195,15 +195,15 @@ async function buildVoxelTensorsParallel(recipe, N, opts, onProgress) {
     }));
   }
   var tSetup = linkNowMs() - t0, t1 = linkNowMs();
-  var phi = Float32Array.from(kept), nrm = new Float32Array(3 * N3), nSurf = 0, nPlane = 0;
+  var phi = Float32Array.from(kept), nrm = new Float32Array(3 * N3), nSurf = 0, nPlane = 0, area = 0;
   await Promise.all(slabs.map(function (sl) {
     return _tvRun({ type: 'tensors', recipe: recipe, N: N, key: key, i0: sl[0], i1: sl[1], m: m, kept: kept, raw: raw, importGrid: importGrid }).then(function (r) {
-      phi.set(r.phi, sl[0] * NN); nrm.set(r.n, 3 * sl[0] * NN); nSurf += r.nSurf; nPlane += r.nPlane; tick('walls');
+      phi.set(r.phi, sl[0] * NN); nrm.set(r.n, 3 * sl[0] * NN); nSurf += r.nSurf; nPlane += r.nPlane; area += (r.area || 0); tick('walls');
     });
   }));
   var solid = 0, ps = 0;
   for (var p = 0; p < N3; p++) { if (kept[p] > 0.5) solid++; ps += phi[p]; }
-  return { N: N, kept: kept, raw: raw, phi: phi, n: nrm, rho: solid / N3, rhoPhi: ps / N3, nSurf: nSurf, nPlane: nPlane,
+  return { N: N, kept: kept, raw: raw, phi: phi, n: nrm, rho: solid / N3, rhoPhi: ps / N3, nSurf: nSurf, nPlane: nPlane, area: area,
            t_ms: linkNowMs() - t0, t_setup_ms: tSetup, t_sample_ms: linkNowMs() - t1,
            workers: Math.min(slabs.length, thermalVoxelPoolInfo().size), reused: reused.join('+') || 'none' };
 }

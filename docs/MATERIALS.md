@@ -8,19 +8,19 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 ### Titanium
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `ti64-g23-lpbf-asbuilt` | LPBF (SLM 280/500, 30 um, 400 W) — As-built (no HT) | 115.0 | 0.342 | 4430 | 1123 | 1285 | 8.5 | 7.1 | 1408 | 38.7 | considere |
+| `ti64-g23-lpbf-asbuilt` | LPBF (SLM 280/500, 30 um, 400 W) — As-built (no HT) | 115.0 | 0.342 | 4430 | 1123 | 1285 | 8.5 | 5.4 | 1408 | 38.7 | considere |
 | `ti64-g5-lpbf-sr` | LPBF (EOS M290, 40 um) — Stress relieved / heat treated 800 C 2 h | 112.5 | 0.342 | 4410 | 990 | 1080 | 14.5 | 6.7 | 1316 | 10.9 | considere |
 | `ti64-g5-lpbf-hip` | LPBF (3D Systems DMP) — HIP | 112.5 | 0.342 | 4420 | 920 | 1010 | 14.5 | 6.7 | 1228 | 11.2 | considere |
-| `ti64-g23-lpbf-annealed` | LPBF (Renishaw RenAM 500, 60 um) — Annealed (per Renishaw) | 117.0 | 0.342 | 4400 | 956 | 1048 | 18.0 | 7.0 | 1364 | 7.3 | considere* |
-| `ti64-g23-lpbf-hip` | LPBF (SLM 280, 30 um, 400 W) — HIP 920 C / 1000 bar / 2 h | 124.0 | 0.342 | 4430 | 878 | 982 | 14.0 | 7.1 | 1176 | 13.0 | considere |
+| `ti64-g23-lpbf-annealed` | LPBF (Renishaw RenAM 500, 60 um) — Annealed (per Renishaw) | 117.0 | 0.342 | 4400 | 956 | 1048 | 18.0 | 6.6 | 1364 | 7.3 | considere* |
+| `ti64-g23-lpbf-hip` | LPBF (SLM 280, 30 um, 400 W) — HIP 920 C / 1000 bar / 2 h | 124.0 | 0.342 | 4430 | 878 | 982 | 14.0 | 6.6 | 1176 | 13.0 | considere |
 | `ti64-g5-ebm-asbuilt` | EB-PBF (Arcam Q10plus, 70 um) — As-built | 113.8 | 0.342 | 4430 | 896 | 997 | 14.4 | 6.7 | 1202 | 12.3 | considere |
 | `cpti-g2-lpbf-asbuilt` | LPBF (EOS M290 400 W) — As-built | 105.0 | 0.320 | 4510 | 560 | 660 | 22.0 | 16.4 | 887 | 7.0 | considere |
 | `cpti-g2-lpbf-ht` | LPBF (EOS M290 / M404) — Heat treated 700 C / 1.5-2 h, Ar | 105.0 | 0.320 | 4510 | 438 | 568 | 25.0 | 16.4 | 774 | 7.3 | considere |
-| `cpti-g1-lpbf-sr` | LPBF (3D Systems ProX DMP) — Stress relieved | 112.5 | 0.320 | 4510 | 380 | 500 | 29.5 | 16.0 | 730 | 5.5 | considere |
-| `ti6al7nb-lpbf-asbuilt` | LPBF (research, Hein et al. 2022) — As-built | 105.0 | — | 4520 | 940 | 1109 | 14.4 | — | 1312 | 16.4 | considere |
-| `ti6al7nb-lpbf-sr` | LPBF (research, Hein et al. 2022) — Stress relief 600 C / 4 h (HT3) | 116.0 | — | 4520 | 1045 | 1110 | 12.5 | — | 1326 | 11.6 | considere* |
+| `cpti-g1-lpbf-sr` | LPBF (3D Systems ProX DMP) — Stress relieved | 112.5 | 0.320 | 4510 | 380 | 500 | 29.5 | 16 | 730 | 5.5 | considere |
+| `ti6al7nb-lpbf-asbuilt` | LPBF (research, Hein et al. 2022) — As-built | 105.0 | — | 4520 | 940 | 1109 | 14.4 | 6.7 | 1312 | 16.4 | considere |
+| `ti6al7nb-lpbf-sr` | LPBF (research, Hein et al. 2022) — Stress relief 600 C / 4 h (HT3) | 116.0 | — | 4520 | 1045 | 1110 | 12.5 | 6.7 | 1326 | 11.6 | considere* |
 | `ti2448-lpbf-asbuilt` | LPBF (DMG Mori LT12, Z-loaded) — As-built | 49.0 | — | — | 490 | 700 | 22.0 | — | 890 | 12.3 | considere |
 
 <details><summary>Anisotropy and data flags</summary>
@@ -42,15 +42,15 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 ### Stainless steel
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `ss316l-lpbf-asbuilt` | LPBF (EOS M290, 40 um) — As-built | 180.0 | 0.280 | 7970 | 510 | 605 | 45.0 | 15.0 | 1391 | 1.4 | considere* |
-| `ss316l-lpbf-annealed` | LPBF (3D Systems DMP Flex/Factory 350) — Full anneal | 180.0 | 0.280 | 8000 | 345 | 575 | 58.5 | 15.0 | 1229 | 2.2 | considere* |
+| `ss316l-lpbf-asbuilt` | LPBF (EOS M290, 40 um) — As-built | 180.0 | 0.280 | 7970 | 510 | 605 | 45.0 | 15.3 | 1391 | 1.4 | considere* |
+| `ss316l-lpbf-annealed` | LPBF (3D Systems DMP Flex/Factory 350) — Full anneal | 180.0 | 0.280 | 8000 | 345 | 575 | 58.5 | 16.3 | 1229 | 2.2 | considere* |
 | `ss174-lpbf-h900` | LPBF (EOS M290, 40 um) — H900 (per EOS HT) | 193.0 | 0.300 | 7750 | 1240 | 1360 | 14.0 | 18.3 | 1646 | 11.3 | considere |
 | `ss174-lpbf-asbuilt` | LPBF (research, Li et al.) — As-built | 193.0 | 0.300 | 7750 | 784 | 922 | 16.7 | 18.3 | 1140 | 11.0 | considere |
-| `ss155-lpbf-h900` | LPBF (EOS M290) — H900 modified | 190.0 | 0.280 | 7700 | 1325 | 1445 | 14.0 | 17.0 | 1753 | 11.0 | considere |
-| `ss155-lpbf-asbuilt` | LPBF (EOS M290) — As-built | 190.0 | 0.280 | 7700 | 978 | 1200 | 15.5 | 17.0 | 1440 | 14.8 | considere |
-| `ms1-lpbf-aged` | LPBF (EOS M290, 40 um) — Aged 490 C / 6 h | 190.0 | — | — | 2015 | 2092 | 4.2 | — | 2181 | 102.3 | considere |
+| `ss155-lpbf-h900` | LPBF (EOS M290) — H900 modified | 190.0 | 0.280 | 7700 | 1325 | 1445 | 14.0 | 17.8 | 1753 | 11.0 | considere |
+| `ss155-lpbf-asbuilt` | LPBF (EOS M290) — As-built | 190.0 | 0.280 | 7700 | 978 | 1200 | 15.5 | 18.3 | 1440 | 14.8 | considere |
+| `ms1-lpbf-aged` | LPBF (EOS M290, 40 um) — Aged 490 C / 6 h | 190.0 | — | 8050 | 2015 | 2092 | 4.2 | 20 | 2181 | 102.3 | considere |
 
 <details><summary>Anisotropy and data flags</summary>
 
@@ -66,14 +66,14 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 ### Nickel superalloy
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | `in718-lpbf-asbuilt` | LPBF (EOS M290, 40 um) — As-built | 200.0 | 0.290 | 8190 | 725 | 1030 | 28.5 | 11.1 | 1448 | 6.9 | considere |
-| `in718-lpbf-sta` | LPBF (EOS M290, 40 um) — Solution + aged (AMS 5662-type) | 200.0 | 0.290 | 8190 | 1192 | 1440 | 14.5 | 11.1 | 1707 | 16.1 | considere |
-| `in718-lpbf-hip-sta` | LPBF (Nikon SLM NXG 600, vertical) — HIP + solution + aged | 200.0 | 0.290 | 8200 | 985 | 1290 | 24.0 | 11.1 | 1726 | 8.2 | considere |
+| `in718-lpbf-sta` | LPBF (EOS M290, 40 um) — Solution + aged (AMS 5662-type) | 200.0 | 0.290 | 8190 | 1192 | 1440 | 14.5 | 11.4 | 1707 | 16.1 | considere |
+| `in718-lpbf-hip-sta` | LPBF (Nikon SLM NXG 600, vertical) — HIP + solution + aged | 200.0 | 0.290 | 8200 | 985 | 1290 | 24.0 | 11.4 | 1726 | 8.2 | considere |
 | `in625-lpbf-sr` | LPBF (EOS M290, 40 um) — Stress relieved 870 C | 209.0 | 0.278 | 8440 | 660 | 945 | 41.5 | 9.8 | 1621 | 3.5 | considere* |
-| `hx-lpbf-asbuilt` | LPBF (EOS M290 400 W) — As-built | 185.0 | 0.328 | 8200 | 588 | 748 | 33.0 | 9.7 | 1178 | 4.1 | considere* |
-| `hx-lpbf-hip` | LPBF (Velo3D, vertical) — HIP 1177 C | 159.0 | 0.328 | 8220 | 325 | 651 | 56.9 | 9.7 | 1277 | 2.9 | considere |
+| `hx-lpbf-asbuilt` | LPBF (EOS M290 400 W) — As-built | 185.0 | 0.328 | 8200 | 588 | 748 | 33.0 | 9.2 | 1178 | 4.1 | considere* |
+| `hx-lpbf-hip` | LPBF (Velo3D, vertical) — HIP 1177 C | 159.0 | 0.328 | 8220 | 325 | 651 | 56.9 | 9.2 | 1277 | 2.9 | considere |
 | `h282-lpbf-ht` | LPBF (EOS M290, 40 um) — Heat treated (EOS option 1) | 218.0 | 0.310 | 8300 | 710 | 1186 | 26.9 | 10.2 | 1598 | 9.2 | considere |
 
 <details><summary>Anisotropy and data flags</summary>
@@ -90,14 +90,14 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 ### Aluminium
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `alsi10mg-lpbf-asbuilt` | LPBF (3D Systems DMP) — As-built | 71.0 | 0.330 | 2680 | 245 | 435 | 6.5 | 125.0 | 463 | 83.2 | considere |
-| `alsi10mg-lpbf-sr` | LPBF (3D Systems DMP) — Stress relieved | 73.0 | 0.330 | 2680 | 185 | 305 | 10.5 | 165.0 | 339 | 37.7 | considere |
-| `alsi10mg-lpbf-t6` | LPBF (GKN Additive, vertical bars, as-built surface) — T6 | 80.4 | 0.330 | 2670 | 228 | 289 | 7.2 | — | 312 | 50.1 | considere |
+| `alsi10mg-lpbf-asbuilt` | LPBF (3D Systems DMP) — As-built | 71.0 | 0.330 | 2680 | 245 | 435 | 6.5 | 125 | 463 | 83.2 | considere |
+| `alsi10mg-lpbf-sr` | LPBF (3D Systems DMP) — Stress relieved | 73.0 | 0.330 | 2680 | 185 | 305 | 10.5 | 165 | 339 | 37.7 | considere |
+| `alsi10mg-lpbf-t6` | LPBF (GKN Additive, vertical bars, as-built surface) — T6 | 80.4 | 0.330 | 2670 | 228 | 289 | 7.2 | 140 | 312 | 50.1 | considere |
 | `scalmalloy-lpbf-aged` | LPBF (3D Systems DMP, 30 um) — Aged 325 C / 4 h | 69.0 | 0.330 | 2670 | 490 | 520 | 15.8 | 97.5 | 674 | 6.7 | considere* |
-| `a20x-lpbf-t7` | LPBF (Colibrium M2 Series 5, 400 W) — T7 (solution + age) | 74.5 | 0.330 | — | 398 | 468 | 7.8 | — | 509 | 41.3 | considere |
-| `al6061ram2-lpbf-t6` | LPBF (3D Systems DMP Flex 350, XY) — Modified T6 | 69.0 | 0.330 | 2700 | 260 | 295 | 16.0 | 162.0 | 366 | 10.1 | considere |
+| `a20x-lpbf-t7` | LPBF (Colibrium M2 Series 5, 400 W) — T7 (solution + age) | 74.5 | 0.330 | 2850 | 398 | 468 | 7.8 | 130 | 509 | 41.3 | considere |
+| `al6061ram2-lpbf-t6` | LPBF (3D Systems DMP Flex 350, XY) — Modified T6 | 69.0 | 0.330 | 2700 | 260 | 295 | 16.0 | 162 | 366 | 10.1 | considere |
 
 <details><summary>Anisotropy and data flags</summary>
 
@@ -112,11 +112,11 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 ### Cobalt-chrome
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `cocrmo-lpbf-asbuilt` | LPBF (EOS M290, 40 um) — As-built | 180.5 | 0.290 | 8300 | 940 | 1285 | 18.0 | 14.0 | 1572 | 14.4 | considere |
-| `cocrmo-lpbf-ht` | LPBF (EOS M290, 40 um) — Stress relieved + solution annealed | 206.5 | 0.290 | 8300 | 635 | 1135 | 30.0 | 14.0 | 1580 | 8.2 | considere |
-| `cocrmo-lpbf-hip` | LPBF (3D Systems DMP) — HIP | 225.0 | 0.290 | 8350 | 492 | 985 | 26.0 | 14.0 | 1299 | 10.9 | considere |
+| `cocrmo-lpbf-asbuilt` | LPBF (EOS M290, 40 um) — As-built | 180.5 | 0.290 | 8300 | 940 | 1285 | 18.0 | 14 | 1572 | 14.4 | considere |
+| `cocrmo-lpbf-ht` | LPBF (EOS M290, 40 um) — Stress relieved + solution annealed | 206.5 | 0.290 | 8300 | 635 | 1135 | 30.0 | 14 | 1580 | 8.2 | considere |
+| `cocrmo-lpbf-hip` | LPBF (3D Systems DMP) — HIP | 225.0 | 0.290 | 8350 | 492 | 985 | 26.0 | 14 | 1299 | 10.9 | considere |
 
 <details><summary>Anisotropy and data flags</summary>
 
@@ -128,9 +128,9 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 ### Refractory
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `ta-lpbf-asbuilt` | LPBF (research, Kustas et al. 2025) — As-built | 186.0 | 0.340 | 16680 | 478 | 542 | 20.7 | 57.5 | 736 | 6.0 | considere* |
+| `ta-lpbf-asbuilt` | LPBF (research, Kustas et al. 2025) — As-built | 186.0 | 0.340 | 16680 | 478 | 542 | 20.7 | 45 | 736 | 6.0 | considere* |
 | `nb-lpbf-asbuilt` | LPBF (research, Griemsmann et al. 2021) — As-built | 105.0 | 0.400 | 8580 | 324 | 525 | 12.0 | 53.7 | 594 | 31.1 | considere |
 
 <details><summary>Anisotropy and data flags</summary>
@@ -142,10 +142,10 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 ### Copper
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `grcop42-lpbf-hip` | LPBF (Velo3D, vertical) — HIP | 115.0 | 0.340 | 8790 | 186 | 378 | 32.9 | 340.0 | 542 | 7.5 | considere |
-| `cucrzr-lpbf-ht` | LPBF (EOS M400-1) — Tensile-optimized heat treatment | 122.5 | 0.340 | 8840 | 502 | 565 | 18.0 | — | 730 | 7.8 | considere |
+| `grcop42-lpbf-hip` | LPBF (Velo3D, vertical) — HIP | 115.0 | 0.340 | 8790 | 186 | 378 | 32.9 | 340 | 542 | 7.5 | considere |
+| `cucrzr-lpbf-ht` | LPBF (EOS M400-1) — Tensile-optimized heat treatment | 122.5 | 0.340 | 8840 | 502 | 565 | 18.0 | 315 | 730 | 7.8 | considere |
 
 <details><summary>Anisotropy and data flags</summary>
 
@@ -158,13 +158,13 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 > **Polymers:** J2 plasticity with Voce hardening only roughly approximates polymers, whose response depends on rate, temperature and pressure and differs in tension and compression. Most AM polymer datasheets publish no yield stress, so Voce is left empty for those entries. Measure σY0 in compression before running a crush.
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `pa12-sls` | SLS (EOS) — As-sintered, dry | 1.6 | 0.400 | 930 | — | 46 | 13.3 | — | — | — | none |
-| `pa12-mjf` | MJF (HP) — As-printed | 1.9 | 0.400 | 1010 | — | 50 | 13.0 | — | — | — | none |
-| `peek-sls` | HT-SLS (EOS P 800) — As-sintered (x/y) | 4.2 | 0.370 | 1315 | — | 90 | 2.8 | 0.3 | — | — | none |
-| `peek-fff` | FFF (heated chamber >=150 C) — As-printed, XY | 3.5 | 0.370 | 1300 | 70 | 70 | — | 0.3 | 70 | 1.0 | perfect-plastic |
-| `pekk-sls` | HT-SLS (Benedetti et al. 2019) — As-sintered | 4.3 | — | — | — | 82 | 2.4 | — | — | — | none |
+| `pa12-sls` | SLS (EOS) — As-sintered, dry | 1.6 | 0.400 | 930 | — | 46 | 13.3 | 0.26 | — | — | none |
+| `pa12-mjf` | MJF (HP) — As-printed | 1.9 | 0.400 | 1010 | — | 50 | 13.0 | 0.26 | — | — | none |
+| `peek-sls` | HT-SLS (EOS P 800) — As-sintered (x/y) | 4.2 | 0.370 | 1315 | — | 90 | 2.8 | 0.29 | — | — | none |
+| `peek-fff` | FFF (heated chamber >=150 C) — As-printed, XY | 3.5 | 0.370 | 1300 | 70 | 70 | — | 0.29 | 70 | 1.0 | perfect-plastic |
+| `pekk-sls` | HT-SLS (Benedetti et al. 2019) — As-sintered | 4.3 | — | 1270 | — | 82 | 2.4 | — | — | — | none |
 
 <details><summary>Anisotropy and data flags</summary>
 
@@ -180,15 +180,76 @@ Values are **typical (mean) OEM or peer-reviewed values**, averaged over build o
 
 > **NiTi is NOT supported** by the J2/Voce solver (superelastic transformation plateau, recoverable strain). Listed for completeness, `j2Supported: false`.
 
-| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K) | Voce σsat (MPa) | δ | fit |
+| id | process / condition | E (GPa) | ν | ρ (kg/m³) | σY0 (MPa) | UTS (MPa) | A (%) | k (W/m·K)¹ | Voce σsat (MPa) | δ | fit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `niti-lpbf` | LPBF — Any (superelastic or shape-memory) | 78.0 | 0.330 | 6450 | — | — | — | 18.0 | — | — | none |
+| `niti-lpbf` | LPBF — Any (superelastic or shape-memory) | 78.0 | 0.330 | 6450 | — | — | — | 18 | — | — | none |
 
 <details><summary>Anisotropy and data flags</summary>
 
 - **niti-lpbf** — NOT REPRESENTABLE by J2/Voce: stress-induced martensitic transformation (plateau ~380-700 MPa in LPBF NiTi models), 4-8 % recoverable strain, strongly Ni-content and temperature dependent. Needs a phase-transformation (Auricchio-type) model. E is austenite (75-83 GPa); martensite 28-40 GPa. | Anisotropy: n/a | Data flags: Listed for completeness only. | Voce: J2 not supported.
 
 </details>
+
+## Thermal properties (v0.23.0)
+
+Added for thermal Phase 3 (`docs/THERMAL_SCOPE.md` §14). Values near room temperature (20–100 °C).
+
+- **Conductivity k:** the as-built AM value (or AM with this entry's heat treatment) where one is published; otherwise the wrought, cast or handbook value for the same alloy and temper (Matt, 2026-10-08: thermal falls back to wrought). The *basis* column says which.
+- **Heat capacity c_p:** handbook values. Processing barely changes c_p. Used with ρ for the diffusivity row on the cards and the sweep's `alpha_mm2s_*` columns.
+- **No data at all:** Ti2448 and PEKK have no published conductivity (nor a wrought one), so thermal refuses them with a message rather than guessing.
+- **Lower confidence:** `alsi10mg-lpbf-t6` (cast handbook value, tempers not separated), `a20x-lpbf-t7` (related cast alloy A206-T7), `ta-lpbf-asbuilt` (manufacturer sheet; method not stated), c_p of Ti-6Al-7Nb and Scalmalloy. Several AM sheets (3D Systems AlSi10Mg, Scalmalloy) compute k from electrical resistivity rather than measuring heat flow.
+- **CuCrZr** is converted from the EOS sheet's 76 %IACS with Wiedemann–Franz: k = L·σ·T = 2.44×10⁻⁸ × 44.1×10⁶ S/m × 293 K ≈ 315 W/m·K. Candela et al. (2024) measured 309–320 after ageing; wrought C18150 at 80 %IACS is listed at 323.
+- **NiTi:** austenite (body temperature) 18 W/m·K; martensite 8.6.
+
+| id | k (W/m·K) | basis | c_p (J/kg·K) | k source | c_p source | note |
+|---|---|---|---|---|---|---|
+| `ti64-g23-lpbf-asbuilt` | 5.4 | as-built AM | 556 | [Bartsch et al. 2022, Front. Mech. Eng. (measured, TruPrint 1000)](https://www.frontiersin.org/journals/mechanical-engineering/articles/10.3389/fmech.2022.830104/pdf) | [Bartsch et al. 2022 (Table 2)](https://www.frontiersin.org/journals/mechanical-engineering/articles/10.3389/fmech.2022.830104/pdf) | was 7.1 (wrought); the 3D Systems as-built 4.2 is a resistivity estimate |
+| `ti64-g5-lpbf-sr` | 6.7 | wrought | 556 | [3D Systems LaserForm Ti Gr5 data sheet (literature, 50 °C)](https://3dsystems.com/sites/default/files/2020-08/3d-systems-laserform-ti-gr5(a)-datasheet-usen-2020-07-24-a-print.pdf) | [Bartsch et al. 2022; handbooks 526–580](https://www.frontiersin.org/journals/mechanical-engineering/articles/10.3389/fmech.2022.830104/pdf) | 800 °C / 2 h gives the wrought α+β structure |
+| `ti64-g5-lpbf-hip` | 6.7 | wrought | 556 | [3D Systems LaserForm Ti Gr5 data sheet (literature, 50 °C)](https://3dsystems.com/sites/default/files/2020-08/3d-systems-laserform-ti-gr5(a)-datasheet-usen-2020-07-24-a-print.pdf) | [Bartsch et al. 2022; handbooks 526–580](https://www.frontiersin.org/journals/mechanical-engineering/articles/10.3389/fmech.2022.830104/pdf) |  |
+| `ti64-g23-lpbf-annealed` | 6.6 | wrought | 556 | [Upmet Ti-6Al-4V ELI data sheet, 20 °C (Renishaw: 6–8 wrought)](https://www.upmet.com/sites/default/files/products/datasheet/ti-6al-4v-eli-datasheet.pdf) | [Bartsch et al. 2022; handbooks 526–580](https://www.frontiersin.org/journals/mechanical-engineering/articles/10.3389/fmech.2022.830104/pdf) | was 7.0 |
+| `ti64-g23-lpbf-hip` | 6.6 | wrought | 556 | [Upmet Ti-6Al-4V ELI data sheet, 20 °C](https://www.upmet.com/sites/default/files/products/datasheet/ti-6al-4v-eli-datasheet.pdf) | [Bartsch et al. 2022; handbooks 526–580](https://www.frontiersin.org/journals/mechanical-engineering/articles/10.3389/fmech.2022.830104/pdf) | was 7.1 |
+| `ti64-g5-ebm-asbuilt` | 6.7 | wrought | 556 | [3D Systems LaserForm Ti Gr5 data sheet (literature); no measured EB-PBF value found](https://3dsystems.com/sites/default/files/2020-08/3d-systems-laserform-ti-gr5(a)-datasheet-usen-2020-07-24-a-print.pdf) | [Bartsch et al. 2022; handbooks 526–580](https://www.frontiersin.org/journals/mechanical-engineering/articles/10.3389/fmech.2022.830104/pdf) |  |
+| `cpti-g2-lpbf-asbuilt` | 16.4 | wrought | 519 | [SuppliersOnline CP-Ti Grade 2 (no AM value found)](https://suppliersonline.com/propertypages/cpgrade2.asp) | [SuppliersOnline CP-Ti Grade 2, 0–100 °C](https://suppliersonline.com/propertypages/cpgrade2.asp) |  |
+| `cpti-g2-lpbf-ht` | 16.4 | wrought | 519 | [SuppliersOnline CP-Ti Grade 2](https://suppliersonline.com/propertypages/cpgrade2.asp) | [SuppliersOnline CP-Ti Grade 2, 0–100 °C](https://suppliersonline.com/propertypages/cpgrade2.asp) |  |
+| `cpti-g1-lpbf-sr` | 16 | wrought | 519 | [3D Systems LaserForm Ti Gr1 data sheet (literature, 50 °C)](https://3dsystems.com/sites/default/files/2020-08/3d-systems-laserform-ti-gr1(a)-datasheet-usen-2020-06-02-a-print.pdf) | [CP-Ti Grade 2 value (SuppliersOnline)](https://suppliersonline.com/propertypages/cpgrade2.asp) |  |
+| `ti6al7nb-lpbf-asbuilt` | 6.7 | wrought (sintered stand-in) | 550 | [Bolzoni et al. 2022, Alloys 1:232 (sintered Ti-6Al-7Nb, 'similar to wrought')](https://www.mdpi.com/2674-063X/1/3/14) | [Ti-6Al-7Nb 540–560 (Wikipedia, weak source)](https://en.wikipedia.org/wiki/Ti-6Al-7Nb) | new; as-built likely lower, as for Ti-6Al-4V |
+| `ti6al7nb-lpbf-sr` | 6.7 | wrought (sintered stand-in) | 550 | [Bolzoni et al. 2022, Alloys 1:232](https://www.mdpi.com/2674-063X/1/3/14) | [Ti-6Al-7Nb 540–560 (Wikipedia, weak source)](https://en.wikipedia.org/wiki/Ti-6Al-7Nb) | new |
+| `ti2448-lpbf-asbuilt` | — | no data | — | no published conductivity, heat capacity or density found for Ti-24Nb-4Zr-8Sn | — | thermal refuses this material |
+| `ss316l-lpbf-asbuilt` | 15.3 | as-built AM | 500 | [J. Manuf. Mater. Process. 8:166 (2024), Concept Laser M1 as-built, 50 °C](https://www.mdpi.com/2504-4494/8/4/166) | [Ametek 316L data sheet, 0–100 °C](https://www.ametek.com/-/media/ameteksuperiortube/files/downloads/alloy-data-sheets/alloy316l.pdf) | was 15 |
+| `ss316l-lpbf-annealed` | 16.3 | wrought | 500 | [Ametek 316L data sheet, room temperature](https://www.ametek.com/-/media/ameteksuperiortube/files/downloads/alloy-data-sheets/alloy316l.pdf) | [Ametek 316L data sheet, 0–100 °C](https://www.ametek.com/-/media/ameteksuperiortube/files/downloads/alloy-data-sheets/alloy316l.pdf) | was 15 |
+| `ss174-lpbf-h900` | 18.3 | wrought | 460 | [3D Systems LaserForm 17-4PH data sheet (literature, 100 °C)](https://3dsystems.com/sites/default/files/2017-09/3D-Systems_LaserForm_17-4PH(A)_DATASHEET_USEN_2017.08.30_WEB.pdf) | [Upmet 17-4PH, 0–100 °C](https://www.upmet.com/sites/default/files/datasheets/17-4-ph.pdf) |  |
+| `ss174-lpbf-asbuilt` | 18.3 | wrought | 460 | [3D Systems LaserForm 17-4PH data sheet (literature); no AM value found](https://3dsystems.com/sites/default/files/2017-09/3D-Systems_LaserForm_17-4PH(A)_DATASHEET_USEN_2017.08.30_WEB.pdf) | [Upmet 17-4PH, 0–100 °C](https://www.upmet.com/sites/default/files/datasheets/17-4-ph.pdf) |  |
+| `ss155-lpbf-h900` | 17.8 | wrought | 420 | [Upmet 15-5PH, H900, 21–100 °C](https://www.upmet.com/sites/default/files/products/datasheet/15-5-ph-datasheet.pdf) | [titanium.com 15-5PH](https://titanium.com/alloys/stainless-steel/stainless-steel-15-5ph/) | was 17 |
+| `ss155-lpbf-asbuilt` | 18.3 | wrought | 420 | [Upmet 15-5PH, Condition A, 21–100 °C](https://www.upmet.com/sites/default/files/products/datasheet/15-5-ph-datasheet.pdf) | [titanium.com 15-5PH](https://titanium.com/alloys/stainless-steel/stainless-steel-15-5ph/) | was 17 |
+| `ms1-lpbf-aged` | 20 | AM heat-treated | 450 | [EOS MaragingSteel MS1 data sheet, aged 490 °C / 6 h (as-built 15)](https://de.eos.info/05-datasheet-images/Assets_MDS_Metal/EOS_MargingSteel_MS1/Material_DataSheet_EOS_MaragingSteel_MS1_EOSM290_EOSM290400W_EOSM300-4_EOSM400_EOSM400-4_en.pdf) | [EOS MaragingSteel MS1 data sheet](https://de.eos.info/05-datasheet-images/Assets_MDS_Metal/EOS_MargingSteel_MS1/Material_DataSheet_EOS_MaragingSteel_MS1_EOSM290_EOSM290400W_EOSM300-4_EOSM400_EOSM400-4_en.pdf) | new |
+| `in718-lpbf-asbuilt` | 11.1 | wrought | 435 | [Special Metals Inconel 718 bulletin, annealed, 21 °C](https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf) | [Special Metals Inconel 718 bulletin, 21 °C](https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf) |  |
+| `in718-lpbf-sta` | 11.4 | wrought | 435 | [Special Metals Inconel 718 bulletin, annealed + aged, 21 °C](https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf) | [Special Metals Inconel 718 bulletin, 21 °C](https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf) | was 11.1 |
+| `in718-lpbf-hip-sta` | 11.4 | wrought | 435 | [Special Metals Inconel 718 bulletin, annealed + aged, 21 °C](https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf) | [Special Metals Inconel 718 bulletin, 21 °C](https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf) | was 11.1 |
+| `in625-lpbf-sr` | 9.8 | wrought | 410 | [Special Metals Inconel 625 bulletin, 21 °C](https://www.hgpauction.com/wp-content/uploads/2020/03/inconel-alloy-625.pdf) | [Special Metals Inconel 625 bulletin, 21 °C](https://www.hgpauction.com/wp-content/uploads/2020/03/inconel-alloy-625.pdf) |  |
+| `hx-lpbf-asbuilt` | 9.2 | wrought | 486 | [Haynes Hastelloy X data sheet, 25 °C](https://haynesintl.com/en/?p=1958) | [Haynes Hastelloy X data sheet](https://haynesintl.com/en/?p=1958) | was 9.7 |
+| `hx-lpbf-hip` | 9.2 | wrought | 486 | [Haynes Hastelloy X data sheet, 25 °C](https://haynesintl.com/en/?p=1958) | [Haynes Hastelloy X data sheet](https://haynesintl.com/en/?p=1958) | was 9.7 |
+| `h282-lpbf-ht` | 10.2 | wrought | 435 | [Haynes 282 brochure, room temperature](https://haynesintl.com/wp-content/uploads/2025/09/282-Brochure-Single-Step-Aged.pdf) | [Haynes 282 brochure](https://haynesintl.com/wp-content/uploads/2025/09/282-Brochure-Single-Step-Aged.pdf) |  |
+| `alsi10mg-lpbf-asbuilt` | 125 | as-built AM | 900 | [3D Systems LaserForm AlSi10Mg data sheet, no HT, 20 °C (from resistivity; measured 118–137 in the literature)](https://ko.3dsystems.com/sites/default/files/2022-10/3d-systems-laserform-alsi10mg%28a%29-datasheet-usen-2022-10-28-a-print.pdf) | [MakeItFrom EN AC-43000](https://www.makeitfrom.com/material-properties/EN-AC-43000-AISi10Mga-Cast-Aluminum) |  |
+| `alsi10mg-lpbf-sr` | 165 | AM heat-treated | 900 | [3D Systems LaserForm AlSi10Mg data sheet, stress relief 285 °C / 2 h (from resistivity)](https://ko.3dsystems.com/sites/default/files/2022-10/3d-systems-laserform-alsi10mg%28a%29-datasheet-usen-2022-10-28-a-print.pdf) | [MakeItFrom EN AC-43000](https://www.makeitfrom.com/material-properties/EN-AC-43000-AISi10Mga-Cast-Aluminum) |  |
+| `alsi10mg-lpbf-t6` | 140 | cast handbook | 900 | [MakeItFrom EN AC-43000 (tempers not separated; low confidence — no AM-T6 value found)](https://www.makeitfrom.com/material-properties/EN-AC-43000-AISi10Mga-Cast-Aluminum) | [MakeItFrom EN AC-43000](https://www.makeitfrom.com/material-properties/EN-AC-43000-AISi10Mga-Cast-Aluminum) | new; low confidence |
+| `scalmalloy-lpbf-aged` | 97.5 | AM heat-treated | 900 | [3D Systems Certified Scalmalloy data sheet, 325 °C / 4 h (from resistivity)](https://3dsystems.com/sites/default/files/2022-02/3d-systems-certified-scalmalloy(a)-datasheet-usen-2022-02-23-a-print.pdf) | [5083 Al-Mg stand-in (MakeItFrom)](https://makeitfrom.com/material-properties/5083-AlMg4.5Mn0.7-3.3547-N8-A95083-Aluminum) |  |
+| `a20x-lpbf-t7` | 130 | cast stand-in | 880 | [MakeItFrom A206.0-T7 (related cast alloy; A20X / A205 sheets give none)](https://www.makeitfrom.com/material-properties/A206.0-T7-Cast-Aluminum) | [MakeItFrom A206.0-T7](https://www.makeitfrom.com/material-properties/A206.0-T7-Cast-Aluminum) | new; provisional (different alloy) |
+| `al6061ram2-lpbf-t6` | 162 | AM heat-treated | 900 | [3D Systems Certified A6061-RAM2 data sheet, modified T6](https://www.3dsystems.com/sites/default/files/2023-12/3d-systems-certified-a6061-ram2a-mds-letter-us-revc-web.pdf) | [MakeItFrom 6061-T6](https://www.makeitfrom.com/material-properties/6061-T6-Aluminum) |  |
+| `cocrmo-lpbf-asbuilt` | 14 | wrought | 450 | [3D Systems LaserForm CoCrF75 data sheet (literature, 20 °C)](https://3dsystems.com/sites/default/files/2017-03/3D-Systems_LaserForm_CoCrF75(A)_DATASHEET_USEN_2017.03.13_WEB.pdf) | [MakeItFrom ASTM F75](https://www.makeitfrom.com/material-properties/UNS-R30075-ASTM-F75-ISO-5832-4-Co-Cr-Mo-Alloy) |  |
+| `cocrmo-lpbf-ht` | 14 | wrought | 450 | [3D Systems LaserForm CoCrF75 data sheet (literature, 20 °C)](https://3dsystems.com/sites/default/files/2017-03/3D-Systems_LaserForm_CoCrF75(A)_DATASHEET_USEN_2017.03.13_WEB.pdf) | [MakeItFrom ASTM F75](https://www.makeitfrom.com/material-properties/UNS-R30075-ASTM-F75-ISO-5832-4-Co-Cr-Mo-Alloy) |  |
+| `cocrmo-lpbf-hip` | 14 | wrought | 450 | [3D Systems LaserForm CoCrF75 data sheet (literature, 20 °C)](https://3dsystems.com/sites/default/files/2017-03/3D-Systems_LaserForm_CoCrF75(A)_DATASHEET_USEN_2017.03.13_WEB.pdf) | [MakeItFrom ASTM F75](https://www.makeitfrom.com/material-properties/UNS-R30075-ASTM-F75-ISO-5832-4-Co-Cr-Mo-Alloy) |  |
+| `ta-lpbf-asbuilt` | 45 | as-built AM | 140 | [Elmet PD-7201 LPBF tantalum data sheet (as-printed; lists ASTM E1461)](https://www.elmetadditive.com/wp-content/uploads/sites/9/2025/03/PD-7201-Tantalum_LPBF_DataSheet.pdf) | [tantalum 25.36 J/mol·K](https://en.wikipedia.org/wiki/Tantalum) | was 57.5 (wrought) |
+| `nb-lpbf-asbuilt` | 53.7 | wrought | 265 | [niobium, handbook (no AM value found)](https://en.wikipedia.org/wiki/Niobium) | [niobium 24.60 J/mol·K](https://en.wikipedia.org/wiki/Niobium) |  |
+| `grcop42-lpbf-hip` | 340 | AM heat-treated | 384 | [Velo3D GRCop-42 data sheet, after HIP, 25 °C (323 / 347 / 351 by powder lot)](https://velo3d.com/wp-content/uploads/2024/04/Velo3D-GRCop-42-Material-Datasheet.pdf) | [Chen et al. 2023, Mater. Today Commun. 36:106665](https://par.nsf.gov/servlets/purl/10496372) |  |
+| `cucrzr-lpbf-ht` | 315 | Wiedemann–Franz | 383 | [EOS CuCrZr data sheet, tensile-optimized HT, 76 %IACS → k = L·σ·T (cf. Candela et al. 2024, 309–320 measured after ageing)](https://www.eos.info/05-datasheet-images/Assets_MDS_Metal/EOS_CopperAlloy_CuCrZr/Material_DataSheet_EOS%20_Copper_CuCrZr_en.pdf) | [Aurubis CuCrZr data sheet, 20 °C](https://aurubis.com/dam/jcr:d6d50d64-69d6-4742-821d-8fb8b48c9044/PNA%20372_CuCrZr_C18150-C18160-C18400-EN%20(1).pdf) | new |
+| `pa12-sls` | 0.26 | as-built AM | 1215 | [Yuan, Bourell & Diller, SFF 2011 (laser-sintered PA12, Hot Disk)](https://utw10945.utweb.utexas.edu/Manuscripts/2011/2011-32-Yuan.pdf) | [NETZSCH PA12 1170–1260](https://analyzing-testing.netzsch.com/en/polymers-netzsch-com/engineering-thermoplastics/pa12-polyamide-12) | new; bulk PA12 0.22–0.24 |
+| `pa12-mjf` | 0.26 | as-built AM (SLS stand-in) | 1215 | [Yuan, Bourell & Diller, SFF 2011 (laser-sintered PA12; no MJF value found)](https://utw10945.utweb.utexas.edu/Manuscripts/2011/2011-32-Yuan.pdf) | [NETZSCH PA12 1170–1260](https://analyzing-testing.netzsch.com/en/polymers-netzsch-com/engineering-thermoplastics/pa12-polyamide-12) | new |
+| `peek-sls` | 0.29 | bulk polymer | 1100 | [Victrex PEEK 450G, ISO 22007-4, 23 °C (EOS HP3 sheet gives none)](https://www.victrex.com/en/downloads/datasheets/victrex-peek-450g) | [Ensinger TECAPEEK natural](https://git.fasttube.de/FaSTTUBe/scruti-documents/raw/commit/1c9604668b30ac7c43c0340a9356127784e68275/accumulator-scrutineering/akku-mech/Kunststoff_TECAPEEK_natural_0.pdf) |  |
+| `peek-fff` | 0.29 | bulk polymer | 1100 | [Victrex AM 450 FIL data sheet, 23 °C (0.32 along the flow direction)](https://www.victrex.com/-/media/downloads/datasheets/tds-am-450-fil.pdf) | [Ensinger TECAPEEK natural](https://git.fasttube.de/FaSTTUBe/scruti-documents/raw/commit/1c9604668b30ac7c43c0340a9356127784e68275/accumulator-scrutineering/akku-mech/Kunststoff_TECAPEEK_natural_0.pdf) |  |
+| `pekk-sls` | — | no data | 1000 | no published conductivity for PEKK (Arkema Kepstan sheets and Benedetti et al. give none) | [Arkema Kepstan 6002 data sheet, 23 °C](https://hpp.arkema.com/assets/arkema/TDS_KEPSTAN%C2%AE%206002_en_WW.pdf) | thermal refuses this material; density is amorphous molded |
+| `niti-lpbf` | 18 | wrought | 837 | [Johnson Matthey Nitinol properties: austenite 18 (martensite 8.6)](https://matthey.com/products-and-services/medical-components/resource-library/nitinol-technical-properties) | [Johnson Matthey Nitinol properties](https://matthey.com/products-and-services/medical-components/resource-library/nitinol-technical-properties) | austenite at body temperature |
+
+¹ The family tables above carry the same k values (updated in v0.23.0).
 
 ## Voce calibration method
 
@@ -221,23 +282,20 @@ The default tracks the fitted **stress-relieved Grade 5** curve to within about 
 - **Orientation.** LPBF metals are typically stronger but less ductile in XY, and more ductile in Z. Ni alloys and 316L also show a lower Z modulus from <100> texture. Struts at 35–45° to the plate have the worst downskin roughness. The table averages XY and Z. Use the anisotropy notes for bounds.
 - **As-built vs. HIP.** As-built Ti-6Al-4V is martensitic α′: about 1100 MPa yield and 8–10 % elongation, with high residual stress. Stress relief lowers strength slightly and raises ductility. HIP lowers yield by a further ~50–150 MPa relative to stress relief (see the Ti rows), closes internal porosity and generally improves fatigue, but does nothing for surface-connected roughness. CoCr and Ni alloys need solution treatment or HIP to become isotropic.
 - **Porosity and chemistry.** OEM data assume at least 99.5 % density and virgin or controlled powder. Interstitials (O, N) strongly affect Ti, Ta and Nb strength. 17-4PH response depends on the atomization gas (retained austenite).
-- **Proxies.** Poisson's ratio, thermal conductivity and sometimes E/ρ come from wrought or bulk data when the AM sheet omitted them. Thermal conductivity of AM AlSi10Mg depends strongly on heat treatment (120 → 170 W/m·K).
+- **Proxies.** Poisson's ratio and sometimes E/ρ come from wrought or bulk data when the AM sheet omitted them. Thermal conductivity is the as-built AM value where one is published and otherwise the wrought / handbook value; the basis of every entry is in *Thermal properties* below. Thermal conductivity of AM AlSi10Mg depends strongly on heat treatment (120 → 170 W/m·K).
 - **Voce is fitted to tension.** Lattice crush is compression- and bending-dominated. The fit captures hardening up to necking only. Post-necking damage and strut fracture are not modelled, which matters most for low-ductility entries (MS1, AlSi10Mg, PEEK/PEKK SLS).
 
 ## Gaps (value not found)
 
-- `ti6al7nb-lpbf-asbuilt`: ν, k
-- `ti6al7nb-lpbf-sr`: ν, k
-- `ti2448-lpbf-asbuilt`: ν, ρ, k
-- `ms1-lpbf-aged`: ν, ρ, k
-- `alsi10mg-lpbf-t6`: k
-- `a20x-lpbf-t7`: ρ, k
-- `cucrzr-lpbf-ht`: k
-- `pa12-sls`: σY0, k
-- `pa12-mjf`: σY0, k
+- `ti6al7nb-lpbf-asbuilt`: ν
+- `ti6al7nb-lpbf-sr`: ν
+- `ti2448-lpbf-asbuilt`: ν, ρ, k, c_p (thermal refuses this material)
+- `ms1-lpbf-aged`: ν
+- `pa12-sls`: σY0
+- `pa12-mjf`: σY0
 - `peek-sls`: σY0
 - `peek-fff`: elongation
-- `pekk-sls`: ν, ρ, σY0, k
+- `pekk-sls`: ν, σY0, k (thermal refuses this material)
 - `niti-lpbf`: σY0, UTS, elongation
 - Uniform elongation: not published by any source used, so it is estimated for every entry.
 - CP-Ti Grade 4 (LPBF): no OEM or peer-reviewed numeric data retrieved, so there is no entry. ASTM F3302 CP-Ti minimums (YS 380 / UTS 460 / A 18 %) are known only from an excerpt that does not state the grade.
