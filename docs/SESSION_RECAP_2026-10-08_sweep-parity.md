@@ -33,7 +33,7 @@ Matt's call (2026-10-08): the noise fixes and TPMS shell weights go into Lab too
 ## How it fits together now
 
 - **Shared geometry.** The code between `F13LD-GEOM-*` markers (TPMS + presets, noise, grain, beam, voxels, build args, recipe translation) is copied byte for byte into `f13ld.sweep/geom/`. After any change inside those markers, refresh Sweep: in the Sweep repo, `node tests/parity/geomsync.js ../f13ld.lab --write`, then `node tests/parity/parity.js --quick`.
-- **Sweep → Lab handoff.** Sweep v0.23.0 (on its branch `v0.22.0-audit`) has a Lab button on every result row. It opens `https://mshomper.github.io/f13ld.lab/#r=<recipe JSON>`, read by `ingestUrlParam`. It's the same recipe Sweep solved, plus `geometry.cell_size_mm` (non-beam, from Sweep's analysis context), `homogenization.E_solid_GPa` / `poisson`, and a `title` like "Sweep #6 · rank 1 · gyroid".
+- **Sweep → Lab handoff.** Sweep v0.23.0 (on `main` since 2026-10-08) has a Lab button on every result row. It opens `https://mshomper.github.io/f13ld.lab/#r=<recipe JSON>`, read by `ingestUrlParam`. It's the same recipe Sweep solved, plus `geometry.cell_size_mm` (non-beam, from Sweep's analysis context), `homogenization.E_solid_GPa` / `poisson`, and a `title` like "Sweep #6 · rank 1 · gyroid".
 
 ## Open Lab items found on the way
 
