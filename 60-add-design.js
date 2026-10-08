@@ -468,10 +468,18 @@ function normalizeDesignJson(json, filename){
          and reads geometry.half_invert.  External recipes match this shape, just
          need our remapped geometry. */
       if (json.surface && json.surface.type === 'noise'){
+        /* The tool's norm_min/norm_max belong to the exported settings:
+           stamp them (norm_for) so NoiseKernel recomputes the range once a
+           sweep changes the field (see the NoiseKernel header, 13-kernels.js).
+           noiseNormKey throws on an unknown noise type, so a bad recipe is
+           refused here, on import. */
+        var nSurf = {}; for (var kN in json.surface) nSurf[kN] = json.surface[kN];
+        var nKey = noiseNormKey(nSurf);
+        if (nSurf.norm_for == null && nSurf.norm_min != null && nSurf.norm_max != null) nSurf.norm_for = nKey;
         recipe = {
           family: 'noise',
           name: title,
-          surface: json.surface,
+          surface: nSurf,
           geometry: buildLabGeometry(json.geometry, 'noise-sheet'),
           material: json.material || DEFAULT_MATERIAL
         };
