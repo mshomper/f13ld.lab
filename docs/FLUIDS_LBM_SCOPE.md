@@ -355,9 +355,10 @@ Version targets: flow Phase 1 as **v0.20.0**.
 
 ## 7. Open questions for Matt
 
-- Should the default fluid be culture medium with 10 % serum, or water at body temperature?
-- Once the new solver validates, can the old Stokes files be deleted outright, or should they move to the proto folder?
-- Should nutrient and oxygen transport be planned as the next flow feature after this?
+Answered (Matt, 2026-10-07):
+- Default scaffold fluid: **water at body temperature**.
+- The old Stokes files: **delete** (they can go now). `18-stokes-cpu-ref.js` also holds the CPU FFT (`fft1dCpu` / `fft3dCpu`) that 16a, 16c, 17a, the buckling workers and the node harnesses use, so the FFT moves to its own file first.
+- Nutrient and oxygen transport: **probably** the next flow feature after the heat-exchanger phases.
 
 ---
 
@@ -490,6 +491,9 @@ A user building a database of lattice responses for heat exchangers, to train re
 
 The specific papers and their numbers are to be confirmed before they are used as pass/fail tests, as Castro et al. 2019 is for permeability (§4).
 
-### 11.7 Open questions for Matt
+### 11.7 Decisions (Matt, 2026-10-07)
 
-Listed in the session handoff; the user's answers on fluids and operating ranges set the default presets and Reynolds list.
+- **Reynolds list: wait for the user's answer** on his operating range before fixing defaults.
+- **Fluid presets as listed** in §11.2.
+- **Heat transfer: walls at uniform temperature first, conduction through the metal second.**
+- **Sweep export: also a long format**, one row per design × axis × Reynolds number.

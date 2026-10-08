@@ -303,7 +303,7 @@ Version targets: Phase 0 shipped as v0.19.3 (CPU reference only, nothing user-vi
 ## 7. Open questions for Matt
 
 - ~~Temperature map: ΔT per cell or a physical gradient?~~ ΔT across one cell (Matt, 2026-10-07; §13.1).
-- Are the as-built conductivity presets worth adding next to the wrought values for every AM material, or only where the gap is large?
+- ~~As-built presets for every material or only large gaps?~~ **Every AM material with a literature value** (Matt, 2026-10-07); the search is Phase 3 work, not done yet.
 
 ---
 
