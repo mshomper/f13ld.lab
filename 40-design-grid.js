@@ -318,10 +318,10 @@ function thermalMapData(d){
   return { th: th, f: f, fs: fs, N: fs.N, fid: fid };
 }
 /* Float field for the current view, cached on the design's thermal record:
-   T̃ (temperature / deviation views) or the flux ratio spread one voxel into
-   the pores from the solid (as the stress view does, so a surface sample
-   reads the metal, not the filler).  hi = max |T̃| (voxel units) or the
-   flux ratio's 99th percentile in the solid. */
+   T̃ (temperature / deviation views) or the flux ratio smoothed with solid
+   weights (thermalSmoothFlux), so a surface sample reads the metal, not the
+   filler or the voxel staircase.  hi = max |T̃| (voxel units) or the flux
+   ratio's 99th percentile where the voxel is at least half solid. */
 function thermalTexFor(d){
   var m = thermalMapData(d);
   if (!m) return null;
@@ -330,9 +330,9 @@ function thermalTexFor(d){
   if (m.th._tex && m.th._tex.key === key) return m.th._tex;
   var N = m.N, N3 = N * N * N, arr, hi = 0, i;
   if (flux){
-    arr = thermalSpreadFlux(thermalHalfToFloat(m.fs.q), m.th.mask, N);
-    var vals = [], mk = m.th.mask;
-    for (i = 0; i < N3; i++) if (!mk || mk[i]) vals.push(arr[i]);
+    arr = thermalSmoothFlux(thermalHalfToFloat(m.fs.q), m.th.phi8, N);
+    var vals = [], pb = m.th.phi8;
+    for (i = 0; i < N3; i++) if (!pb || pb[i] >= 128) vals.push(arr[i]);
     var sv = Float32Array.from(vals); sv.sort();
     hi = sv.length ? sv[Math.floor(0.99 * (sv.length - 1))] : 1;
   } else {
@@ -342,18 +342,35 @@ function thermalTexFor(d){
   m.th._tex = { key: key, arr: arr, hi: hi > 0 ? hi : 1, N: N, view: flux ? 'flux' : 'T' };
   return m.th._tex;
 }
-function thermalSpreadFlux(q, mask, N){
-  if (!mask) return (typeof dilateSigmaVMByOneVoxel === 'function') ? dilateSigmaVMByOneVoxel(q, N) : q;
-  var NN = N * N, out = Float32Array.from(q);
-  for (var i = 0; i < N; i++) for (var j = 0; j < N; j++) for (var k = 0; k < N; k++){
-    var id = i * NN + j * N + k;
-    if (mask[id]) continue;
-    var nb = [((i + 1) % N) * NN + j * N + k, ((i + N - 1) % N) * NN + j * N + k,
-              i * NN + ((j + 1) % N) * N + k, i * NN + ((j + N - 1) % N) * N + k,
-              i * NN + j * N + (k + 1) % N, i * NN + j * N + (k + N - 1) % N], best = -1;
-    for (var s = 0; s < 6; s++) if (mask[nb[s]] && q[nb[s]] > best) best = q[nb[s]];
-    if (best >= 0) out[id] = best;
+/* v0.21.0 — speckle fix.  Voxels the surface cuts through conduct less than
+   their fully solid neighbours (series term across the wall), so the raw flux
+   jumps voxel to voxel along a 1–2-voxel wall and trilinear sampling across a
+   curved surface turns that into a dotted moiré.  The displayed flux is a
+   solid-weighted [1 2 1]³ average: blur(φ·q) ÷ blur(φ), periodic, separable.
+   Solid dominates, partial voxels count by their solid fraction, the filler
+   never mixes in, and the value reaches one voxel into the pores so a surface
+   sample reads the metal.  Where no solid is near (deep in a pore, seen on a
+   cut face) the plain average of q is used. */
+function thermalSmoothFlux(q, phi8, N){
+  if (!phi8) return (typeof dilateSigmaVMByOneVoxel === 'function') ? dilateSigmaVMByOneVoxel(q, N) : q;
+  var NN = N * N, N3 = NN * N, i;
+  var num = new Float32Array(N3), den = new Float32Array(N3), raw = Float32Array.from(q);
+  for (i = 0; i < N3; i++){ var w = phi8[i] / 255; num[i] = w * q[i]; den[i] = w; }
+  var tmp = new Float32Array(N3);
+  function blur(a){
+    var strides = [NN, N, 1];
+    for (var ax = 0; ax < 3; ax++){
+      var st = strides[ax];
+      for (var p = 0; p < N3; p++){
+        var c = Math.floor(p / st) % N, lo = (c === 0) ? p + (N - 1) * st : p - st, hi = (c === N - 1) ? p - (N - 1) * st : p + st;
+        tmp[p] = 0.25 * a[lo] + 0.5 * a[p] + 0.25 * a[hi];
+      }
+      a.set(tmp);
+    }
   }
+  blur(num); blur(den); blur(raw);
+  var out = new Float32Array(N3);
+  for (i = 0; i < N3; i++) out[i] = den[i] > 0.02 ? num[i] / den[i] : raw[i];
   return out;
 }
 /* colour-scale top for one design in the current view, in display units

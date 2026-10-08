@@ -10,7 +10,7 @@ var fs = require('fs'), path = require('path');
 var S = process.env.SRC || path.resolve(__dirname, '../..');
 global.window = global; global.document = { getElementById: function () { return null; }, baseURI: 'http://x/' };
 global.performance = require('perf_hooks').performance;
-(0, eval)(['18-stokes-cpu-ref.js', '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
+(0, eval)(['12b-fft-cpu.js', '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
   '13c-import-kernel.js', '13d-foam-kernel.js', '14c-stl-import.js', '15-demo-recipes.js', '15b-demo-recipes-new.js', '14e-link-field.js', '17a-thermal-cpu-ref.js', 'proto/thermal/faces-tpfa.js']
   .map(function (f) { return fs.readFileSync(S + '/' + f, 'utf8'); }).join('\n'));
 var quick = process.argv[2] === 'quick';

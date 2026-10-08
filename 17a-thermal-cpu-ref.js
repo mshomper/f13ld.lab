@@ -44,7 +44,7 @@
          fields (keepFields): per load case { axis, Tn (node T̃, Float32 N³), qMag (per voxel) }
      homogenizeThermalCPU(recipe, N, opts) → the above + { rho, rhoPhi, kS, kF, N, tensors }
          opts: connectivity / pruneLargest (as elastic), kS, kF, staircase, voigt
-   Needs fft3dCpu (18-stokes-cpu-ref.js) and 14e-link-field.js.
+   Needs fft3dCpu (12b-fft-cpu.js) and 14e-link-field.js.
    ============================================================ */
 
 function thermalVoxelConductivity(vt, kS, kF, opts) {

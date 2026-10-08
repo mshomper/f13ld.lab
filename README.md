@@ -14,7 +14,7 @@ Part of the [F13LD](https://f13ld.app) computational design suite.
 
 ## What this is
 
-F13LD's design tools (TPMS, Grain, Noise, Bundle) are fast and exploratory — built around real-time WebGL raymarching with MIL-HS for design-time property estimation. F13LD.lab is the qualification half of the workflow: same browser tab, but compute-deep instead of compute-fast. Linear elastic, linear buckling, nonlinear plasticity, thermal, and Stokes permeability — at solver fidelities the design tools deliberately don't reach for.
+F13LD's design tools (TPMS, Grain, Noise, Bundle) are fast and exploratory — built around real-time WebGL raymarching with MIL-HS for design-time property estimation. F13LD.lab is the qualification half of the workflow: same browser tab, but compute-deep instead of compute-fast. Linear elastic, linear buckling, nonlinear plasticity and thermal conductivity, with fluid flow (lattice Boltzmann) next — at solver fidelities the design tools deliberately don't reach for.
 
 Where design tools answer *"what does this look like?"*, lab answers *"is this design actually good for production?"*
 
@@ -32,7 +32,6 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 | ------------------------------- | --------------- | ---------------- |
 | Linear elastic (full Voigt 6×6) | ~4 s †          | ~12 s †          |
 | + Nonlinear (J2 + geom)         | ~2.5 min        | ~7.5 min         |
-| + Stokes permeability           | ~3 min          | ~9–10 min        |
 
 † Full-Voigt runs ≈2× the Phase 3 normal-only figures (6 load cases vs 3); N=64 timing is predicted, not yet measured — validated at N=16 and N=32. 10-minute ceiling for default tier. F13LD = FAST.
 
@@ -50,7 +49,8 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 - Deviation, flux and κ follow the *Map scale* toggle (own scale per design, or shared).
 - **Section plane,** exactly as in F13LD.tpms: X / Y / Z pills (bottom left), drag the handle to move the cut. The cut face of the metal shows the field inside struts and nodes; the pores on the cut show the filler's field, dimmed.
 - *Pores filled with* still switches every card and map between air, water and tissue without re-running.
-- Fields are kept at half precision for every grid (about 9 MB per design at N = 64, 70 MB at 128).
+- Fields are kept at half precision for every grid (about 9 MB per design at N = 64, 70 MB at 128). The flux map is smoothed with solid weights so thin walls don't show voxel speckle.
+- **The old Stokes permeability solver is removed** (it was never called by Run All). Its CPU Fourier transform now lives in `12b-fft-cpu.js`. Fluids return with the lattice Boltzmann module (`docs/FLUIDS_LBM_SCOPE.md`).
 
 ## What's new in v0.20.0
 

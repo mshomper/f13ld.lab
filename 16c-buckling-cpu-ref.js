@@ -90,7 +90,7 @@
      - runBucklingCPUTest       Schwarz P N=16 + dense N=4 oracle
 
    ── External dependencies (resolved at call time) ───────
-   - fft3dCpu          (18-stokes-cpu-ref.js — radix-2, in-place
+   - fft3dCpu          (12b-fft-cpu.js — radix-2, in-place
                         on interleaved [re,im], unnormalized fwd,
                         1/N per-axis on inverse)
    - isoC              (14-rasterizer.js — Voigt 6×6 isotropic C;

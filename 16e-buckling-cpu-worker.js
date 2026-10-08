@@ -73,7 +73,7 @@ var BUCKLE_CPU_DEFAULTS = {
 /* Solver files the worker loads, in dependency order:
    FFT (18) -> rasterizer/isoC/buildVoxels (14) -> kernels (13) -> 16c. */
 var BUCKLE_WORKER_FILES = [
-  '18-stokes-cpu-ref.js',
+  '12b-fft-cpu.js',          /* v0.21.0 — CPU FFT (was in the retired 18-stokes-cpu-ref.js) */
   '14-rasterizer.js',
   '14a-connectivity.js',
   '13-kernels.js',
@@ -87,7 +87,7 @@ var BUCKLE_WORKER_FILES = [
 /* Bump on any solver-file change so the worker's importScripts refetches
    instead of serving a stale cached copy (the blob worker has its own cache,
    separate from the main page). */
-var BUCKLE_SOLVER_VERSION = 'fe-h8i-6';   /* v0.19.0 — 14-rasterizer gained the partial-volume helpers */
+var BUCKLE_SOLVER_VERSION = 'fe-h8i-7';   /* v0.21.0 — CPU FFT moved to 12b, Stokes retired */   /* v0.19.0 — 14-rasterizer gained the partial-volume helpers */
 
 /* Worker onmessage body (single-quote/concatenated string — no backticks
    or ${}, worker-source convention).  Solves ONE axis per task and echoes

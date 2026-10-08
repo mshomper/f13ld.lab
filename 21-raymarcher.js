@@ -120,7 +120,7 @@ function buildLabRaymarcherFS(stepCount) {
        ±uThermHi; flux ratio on 0..uThermHi. */
     'uniform float uThermOn; uniform float uThermView; uniform float uThermAxis;',
     'uniform float uThermScale; uniform float uThermHi; uniform float uDT;',
-    'uniform highp sampler3D uTherm;',
+    'uniform highp sampler3D uTherm; uniform float uThermN;',
     /* v0.21.0 — clip plane, as in F13LD.tpms: axis 0 off / 1 x / 2 y / 3 z,
        position in half-cells (−1..1), side +1 keeps coord < position. */
     'uniform float uClipAxis; uniform float uClipPos; uniform float uClipSide;',
@@ -414,17 +414,38 @@ function buildLabRaymarcherFS(stepCount) {
     '  if (seg >= 2.5) { a = c3; b = c4; } else if (seg >= 1.5) { a = c2; b = c3; } else if (seg >= 0.5) { a = c1; b = c2; }',
     '  return mix(a, b, t);',
     '}',
-    /* data colour of the thermal field at p (isotherm lines on the temperature view) */
+    /* v0.21.0 — the thermal field, 8-tap cubic B-spline (Sigg–Hadwiger, as
+       the stress view) read at an explicit level: nothing in the thermal path
+       needs screen-space derivatives, which on Windows (ANGLE → Direct3D) make
+       the shader compiler try to unroll the march loop and hang the page. */
+    'float sampleTherm(vec3 p) {',
+    '  vec3 coord = fract(p / (2.0 * H) + 0.5) * uThermN - 0.5;',
+    '  vec3 f = fract(coord); vec3 base = (coord - f) + 0.5;',
+    '  vec3 w0 = (1.0/6.0) * ((1.0 - f) * (1.0 - f) * (1.0 - f));',
+    '  vec3 w1 = (1.0/6.0) * (3.0*f*f*f - 6.0*f*f + 4.0);',
+    '  vec3 w2 = (1.0/6.0) * (-3.0*f*f*f + 3.0*f*f + 3.0*f + 1.0);',
+    '  vec3 w3 = (1.0/6.0) * (f * f * f);',
+    '  vec3 g0 = w0 + w1; vec3 g1 = w2 + w3;',
+    '  vec3 h0 = (base - 1.0 + w1 / g0) / uThermN; vec3 h1 = (base + 1.0 + w3 / g1) / uThermN;',
+    '  float t000 = textureLod(uTherm, vec3(h0.x, h0.y, h0.z), 0.0).r; float t100 = textureLod(uTherm, vec3(h1.x, h0.y, h0.z), 0.0).r;',
+    '  float t010 = textureLod(uTherm, vec3(h0.x, h1.y, h0.z), 0.0).r; float t110 = textureLod(uTherm, vec3(h1.x, h1.y, h0.z), 0.0).r;',
+    '  float t001 = textureLod(uTherm, vec3(h0.x, h0.y, h1.z), 0.0).r; float t101 = textureLod(uTherm, vec3(h1.x, h0.y, h1.z), 0.0).r;',
+    '  float t011 = textureLod(uTherm, vec3(h0.x, h1.y, h1.z), 0.0).r; float t111 = textureLod(uTherm, vec3(h1.x, h1.y, h1.z), 0.0).r;',
+    '  float my0 = mix(mix(t110, t010, g0.x), mix(t100, t000, g0.x), g0.y);',
+    '  float my1 = mix(mix(t111, t011, g0.x), mix(t101, t001, g0.x), g0.y);',
+    '  return mix(my1, my0, g0.z);',
+    '}',
+    /* data colour of the thermal field at p; isotherm lines as a fixed band
+       (6 % of each ΔT/10 step, soft edges) — no derivatives (see above) */
     'vec3 thermColor(vec3 p) {',
-    '  float s = texture(uTherm, fract(p / (2.0 * H) + 0.5)).r;',
+    '  float s = sampleTherm(p);',
     '  if (uThermView < 0.5) {',
     '    float pa = (uThermAxis < 0.5) ? p.x : ((uThermAxis < 1.5) ? p.y : p.z);',
     '    float val = uDT * (pa + H) / (2.0 * H) + uThermScale * s;',
     '    vec3 c = inferno(val / max(uDT, 1e-9));',
     '    float band = val / max(uDT * 0.1, 1e-9);',
-    '    float w = max(fwidth(band), 1e-4);',
     '    float d = abs(fract(band + 0.5) - 0.5);',
-    '    return c * (1.0 - 0.45 * (1.0 - smoothstep(0.5 * w, 1.5 * w, d)));',
+    '    return c * (1.0 - 0.45 * (1.0 - smoothstep(0.02, 0.04, d)));',
     '  }',
     '  if (uThermView < 1.5) return coolwarm(0.5 + 0.5 * uThermScale * s / max(uThermHi, 1e-12));',
     '  return cividis(s / max(uThermHi, 1e-12));',
@@ -894,7 +915,7 @@ LabRaymarcher.prototype._compileShader = function() {
    /* shared F13LD shading */
    'uBodyColor',
    /* v0.21.0 — thermal view + clip plane */
-   'uThermOn','uThermView','uThermAxis','uThermScale','uThermHi','uDT','uTherm',
+   'uThermOn','uThermView','uThermAxis','uThermScale','uThermHi','uDT','uTherm','uThermN',
    'uClipAxis','uClipPos','uClipSide','uClipC0','uClipC1','uClipC2','uClipC3','uClipHandle','uClipDpr','uClipCol'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
@@ -1425,6 +1446,7 @@ LabRaymarcher.prototype.uploadThermal = function(arr, N) {
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
   gl.bindTexture(gl.TEXTURE_3D, null);
   this._thermUploaded = true;
+  this._thermN = N;
   this._dirty = true;
 };
 LabRaymarcher.prototype.setThermalParams = function(p) {
@@ -1818,6 +1840,7 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform1f(u.uThermScale, S.thermScale);
   gl.uniform1f(u.uThermHi,    S.thermHi);
   gl.uniform1f(u.uDT,         S.dT);
+  gl.uniform1f(u.uThermN,     this._thermN || 32);
   if (this._thermTex) {
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_3D, this._thermTex);

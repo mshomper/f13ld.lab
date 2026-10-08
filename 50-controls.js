@@ -900,7 +900,7 @@ async function runRealSweep(N, runToken){
         if (stale()) return;
         thEx.rho = TR.rho; thEx.rhoPhi = TR.rhoPhi; thEx.rhoRaw = TR.rhoRaw; thEx.trimLoss = TR.trimLoss; thEx.wraps = TR.wraps;
         thEx.nSurf = TR.nSurf; thEx.t_voxels_ms = TR.t_voxels_ms; thEx.voxReuse = TR.voxReuse;
-        if (TR.mask) thEx.mask = TR.mask;
+        if (TR.phi8) thEx.phi8 = TR.phi8;
         thEx._tex = null;   /* v0.21.0 — viewer texture cache */
         thEx.fragLoss = TR.fragLoss;
         thEx.underResolved = TR.fragLoss > THERMAL_FRAG_FLAG;

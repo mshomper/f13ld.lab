@@ -1,6 +1,6 @@
 # F13LD.lab — Next Steps (session handoff)
 
-> **2026-10-07 · v0.21.0** — thermal Phase 2 on branch `thermal-phase2`: temperature / deviation / flux map on the Thermal κ tab, κ(n) surface, section plane matching F13LD.tpms (filler's field on the cut, dimmed), fields at half precision for every grid. Awaiting Matt's click-test: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §13.3.
+> **2026-10-07 · v0.21.0** — thermal Phase 2, merged after Matt's click-test: temperature / deviation / flux map on the Thermal κ tab, κ(n) surface (left as is), section plane matching F13LD.tpms (handle feels the same — Matt), filler's field on the cut, fields at half precision. Fixes from the test: a Windows page freeze (screen-space derivative in the shader → Direct3D tried to unroll the march loop; removed) and flux speckle (solid-weighted smoothing + cubic sampling). **Stokes solver removed**; CPU FFT moved to `12b-fft-cpu.js`. Heat-exchanger phases added to the fluids scope after a user request (§11). Recap: [`SESSION_RECAP_2026-10-07.md`](SESSION_RECAP_2026-10-07.md).
 >
 > **2026-10-07 · v0.20.0** — thermal Phase 1: GPU solver `17b` (three axes per CG, batch-2 FFT preconditioner, GPU-resident scalars), wall data on a worker pool reusing the elastic voxels (`17c`), Run All Phase 4 with air / water / tissue, card rows and flags (under-resolved = > 5 % of solid in sub-3³-voxel fragments), "Pores filled with" switch. GPU = Float64 CPU to rounding on all families at N = 16 (headless). Timing and N ≥ 32 checks are Matt's, on the RTX: [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4.
 >
@@ -66,7 +66,7 @@
    - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
    - sweep builder → "by thinnest feature", and the new CSV columns.
 2. **Thermal Phase 1 — done and merged (v0.20.0).** Matt's RTX checks all PASS ([`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4). **GPU checks and timing are Matt's; sessions don't run them headless** (Matt, 2026-10-07: SwiftShader is far too slow to be worth it).
-3. **Thermal Phase 2 — built (v0.21.0, branch `thermal-phase2`)**; Matt click-tests (§13.3), then merge. Next: **Phase 3** — materials (fill k_s gaps, add c_p for diffusivity, as-built notes; AlSi10Mg and CuCrZr as-built and treated matter for heat exchangers) and sweep columns / Atlas metrics, **plus the geometry columns** (porosity, surface area density, hydraulic diameter, open axes) (§3.8–3.9).
+3. **Thermal Phase 2 — done (v0.21.0, merged).** Recheck on the live site that the Windows freeze is gone and the flux speckle is smoothed (§13.4). Next: **Phase 3** — materials (fill k_s gaps, add c_p for diffusivity, as-built notes; AlSi10Mg and CuCrZr as-built and treated matter for heat exchangers) and sweep columns / Atlas metrics, **plus the geometry columns** (porosity, surface area density, hydraulic diameter, open axes) (§3.8–3.9).
 4. **Then fluids version 1** ([`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md)), **then the heat-exchanger phases** HX-1 inertial pressure drop and HX-2 convective heat transfer (§11; Matt, 2026-10-07, after a user request for a lattice heat-exchanger database).
 5. **Dev cycle** — §1a.
 
@@ -196,7 +196,7 @@ Also:
 **New solvers**
 
 - **Thermal κ** — scalar subset of the elastic FFT-CG; a stub today. Scoped in [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) (2026-10-07): conductivity tensor, 3-D temperature map, sub-voxel walls.
-- **Fluids (LBM)** — replaces the Stokes solver, which Matt does not trust and nothing calls. Scoped in [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md) (2026-10-07): wall shear stress for biocompatibility, permeability, live flow-rate and direction rescaling. Thermal goes first (shared signed-field and section-plane work).
+- **Fluids (LBM)** — replaces the Stokes solver (removed in v0.21.0). Scoped in [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md) (2026-10-07): wall shear stress for biocompatibility, permeability, live flow-rate and direction rescaling. Thermal goes first (shared signed-field and section-plane work).
 
 **UI and roadmap**
 

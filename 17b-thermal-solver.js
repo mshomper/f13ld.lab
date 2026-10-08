@@ -649,10 +649,10 @@ async function homogenizeThermalGPU(recipe, N, opts) {
   S.upload(vt);
   var out = { N: N, kS: kS, rho: vt.rho, rhoPhi: vt.rhoPhi, rhoRaw: nRaw / N3, trimLoss: nRaw > 0 ? 1 - nKept / nRaw : 0,
               nSurf: vt.nSurf, t_voxels_ms: tVox, voxReuse: vt.reused, voxWorkers: vt.workers, byFiller: {}, t_solve_ms: 0,
-              wraps: null, fragLoss: 0, mask: null };
-  /* v0.21.0 — solid mask (half the voxel or more solid) for the viewer's
-     flux spread into the pores; 1 byte per voxel, solver order */
-  if (opts.capture) { var mk = new Uint8Array(N3); for (var pm = 0; pm < N3; pm++) mk[pm] = vt.phi[pm] >= 0.5 ? 1 : 0; out.mask = mk; }
+              wraps: null, fragLoss: 0, phi8: null };
+  /* v0.21.0 — solid fraction per voxel (0–255, 1 byte, solver order) for the
+     viewer's solid-weighted flux smoothing */
+  if (opts.capture) { var pb = new Uint8Array(N3); for (var pm = 0; pm < N3; pm++) pb[pm] = Math.round(Math.max(0, Math.min(1, vt.phi[pm])) * 255); out.phi8 = pb; }
   /* Which axes the kept solid runs across (wrap bits 1 x, 2 y, 4 z), and the
      share of the raw solid in tiny floating fragments (< 27 voxels, a 3³
      block).  Features thinner than a voxel shatter into such fragments on the

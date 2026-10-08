@@ -541,3 +541,10 @@ The shared shading block (`20c-f13-shade.js`) is unchanged; thermal colour goes 
 - Section plane: each pill, drag the handle, turn it off; check the filler on the cut and the cut face of the metal.
 - Look for checkerboard speckle in the pores on the deviation view with air (§11.5); the centre average should remove it.
 - Sheet and thin-strut designs at N = 32: isotherm lines and flux on 1–2-voxel walls.
+
+### 13.4 Click-test results and fixes (Matt, 2026-10-07)
+
+- **Handle drag** feels like F13LD.tpms. **κ surface** left as is: correct, but nearly spherical on mildly directional cells and seen end-on along X at first.
+- **Page freeze on Windows (preview only).** The isotherm lines used a screen-space derivative (`fwidth`). Chrome on Windows compiles WebGL through Direct3D, whose compiler tries to unroll the 192-step march loop to make a derivative legal there, and the compile hangs the page. Fixed: isotherms are a fixed soft band (6 % of each ΔT/10 step), and the thermal texture is read with `textureLod`. No derivative or implicit-level sampling is left in the thermal path.
+- **Speckle on the flux view.** Walls are 1–2 voxels thick at N = 64; partial voxels carry less flux than their solid neighbours (series term), so the raw flux jumps voxel to voxel and trilinear sampling across a curved wall turns it into a dotted moiré. Fixed: displayed flux = blur(φ·q) ÷ blur(φ) with a periodic [1 2 1]³ kernel (`thermalSmoothFlux`, solid fraction stored as 1 byte per voxel), sampled with the 8-tap cubic B-spline the stress view uses (now for every thermal view). Peaks read slightly lower; the p99 scale follows.
+- Still to check on the live site: the freeze is gone, and the flux map is smooth.
