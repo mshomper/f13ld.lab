@@ -43,7 +43,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.20.0</span>
+      <span class="fh-version">v0.21.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -202,6 +202,7 @@
 <script src="10-hardware.js"></script>
 <script src="11-webgpu-device.js"></script>
 <script src="12-fft-plan.js"></script>
+<script src="12b-fft-cpu.js"></script>
 <script src="13-kernels.js"></script>
 <script src="13b-kernels-new.js"></script>
 <script src="13c-import-kernel.js"></script>
@@ -227,8 +228,6 @@
 <script src="17a-thermal-cpu-ref.js"></script>
 <script src="17b-thermal-solver.js"></script>
 <script src="17c-thermal-voxel-pool.js"></script>
-<script src="18-stokes-cpu-ref.js"></script>
-<script src="19-stokes-solver.js"></script>
 <script src="20-svg-mocks.js"></script>
 <script src="20b-curve-plotly.js"></script>
 <script src="20c-f13-shade.js"></script>

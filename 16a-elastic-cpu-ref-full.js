@@ -9,7 +9,7 @@
    F13LD.lab is the home for full tensor math (deep compute on
    3 short-listed designs, not throughput across thousands).
 
-   Mirrors the 18-stokes-cpu-ref.js → 19-stokes-solver.js pattern:
+   Mirrors the CPU-reference → GPU-solver pattern (formerly Stokes 18 → 19):
    math validated on CPU first, ported verbatim to GPU after.
 
    ── Push 1 (math) ───────────────────────────────────────
@@ -49,7 +49,7 @@
      resolveBuildArgs     (14-rasterizer.js)
    - KERNELS              (13-kernels.js)
    - DEMO_RECIPES         (15-demo-recipes.js)
-   - fft3dCpu             (18-stokes-cpu-ref.js — Cooley-Tukey
+   - fft3dCpu             (12b-fft-cpu.js — Cooley-Tukey
                            radix-2 ported from sweep)
    ============================================================ */
 
@@ -360,7 +360,7 @@ function getSolverWorkspaceFullCPU(N) {
      out[P](x) = IFFT( Σ_Q Γ̃_PQ(ξ) · τ̂_Q(ξ) )
 
    Same FFT pattern as sweep's applyGammaRow but loops q=0..5
-   instead of 0..2.  Uses fft3dCpu from 18-stokes-cpu-ref.js
+   instead of 0..2.  Uses fft3dCpu from 12b-fft-cpu.js
    (Cooley-Tukey radix-2, in-place on interleaved [re,im] arrays).
 
    tauFields: array of 6 Float64Array(N³) — input τ in real space

@@ -54,9 +54,9 @@ var NONLIN_BY_DESIGN = {};
    out of d.results (the elastic pass rebuilds it) and out of localStorage
    (temperature fields).  Fillers are cached one by one under the same base
    signature, so ticking a filler back on never re-solves the others.
-   Temperature fields are kept for grids up to captureMaxN (the Phase 2 map
-   reads them; at 128³ they would be ~140 MB per design). */
-var THERMAL_STATE = { fillers: { air: true, water: true, tissue: true }, tol: 1e-5, maxiter: 3000, captureMaxN: 64 };
+   Temperature and flux fields for the viewer are kept at half precision for
+   every grid (v0.21.0, Matt: ~70 MB per design at 128³, ~9 MB at 64³). */
+var THERMAL_STATE = { fillers: { air: true, water: true, tissue: true }, tol: 1e-5, maxiter: 3000, captureMaxN: 128 };
 var THERMAL_BY_DESIGN = {};
 var THERMAL_FRAG_FLAG = 0.05;   /* > 5 % of the solid in sub-3³-voxel fragments the island trim drops → under-resolved (Matt, 2026-10-07: trim stays on, flag it) */
 function thermalFillersOn(){
@@ -900,6 +900,8 @@ async function runRealSweep(N, runToken){
         if (stale()) return;
         thEx.rho = TR.rho; thEx.rhoPhi = TR.rhoPhi; thEx.rhoRaw = TR.rhoRaw; thEx.trimLoss = TR.trimLoss; thEx.wraps = TR.wraps;
         thEx.nSurf = TR.nSurf; thEx.t_voxels_ms = TR.t_voxels_ms; thEx.voxReuse = TR.voxReuse;
+        if (TR.phi8) thEx.phi8 = TR.phi8;
+        thEx._tex = null;   /* v0.21.0 — viewer texture cache */
         thEx.fragLoss = TR.fragLoss;
         thEx.underResolved = TR.fragLoss > THERMAL_FRAG_FLAG;
         for (var fk in TR.byFiller) thEx.byFiller[fk] = TR.byFiller[fk];

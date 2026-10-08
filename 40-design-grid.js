@@ -302,6 +302,172 @@ function thermalStats(d){
     dens
   ];
 }
+/* ── v0.21.0 — thermal map (Phase 2) ──────────────────────────────────
+   The map shows one filler and one gradient axis on every tile.  Fields
+   come from THERMAL_BY_DESIGN[id].byFiller[f].fields[axis] = { N, Tc, q }
+   (half precision, solver order; 17b): Tc = T̃ at voxel centres in voxel
+   units, q = flux ÷ a solid block's.  Temperature = ΔT·(position along the
+   axis) + (ΔT/N)·T̃, in °C above the cold (−axis) face. */
+var THERMAL_VIEW_IDX = { temp: 0, dev: 1, flux: 2 };
+function thermalMapData(d){
+  var th = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[d.id] : null;
+  if (!th || th.error || !th.byFiller) return null;
+  var fid = thermalFillerView(th), f = th.byFiller[fid];
+  var fs = (f && f.fields) ? f.fields[VIEW_STATE.thermalAxis || 'x'] : null;
+  if (!fs || !fs.Tc || !fs.q) return null;
+  return { th: th, f: f, fs: fs, N: fs.N, fid: fid };
+}
+/* Float field for the current view, cached on the design's thermal record:
+   T̃ (temperature / deviation views) or the flux ratio smoothed with solid
+   weights (thermalSmoothFlux), so a surface sample reads the metal, not the
+   filler or the voxel staircase.  hi = max |T̃| (voxel units) or the flux
+   ratio's 99th percentile where the voxel is at least half solid. */
+function thermalTexFor(d){
+  var m = thermalMapData(d);
+  if (!m) return null;
+  var flux = VIEW_STATE.thermalView === 'flux';
+  var key = m.fid + '|' + (VIEW_STATE.thermalAxis || 'x') + '|' + (flux ? 'q' : 'T');
+  if (m.th._tex && m.th._tex.key === key) return m.th._tex;
+  var N = m.N, N3 = N * N * N, arr, hi = 0, i;
+  if (flux){
+    arr = thermalSmoothFlux(thermalHalfToFloat(m.fs.q), m.th.phi8, N);
+    var vals = [], pb = m.th.phi8;
+    for (i = 0; i < N3; i++) if (!pb || pb[i] >= 128) vals.push(arr[i]);
+    var sv = Float32Array.from(vals); sv.sort();
+    hi = sv.length ? sv[Math.floor(0.99 * (sv.length - 1))] : 1;
+  } else {
+    arr = thermalHalfToFloat(m.fs.Tc);
+    for (i = 0; i < N3; i++){ var a = Math.abs(arr[i]); if (a > hi) hi = a; }
+  }
+  m.th._tex = { key: key, arr: arr, hi: hi > 0 ? hi : 1, N: N, view: flux ? 'flux' : 'T' };
+  return m.th._tex;
+}
+/* v0.21.0 — speckle fix.  Voxels the surface cuts through conduct less than
+   their fully solid neighbours (series term across the wall), so the raw flux
+   jumps voxel to voxel along a 1–2-voxel wall and trilinear sampling across a
+   curved surface turns that into a dotted moiré.  The displayed flux is a
+   solid-weighted [1 2 1]³ average: blur(φ·q) ÷ blur(φ), periodic, separable.
+   Solid dominates, partial voxels count by their solid fraction, the filler
+   never mixes in, and the value reaches one voxel into the pores so a surface
+   sample reads the metal.  Where no solid is near (deep in a pore, seen on a
+   cut face) the plain average of q is used. */
+function thermalSmoothFlux(q, phi8, N){
+  if (!phi8) return (typeof dilateSigmaVMByOneVoxel === 'function') ? dilateSigmaVMByOneVoxel(q, N) : q;
+  var NN = N * N, N3 = NN * N, i;
+  var num = new Float32Array(N3), den = new Float32Array(N3), raw = Float32Array.from(q);
+  for (i = 0; i < N3; i++){ var w = phi8[i] / 255; num[i] = w * q[i]; den[i] = w; }
+  var tmp = new Float32Array(N3);
+  function blur(a){
+    var strides = [NN, N, 1];
+    for (var ax = 0; ax < 3; ax++){
+      var st = strides[ax];
+      for (var p = 0; p < N3; p++){
+        var c = Math.floor(p / st) % N, lo = (c === 0) ? p + (N - 1) * st : p - st, hi = (c === N - 1) ? p - (N - 1) * st : p + st;
+        tmp[p] = 0.25 * a[lo] + 0.5 * a[p] + 0.25 * a[hi];
+      }
+      a.set(tmp);
+    }
+  }
+  blur(num); blur(den); blur(raw);
+  var out = new Float32Array(N3);
+  for (i = 0; i < N3; i++) out[i] = den[i] > 0.02 ? num[i] / den[i] : raw[i];
+  return out;
+}
+/* colour-scale top for one design in the current view, in display units
+   (deviation K, flux ratio); 'shared' = the largest across the designs */
+function thermalHiFor(tx){
+  var dT = VIEW_STATE.thermalDT || 10;
+  return tx.view === 'flux' ? tx.hi : tx.hi * dT / tx.N;
+}
+function thermalScaleTop(tx){
+  var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
+  var own = thermalHiFor(tx);
+  if (mode !== 'shared') return own;
+  var top = own, ds = LAB_STATE.designs;
+  for (var i = 0; i < ds.length && i < 3; i++){ var t2 = thermalTexFor(ds[i]); if (t2 && t2.view === tx.view) top = Math.max(top, thermalHiFor(t2)); }
+  return top;
+}
+function thermalParamsFor(tx){
+  var dT = VIEW_STATE.thermalDT || 10, v = VIEW_STATE.thermalView;
+  return { view: THERMAL_VIEW_IDX[v] || 0, axis: 'xyz'.indexOf(VIEW_STATE.thermalAxis || 'x'),
+           scale: dT / tx.N, hi: thermalScaleTop(tx), dT: dT };
+}
+/* κ(n) surface on the stiffness viewer: it draws 1/(vᵀSv) with
+   v = (n_x², n_y², n_z², n_y n_z, n_x n_z, n_x n_y).  With R = κ⁻¹ and
+   S = ½(a bᵀ + b aᵀ), a = (R11, R22, R33, 2R23, 2R13, 2R12), b = (1,1,1,0,0,0):
+   vᵀSv = (nᵀRn)(n·n) = nᵀRn, so the surface is 1/(nᵀκ⁻¹n) — the
+   conductivity along n when the heat flows along n, the exact analogue of
+   the directional Young's modulus; equal to κ_xx, κ_yy, κ_zz on the axes of
+   an orthotropic cell. */
+function kappaAsCompliance(K){
+  var a00 = 0.5 * (K[0] + K[0]), a11 = K[4], a22 = K[8];
+  var a01 = 0.5 * (K[1] + K[3]), a02 = 0.5 * (K[2] + K[6]), a12 = 0.5 * (K[5] + K[7]);
+  var c00 = a11 * a22 - a12 * a12, c01 = a02 * a12 - a01 * a22, c02 = a01 * a12 - a02 * a11;
+  var det = a00 * c00 + a01 * c01 + a02 * c02;
+  if (!(Math.abs(det) > 1e-30)) return null;
+  var R00 = c00 / det, R01 = c01 / det, R02 = c02 / det;
+  var R11 = (a00 * a22 - a02 * a02) / det, R12 = (a01 * a02 - a00 * a12) / det, R22 = (a00 * a11 - a01 * a01) / det;
+  var av = [R00, R11, R22, 2 * R12, 2 * R02, 2 * R01], bv = [1, 1, 1, 0, 0, 0], S = new Array(36);
+  for (var i = 0; i < 6; i++) for (var j = 0; j < 6; j++) S[i * 6 + j] = 0.5 * (av[i] * bv[j] + bv[i] * av[j]);
+  return S;
+}
+function thermalEmptyMsg(d){
+  var th = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[d.id] : null;
+  if (!th) return (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.thermal) ? 'Run to see the temperature map' : 'Enable Thermal \u03ba \u00b7 Run';
+  if (th.error) return th.error;
+  var fl = (typeof thermalFillerById === 'function') ? thermalFillerById(thermalFillerView(th)) : null;
+  if (!th.byFiller || !th.byFiller[thermalFillerView(th)]) return (fl ? fl.label : 'This filler') + ' not solved \u00b7 tick it and Run';
+  return 'No map stored for this run \u00b7 re-run Thermal \u03ba';
+}
+/* colour bar: temperature (inferno, 0..ΔT), deviation (cool–warm, ±top),
+   flux (cividis, 0..top) — CSS stops match the shader's anchors */
+function buildThermalColorbar(d){
+  var tx = thermalTexFor(d);
+  if (!tx) return '';
+  var v = VIEW_STATE.thermalView, dT = VIEW_STATE.thermalDT || 10, top = thermalScaleTop(tx);
+  var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
+  var head, grad, lt, lb, suf;
+  function g(stops){ var s = []; for (var i = 0; i < stops.length; i++) s.push(stops[i] + ' ' + (100 * i / (stops.length - 1)).toFixed(1) + '%'); return 'linear-gradient(to top,' + s.join(',') + ')'; }
+  function fmt(x){ return Math.abs(x) >= 10 ? x.toFixed(1) : (Math.abs(x) >= 0.1 ? x.toFixed(2) : x.toPrecision(2)); }
+  var ax = (VIEW_STATE.thermalAxis || 'x').toUpperCase();
+  if (v === 'temp'){
+    head = 'temperature'; grad = g(['rgb(0,0,4)','rgb(27,12,73)','rgb(81,18,124)','rgb(133,34,107)','rgb(184,55,84)','rgb(229,95,47)','rgb(251,159,11)','rgb(252,255,164)']);
+    lt = '+' + fmt(dT) + ' \u00b0C'; lb = '0 \u00b7 cold \u2212' + ax + ' face'; suf = '\u0394T per cell \u00b7 lines every ' + fmt(dT / 10);
+  } else if (v === 'dev'){
+    head = 'off the ramp'; grad = g(['rgb(59,76,192)','rgb(141,176,254)','rgb(221,221,221)','rgb(244,152,122)','rgb(180,4,38)']);
+    lt = '+' + fmt(top) + ' K'; lb = '\u2212' + fmt(top) + ' K'; suf = mode === 'shared' ? 'shared scale' : 'own scale';
+  } else {
+    head = 'heat flux'; grad = g(['rgb(0,32,77)','rgb(28,62,101)','rgb(60,88,120)','rgb(91,114,124)','rgb(127,137,117)','rgb(170,162,99)','rgb(216,193,76)','rgb(255,234,70)']);
+    lt = fmt(top) + '\u00d7'; lb = '0'; suf = '\u00f7 solid block \u00b7 ' + (mode === 'shared' ? 'shared p99' : 'p99');
+  }
+  return '<div class="stress-colorbar-header">' + head + '</div>' +
+         '<div class="stress-colorbar" style="background:' + grad + '"></div>' +
+         '<div class="stress-colorbar-label-top">' + lt + '<span class="stress-colorbar-suffix">' + suf + '</span></div>' +
+         '<div class="stress-colorbar-label-bot">' + lb + '</div>';
+}
+/* section-plane pills, as in F13LD.tpms (#clipOverlay) */
+function buildClipPills(){
+  return '<div class="lab-clip">' +
+    '<button class="lab-clip-pill" data-axis="1" onclick="onLabClipPill(1)" title="Section plane across X — drag its handle to move it">X</button>' +
+    '<button class="lab-clip-pill" data-axis="2" onclick="onLabClipPill(2)" title="Section plane across Y — drag its handle to move it">Y</button>' +
+    '<button class="lab-clip-pill" data-axis="3" onclick="onLabClipPill(3)" title="Section plane across Z — drag its handle to move it">Z</button>' +
+    '</div>';
+}
+/* view + gradient-axis buttons (shared by every thermal tile) */
+function buildThermalControl(){
+  var v = VIEW_STATE.thermalView, a = VIEW_STATE.thermalAxis || 'x';
+  function vb(id, txt, tip){ return '<button class="th-btn' + (v === id ? ' active' : '') + '" title="' + tip + '" onclick="onThermalViewPick(\'' + id + '\')">' + txt + '</button>'; }
+  function ab(id){ return '<button class="th-btn' + (a === id ? ' active' : '') + '" title="Heat flows along ' + id.toUpperCase() + '" onclick="onThermalAxisPick(\'' + id + '\')">' + id.toUpperCase() + '</button>'; }
+  return '<div class="vp-deform-control show">' +
+    '<div class="th-toggle">' +
+      vb('temp', 'T', 'Temperature: \u0394T across one cell along the gradient axis, isotherms every \u0394T/10') +
+      vb('dev', '\u0394', 'Deviation: how far each point is from a plain linear ramp') +
+      vb('flux', 'q', 'Heat flux: local flux \u00f7 the flux a solid block would carry') +
+      vb('kappa', '\u03ba', 'Directional conductivity surface \u03ba(n)') +
+    '</div>' +
+    (v === 'kappa' ? '' : '<label>grad</label><div class="th-toggle">' + ab('x') + ab('y') + ab('z') + '</div>') +
+    '</div>';
+}
 function thermalReadout(d){
   var th = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[d.id] : null;
   var fid = thermalFillerView(th), f = th && !th.error && th.byFiller ? th.byFiller[fid] : null;
@@ -457,13 +623,15 @@ function renderDesignGrid(){
                   no recipe needed since the surface is purely tensor-driven
      A.2.2 — gating now considers the active load axis from VIEW_STATE. */
   var rmDesigns = [];   /* [{i, id}, …] */
-  var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle');
+  var thermMap = (VIEW_STATE.mode === 'thermal' && VIEW_STATE.thermalView !== 'kappa');   /* v0.21.0 */
+  var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle' || thermMap);
   var needsFields = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle');
   if (rmModes) {
     for (var ri = 0; ri < LAB_STATE.designs.length && ri < 3; ri++) {
       var rd = LAB_STATE.designs[ri];
       var rcp = (typeof recipeForDesign === 'function') ? recipeForDesign(rd) : null;
       if (!rcp) continue;
+      if (thermMap && !thermalMapData(rd)) continue;   /* v0.21.0 — map fields for the shown filler + axis */
       if (needsFields) {
         if (!hasActiveFields(rd, VIEW_STATE.mode)) continue;
         var rdAxis = activeAxisFor(rd, VIEW_STATE.mode);
@@ -483,10 +651,20 @@ function renderDesignGrid(){
      (post-push 4a, full-Voigt is the production path, so every successful
      elastic Run All populates this). */
   var svDesigns = [];   /* [{i, id}, …] */
-  var svMode = (VIEW_STATE.mode === 'stiff');
+  var kappaMode = (VIEW_STATE.mode === 'thermal' && VIEW_STATE.thermalView === 'kappa');   /* v0.21.0 — κ(n) surface */
+  var svMode = (VIEW_STATE.mode === 'stiff') || kappaMode;
   if (svMode) {
     for (var si = 0; si < LAB_STATE.designs.length && si < 3; si++) {
       var sd_g = LAB_STATE.designs[si];
+      if (kappaMode) {
+        var thK = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[sd_g.id] : null;
+        var fK = (thK && !thK.error && thK.byFiller) ? thK.byFiller[thermalFillerView(thK)] : null;
+        if (!fK || !fK.K) continue;
+        var svK = (typeof getOrCreateStiffnessViz === 'function') ? getOrCreateStiffnessViz(sd_g.id) : null;
+        if (svK) svK.uploadDesign(kappaAsCompliance(fK.K));
+        svDesigns.push({ i: si, id: sd_g.id });
+        continue;
+      }
       if (!sd_g.results || !sd_g.results.S || sd_g.results.S.length !== 36) continue;
       if (typeof getOrCreateStiffnessViz === 'function') {
         var svInst = getOrCreateStiffnessViz(sd_g.id);
@@ -538,9 +716,8 @@ function renderDesignGrid(){
       }
     }
     else if (VIEW_STATE.mode === 'thermal'){
-      /* v0.20.0 — κ numbers are on the card; the 3-D temperature map is
-         thermal Phase 2 (Matt, 2026-10-07: viewport stays empty until then). */
-      svgInner = svgEmptyViewport('3-D temperature map arrives in the next update');
+      /* v0.21.0 — map (raymarcher) or κ(n) surface when there is data; else say why */
+      if (!useRM && !useSV) svgInner = svgEmptyViewport(thermalEmptyMsg(d));
     }
     else if (VIEW_STATE.mode === 'buckle'){
       if (!useRM) {
@@ -646,6 +823,8 @@ function renderDesignGrid(){
         (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
         (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +
         (showBuckleBar ? buildBuckleColorbar() : '') +
+        ((VIEW_STATE.mode === 'thermal' && useRM) ? buildThermalColorbar(d) + buildClipPills() : '') +
+        ((VIEW_STATE.mode === 'thermal' && (useRM || useSV || thermalMapData(d) || kappaMode)) ? buildThermalControl() : '') +
         (showControls
           ? (VIEW_STATE.mode === 'stress'
               ? buildStressControl(d.id,
@@ -662,6 +841,7 @@ function renderDesignGrid(){
       '</div>';
   }
   grid.innerHTML = html;
+  if (typeof labUpdateClipPills === 'function') labUpdateClipPills();   /* v0.21.0 */
 
   /* Mount any raymarcher canvases into their .rm-mount placeholders */
   if (typeof mountRaymarcherTiles === 'function') mountRaymarcherTiles();
@@ -683,6 +863,18 @@ function renderDesignGrid(){
     var rkrm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[rkid] : null;
     if (!rkrm || rkrm.failed) continue;
     var rdesign = LAB_STATE.designs[rmDesigns[rk].i];
+    if (VIEW_STATE.mode === 'thermal') {   /* v0.21.0 — temperature / deviation / flux map */
+      var tx = thermalTexFor(rdesign);
+      if (tx && rkrm.uploadThermal) {
+        if (rkrm._thermSrc !== tx) { rkrm.uploadThermal(tx.arr, tx.N); rkrm._thermSrc = tx; }
+        rkrm.setThermalParams(thermalParamsFor(tx));
+      }
+      if (rkrm.setBuckleMap)  rkrm.setBuckleMap(false);
+      if (rkrm.setPulse)      rkrm.setPulse(false);
+      if (rkrm.setWarpExpand) rkrm.setWarpExpand(0);
+      if (rkrm.setViewMode)   rkrm.setViewMode('thermal');
+      continue;
+    }
     if (rkrm.uploadFields) {
       var rkAxis = activeAxisFor(rdesign, VIEW_STATE.mode);
       var fs = activeFieldsFor(rdesign, rkAxis, VIEW_STATE.mode);

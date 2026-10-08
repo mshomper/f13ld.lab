@@ -48,7 +48,7 @@ var CG_MAXITER = 300;
    Inline CPU FFT helpers — used by extractFieldsForLC to
    reconstruct u'(x) from the GPU-converged ε(x).  Operates on
    interleaved Float64 complex arrays [re, im, re, im, ...].
-   Self-contained (duplicates 18-stokes-cpu-ref.js's fft routines)
+   Self-contained (duplicates 12b-fft-cpu.js's fft routines)
    to keep this push free of cross-file load-order dependencies.
    ════════════════════════════════════════════════════════════ */
 

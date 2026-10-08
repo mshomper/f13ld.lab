@@ -1,6 +1,6 @@
 # F13LD.lab — Thermal Conductivity and 3-D Temperature Map (Scope)
 
-**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done in v0.19.3**: CPU reference solver and sub-voxel walls, validated (§11). Phase 0 changed the discretization planned in §3.1–3.3; §11 has the reasons and the numbers. **Phase 1 done in v0.20.0**: GPU solver, Run All phase, cards, fillers, flags (§12). Phase 2 (temperature map, section plane) is next.
+**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done in v0.19.3**: CPU reference solver and sub-voxel walls, validated (§11). Phase 0 changed the discretization planned in §3.1–3.3; §11 has the reasons and the numbers. **Phase 1 done in v0.20.0**: GPU solver, Run All phase, cards, fillers, flags (§12). **Phase 2 built in v0.21.0** (branch `thermal-phase2`, awaiting Matt's click-test): temperature / deviation / flux map, κ(n) surface, section plane (§13). Phase 3 (materials + sweep) is next.
 **Written against:** v0.18.0 (main `18ddbae`), 2026-10-07
 **Goal:** Fill the existing "Thermal κ" stubs with a working solver: the effective conductivity tensor of any lattice the lab can build (native recipes, foams, imported STL cells), a 3-D temperature map on the cell, and a heat-flux "hot spot" map. It should run in seconds, in the same Run All flow as stiffness.
 **Out of scope (this pass):**
@@ -230,6 +230,13 @@ The shared shading block (`20c-f13-shade.js`) stays byte-identical. Field colour
 - **New CSV columns, one set per filler** (suffix `_air`, `_water`, `_tissue`): `kx_WmK`, `ky_WmK`, `kz_WmK`, `k_rel` (κ / κ_s, directional mean), `k_eff_hs` (efficiency), plus `k_iters` and `k_converged`.
 - **Run settings:** a "Physics: stiffness / stiffness + thermal" choice.
 - Atlas metrics follow the existing `ATLAS_S3_METRICS` pattern.
+- **Geometry columns for heat-exchanger and surrogate use** (Matt, 2026-10-07; no solver needed), built in Phase 3 alongside the thermal columns:
+  - `porosity` (1 − solid fraction, composite voxels);
+  - `surface_area_density_m2m3`: the area of the continuous surface (marching cubes on the margin grid) ÷ cell volume;
+  - `hydraulic_diameter_mm` = 4 · porosity ÷ surface area density;
+  - `open_x/y/z`: the pore space runs through the cell along each axis (connectivity on the void).
+
+  See `FLUIDS_LBM_SCOPE.md` §11 for the heat-exchanger phases these feed.
 
 ### 3.10 Code touch points
 
@@ -295,8 +302,8 @@ Version targets: Phase 0 shipped as v0.19.3 (CPU reference only, nothing user-vi
 
 ## 7. Open questions for Matt
 
-- Should the temperature map default to one cell with ΔT across it, or would you rather set a physical gradient, such as degrees per millimetre?
-- Are the as-built conductivity presets worth adding next to the wrought values for every AM material, or only where the gap is large?
+- ~~Temperature map: ΔT per cell or a physical gradient?~~ ΔT across one cell (Matt, 2026-10-07; §13.1).
+- ~~As-built presets for every material or only large gaps?~~ **Every AM material with a literature value** (Matt, 2026-10-07); the search is Phase 3 work, not done yet.
 
 ---
 
@@ -504,3 +511,40 @@ Memory at N = 128: about 230 MB on the GPU (voxel data, four CG vectors, the bat
 - `await runThermalBeamReference()`: BCC beams at N = 128 (§11.4 †), Ti/air and Cu/air κ_x, iterations, seconds.
 - `await thermalVoxelSelfTest()`: worker pool vs single thread on the hyperuniform demo; PASS = identical, plus both times.
 - A normal Run All with Thermal κ on; the console prints walls / per-filler times per design.
+
+---
+
+## 13. Phase 2: the map (v0.21.0, 2026-10-07)
+
+### 13.1 Decisions (Matt, 2026-10-07)
+
+- **ΔT across one cell** (10 K default), not a physical gradient: less to enter.
+- **Section plane matches F13LD.tpms exactly**: X / Y / Z pills at the tile's bottom left (same CSS), clicking the active pill turns it off, a new axis starts at the centre; the plane outline (1.5 px, 50 %) and a ring-and-dot handle in the axis colour (cyan / magenta / yellow), dragged along the axis; solid kept on the −axis side. The cut face is not tinted in the thermal view (the colour is data there).
+- **Filler on the cut face**: the filler's field is drawn on the plane, dimmed (50 % toward the background), so heat in the pores reads next to heat in the metal.
+- **Half precision** for stored fields at every grid (`THERMAL_STATE.captureMaxN` = 128).
+
+### 13.2 What was built
+
+| File | Change |
+|---|---|
+| `17b-thermal-solver.js` | Captured fields per axis: `Tc` (T̃ averaged from the 8 corners to the voxel centre, which also cancels the checkerboard modes of §11.5) and `q` (flux ÷ a solid block's), both binary16 (`thermalF32ToF16` / `thermalHalfToFloat`); a 1-byte solid mask (φ ≥ ½) for the flux spread |
+| `21-raymarcher.js` | View mode 3 (thermal): R16F field on texture unit 4, inferno / cool–warm / cividis colour, isotherms by screen-space derivative; `implicit` now = the old `implicit0` clipped by the plane (F13LD.tpms `sceneSDF`); filler-on-cut pass; plane outline + handle drawn in the shader from page-projected points; `uploadThermal`, `setThermalParams`, `LAB_CLIP`, `onLabClipPill`, `labClipProject`; handle scrub in the pointer handlers (F13LD.tpms `applyScrub`) |
+| `40-design-grid.js` | Thermal tiles mount the raymarcher (κ view mounts the stiffness viewer), texture cache per design / filler / axis, flux spread one voxel into the pores from the solid mask, colour bars, view + axis buttons, clip pills |
+| `22-stiffness-viz.js` | Unchanged. κ(n) is drawn through it with S = ½(a bᵀ + b aᵀ), a from κ⁻¹, b = (1,1,1,0,0,0), so the surface is 1/(nᵀκ⁻¹n) (`kappaAsCompliance`) |
+| `30-view-tabs.js`, `lab.css` | `VIEW_STATE.thermalView / thermalAxis / thermalDT`, Map scale toggle on the thermal tab, pill and button styles |
+
+The shared shading block (`20c-f13-shade.js`) is unchanged; thermal colour goes through `f13ShadeData` as stress does. The fragment shader compiles headless (WebGL2, SwiftShader).
+
+### 13.3 For Matt's click-test
+
+- Run All with Thermal κ on, then the Thermal κ tab: T / Δ / q / κ, gradient X / Y / Z, the filler switch, Map scale.
+- Section plane: each pill, drag the handle, turn it off; check the filler on the cut and the cut face of the metal.
+- Look for checkerboard speckle in the pores on the deviation view with air (§11.5); the centre average should remove it.
+- Sheet and thin-strut designs at N = 32: isotherm lines and flux on 1–2-voxel walls.
+
+### 13.4 Click-test results and fixes (Matt, 2026-10-07)
+
+- **Handle drag** feels like F13LD.tpms. **κ surface** left as is: correct, but nearly spherical on mildly directional cells and seen end-on along X at first.
+- **Page freeze on Windows (preview only).** The isotherm lines used a screen-space derivative (`fwidth`). Chrome on Windows compiles WebGL through Direct3D, whose compiler tries to unroll the 192-step march loop to make a derivative legal there, and the compile hangs the page. Fixed: isotherms are a fixed soft band (6 % of each ΔT/10 step), and the thermal texture is read with `textureLod`. No derivative or implicit-level sampling is left in the thermal path.
+- **Speckle on the flux view.** Walls are 1–2 voxels thick at N = 64; partial voxels carry less flux than their solid neighbours (series term), so the raw flux jumps voxel to voxel and trilinear sampling across a curved wall turns it into a dotted moiré. Fixed: displayed flux = blur(φ·q) ÷ blur(φ) with a periodic [1 2 1]³ kernel (`thermalSmoothFlux`, solid fraction stored as 1 byte per voxel), sampled with the 8-tap cubic B-spline the stress view uses (now for every thermal view). Peaks read slightly lower; the p99 scale follows.
+- Still to check on the live site: the freeze is gone, and the flux map is smooth.

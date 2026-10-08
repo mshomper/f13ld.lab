@@ -8,7 +8,7 @@ var fs = require('fs'), path = require('path');
 var S = process.env.SRC || path.resolve(__dirname, '../..'), D = process.env.D || 'stl';
 global.window = global; global.document = { getElementById: function () { return null; }, baseURI: 'http://x/' };
 global.performance = require('perf_hooks').performance;
-(0, eval)(['18-stokes-cpu-ref.js', '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
+(0, eval)(['12b-fft-cpu.js', '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
   '13c-import-kernel.js', '14c-stl-import.js', '15-demo-recipes.js', '16a-elastic-cpu-ref-full.js',
   '16c-buckling-cpu-ref.js', '16h-buckling-fe.js'].map(function (f) { return fs.readFileSync(S + '/' + f, 'utf8'); }).join('\n'));
 var MAT = { Es_MPa: 110000, nu: 0.34 };
