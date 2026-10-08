@@ -25,9 +25,9 @@
 >
 > **2026-10-05 · v0.17.4** — wet foam field changed with F13LD.foam v0.7.0: it now includes the neighbouring bubbles (no jumps across cell faces) and honours `foam.edge_min` (cusp trim; sweepable, CSV column `edge_min`). Wet-foam lab results from before v0.17.4 were computed on the old field; re-run them if they feed a fit.
 
-**As of:** v0.20.0 · 2026-10-07 · thermal Phase 1 (GPU solver, cards, fillers) on branch `thermal-phase1`; thermal Phase 0 (CPU reference, sub-voxel walls) done; fields on the fast elastic path, feature size in mm (CSV + builder), partial-volume voxels (default on); crush verified on hardware; fluids scoped; foam laws still provisional (re-run moved down)
+**As of:** v0.25.0 · 2026-10-08 · dock + Configure drawer and Lab red; thermal Phases 0–3 done (GPU solver, map, materials, sweep and geometry columns); elastic prep and viewer bakes on the worker pool (no freeze on load or Run); splash + status chip; Stress tab with deformation; buckling and crush prep still on the main thread (both off by default); fluids scoped, not started; foam laws still provisional
 **Suite on main (2026-10-04):** lab v0.17.3 · F13LD.foam v0.6.0 · F13LD.mesh v0.9.3 (fast weld export — see mesh `docs/SESSION_RECAP_2026-10-04.md`; no lab impact)
-**Full history of the last session:** [`SESSION_RECAP_2026-10-03.md`](SESSION_RECAP_2026-10-03.md) (previous: [`SESSION_RECAP_2026-10-01.md`](SESSION_RECAP_2026-10-01.md), [`SESSION_RECAP_2026-09-30.md`](SESSION_RECAP_2026-09-30.md))
+**Full history of the last session:** [`SESSION_RECAP_2026-10-08.md`](SESSION_RECAP_2026-10-08.md) (previous: [`SESSION_RECAP_2026-10-07.md`](SESSION_RECAP_2026-10-07.md), [`SESSION_RECAP_2026-10-03.md`](SESSION_RECAP_2026-10-03.md))
 **Owner direction:** Matt Shomper directs implementation. **Analyze and present proposed changes for approval before writing or modifying any code.** Don't over-deliberate.
 
 ---
@@ -71,19 +71,33 @@
 
 ---
 
-## 1. PICK UP HERE (2026-10-07)
+## 1. PICK UP HERE (2026-10-08)
 
-1. **Click-test v0.19.0** on the branch preview (or main once merged):
-   - a normal Run All: stress and deformation views as before, run source reads "· partial volume"; `await runElasticFastTest(32)` passes (moduli and fields, fast vs legacy; spinodoid still unconverged on both paths, as before);
-   - `await runPartialVolumeCheck()` on the RTX after the Γ fix: no "destroyed buffer" errors, no legacy fallback at 128, PASS (`PARTIAL_VOLUME.md` §4);
-   - sweep builder → "by thinnest feature", and the new CSV columns.
-2. **Thermal Phase 1 — done and merged (v0.20.0).** Matt's RTX checks all PASS ([`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §12.4). **GPU checks and timing are Matt's; sessions don't run them headless** (Matt, 2026-10-07: SwiftShader is far too slow to be worth it).
-3. **Thermal Phase 2 — done (v0.21.0, merged).** Recheck on the live site that the Windows freeze is gone and the flux speckle is smoothed (§13.4). **Phase 3 — built (v0.23.0, branch `thermal-phase3`)**: materials, sweep thermal columns, geometry columns, card rows, Atlas (§14). Next after merge: **fluids v1** (`FLUIDS_LBM_SCOPE.md`), then the heat-exchanger phases.
-4. **Then fluids version 1** ([`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md)), **then the heat-exchanger phases** HX-1 inertial pressure drop and HX-2 convective heat transfer (§11; Matt, 2026-10-07, after a user request for a lattice heat-exchanger database).
-5. **Dev cycle** — §1a.
+Goal for the next session (Matt): **move Buckling and Crush prep onto background workers**, so turning either on no longer freezes the page. Same pattern as v0.24.0 did for elastic: x-slabs on the 17c geometry pool, results bit-identical to the main-thread build, status chip shows "preparing voxels nn %". Profile each step before moving it; propose the plan before building.
 
-**Done 2026-10-07 (Matt):** v0.17.x crush changes verified on the RTX machine — foam and PI-TPMS unblocked; some sparse foams still make several cutbacks, manageable. The Plotly stress–strain plot is good. **PI-TPMS paper finished** (other session) — removed from this list.
-**Moved down (Matt, 2026-10-07):** foam calibration re-run on the exact field and the refit (old §1 items 2–3) — the foam tool carries estimates and that is fine for now; kept in §2 Queued.
+1. **Crush (16g) — the bigger freeze.** `NonlinearSolverFull.prototype.upload` (16g:569–577) runs `buildVoxels` + `pruneVoxels` synchronously; called from 50-controls:766 and 16g:849 / 867 / 1194 / 2051.
+   - Make `upload` async (return a promise) and fetch the grid with `labPrepElasticParallel` at the crush N, **0/1 cube only** (crush does not use partial volume), with the design's connectivity options.
+   - Await it at every call site; keep a synchronous fallback (`opts.parallelPrep === false`) as 16b does.
+   - Share the one-entry `_TV_PREP_CACHE`: when elastic and crush use the same N the crush grid is already there (0/1 voxels are the input to partial volume).
+   - Check: extend `validate-prep.js` with the crush path (0/1 + prune, every demo family) — must be bit-identical.
+2. **Buckling (16c / 16e / 16h) — voxelize once, not once per axis.** Each CPU worker job rebuilds the grid (16h:741, 16c:1534) on its own.
+   - Build the grid once on the 17c pool, then send the `Uint8Array` / `Float32Array` to the 16e axis workers (transferable copy per worker) instead of the recipe.
+   - `predictBucklingN` probe (16c:1620, N = 32, via `annotateBucklingPredict` on card render) runs on the main thread: time it on the slow families (hyperuniform, spinodoid, foam). If it is more than ~50 ms, move it to a `probe` job on the pool and paint the badge when it returns.
+   - Check: buckling factors unchanged against `validate-buckling-predict.js` and a headless CPU buckling run at N = 16.
+3. **Click-test link** before merge (raw.githack on the branch); Matt does the GPU and timing checks.
+4. **Then fluids version 1** ([`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md)), **then the heat-exchanger phases** HX-1 inertial pressure drop and HX-2 convective heat transfer (§11).
+5. **Open:** tantalum conductivity — the AM data sheet's 45 W/m·K is used (method not stated; wrought 57.5). Revisit if a measured value appears.
+6. **Dev cycle** — §1a.
+
+**Working notes for the next session**
+- Approval: propose before coding; Matt approves every push to main. Share a raw.githack link to the branch for click-testing first: `https://raw.githack.com/mshomper/f13ld.lab/<branch>/index.html`.
+- `50-controls.js`, `16b-elastic-solver-full.js` and `30-view-tabs.js` have CRLF (partly mixed) line endings — edit them in a way that keeps each line's ending, or the diff rewrites the whole file.
+- `20c-f13-shade.js` stays byte-identical across the F13LD tools.
+- Headless checks: Playwright + Chromium (`/opt/pw-browsers`) for the UI and CPU paths; software WebGPU is too slow and does not converge on shear — GPU checks are Matt's.
+- Persisted settings live in localStorage (`f13ld.lab.settings.v1`, `f13ld.lab.material.v1`, `f13ld.lab.dock.v1`); a new browser gets the defaults (Ti-6Al-4V G5 HIP, Elastic 64³, Thermal water).
+
+**Done 2026-10-08:** v0.22.0–v0.25.0 (recap: [`SESSION_RECAP_2026-10-08.md`](SESSION_RECAP_2026-10-08.md)). The 2026-10-07 pick-up list (v0.19.0 click-test, thermal Phases 1–3) is closed.
+**Moved down (Matt, 2026-10-07):** foam calibration re-run on the exact field and the refit — the foam tool carries estimates and that is fine for now; kept in §2 Queued.
 
 ## 1-foam. Foam stiffness calibration — laws provisional until the re-run
 
@@ -103,7 +117,7 @@ Re-run on the exact field, refit and update F13LD.foam per §1 items 2–3. The 
 3. **Plot follow-ups:** use `Plotly.toImage` for the future PDF report; reuse `20b-curve-plotly.js` patterns for the Sweep Atlas line chart (Plotly-style hover was already on its wish list); retire the SVG plot once the Plotly one has been used for a while (keep it as the offline fallback until then).
 4. ~~Normal (non-sweep) elastic runs on the fast path~~ — done v0.19.0. Compliant designs still capture fields on their first solve too (the void decision needs all six load cases); fields are only discarded on those designs.
 5. **Thinnest feature** — (a) and (c) done v0.19.0. (b) the PI flattened-tube low bias: **local thickness** (Hildebrand & Rüegsegger, BoneJ) was built and tested — A4 0.114 vs 0.113 T at N = 128 (truth 0.117–0.120), C4 reads *thicker* (0.139 vs 0.131; volume weighting favours nodes), 1.5–3× slower — set aside. The real fix is a width measured on the continuous field (Matt's chord method), cheap once the shared signed field exists (thermal Phase 0).
-6. **Partial-volume voxels** — done v0.19.0, on by default ([`PARTIAL_VOLUME.md`](PARTIAL_VOLUME.md)): grid-converged by N = 64 (within 0.5 % of 128 on A4m / C4 / D7; the cube still moves 2–11 %). Follow-up: move the partial-volume rasterization (up to ~8 s for PI-TPMS at 128, main thread) into the geometry worker. Laminate voxels would need a non-symmetric Krylov solver and are not needed now. Note: `SWEEP.md` §8–§9's cube extrapolations are probably a few percent low (D7 measured convergence order ≈ 0.6, not 2); the paper is left as is (Matt).
+6. **Partial-volume voxels** — done v0.19.0, on by default ([`PARTIAL_VOLUME.md`](PARTIAL_VOLUME.md)): grid-converged by N = 64 (within 0.5 % of 128 on A4m / C4 / D7; the cube still moves 2–11 %). ~~Follow-up: move the partial-volume rasterization into the geometry worker~~ — done v0.24.0 (17c slabs, `validate-prep.js`). Laminate voxels would need a non-symmetric Krylov solver and are not needed now. Note: `SWEEP.md` §8–§9's cube extrapolations are probably a few percent low (D7 measured convergence order ≈ 0.6, not 2); the paper is left as is (Matt).
 7. **Foam preview at 96³** in the lab (deferred by Matt until his foam testing is done); spinodoid demo does not converge on either elastic path — look at it.
 8. **Main-lab axis triad check** (triad from rotation-matrix columns vs the ray-marcher's transpose).
 9. **Sprint B2 — buckling speed** (§2).
