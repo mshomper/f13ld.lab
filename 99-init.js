@@ -19,6 +19,7 @@
   paintGridPill();
   paintBucklePill();
   if (typeof initMaterialPicker === 'function') initMaterialPicker();
+  if (typeof initDock === 'function') initDock();   /* v0.22.0 — dock + Configure drawer */
   paintHardwarePill('detecting…', '');
   paintSolverPill('starting…', '');
   updateLoadedPill();
@@ -46,7 +47,7 @@
     }, 150);
   });
 
-  console.log('%c F13LD.lab · v0.21.0 ', 'background:#fbbf24; color:#1a1408; font-weight:bold; padding:2px 8px; border-radius:3px;');
+  console.log('%c F13LD.lab · v0.22.0 ', 'background:#8C2A2E; color:#F6E7E7; font-weight:bold; padding:2px 8px; border-radius:3px;');
   console.log('Phase 6 · nonlinear J2 plasticity + adaptive crush live · real σ_y retires the buckling seam · σ–ε comparison tab');
   console.log('Loaded demo recipes: ' + Object.keys(DEMO_RECIPES).join(', '));
 })();

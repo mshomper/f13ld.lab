@@ -140,7 +140,7 @@ function fmtForceN(n){
   return n.toFixed(1) + ' N';
 }
 
-var DESIGN_PALETTE = ['#4f86f7', '#a78bfa', '#e879c9'];   /* A=azure blue, B=violet, C=magenta — chosen clear of metric green/amber/red, lab accent (#fbbf24), neon, and section-label cyan (#22d3ee) */
+var DESIGN_PALETTE = ['#4f86f7', '#a78bfa', '#e879c9'];   /* A=azure blue, B=violet, C=magenta — chosen clear of metric green/amber/red, lab accent (red, #E06A6F / #8C2A2E since v0.22.0), neon, and section labels */
 function reconcileDesignSlots(){
   var ds = LAB_STATE.designs, used = [false, false, false], i;
   for (i = 0; i < ds.length; i++){

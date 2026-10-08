@@ -222,7 +222,7 @@ function curvePlotLayout(data){
     hoverlabel: { bgcolor: 'rgba(14,14,26,0.96)', bordercolor: '#3a3a52', font: { family: CURVE_MONO, size: 11.5, color: '#e0e0ff' } },
     xaxis: { title: { text: 'ε  (%)', font: { family: CURVE_MONO, size: 11, color: '#8a8aa6' }, standoff: 8 },
       range: [0, xMax], autorange: false, gridcolor: grid, zeroline: false, linecolor: '#2a2a3a', ticks: 'outside', ticklen: 5, tickcolor: '#2a2a3a',
-      showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: 'rgba(251,191,36,0.55)', spikedash: 'solid', spikesnap: 'cursor',
+      showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: 'rgba(224,106,111,0.55)', spikedash: 'solid', spikesnap: 'cursor',
       rangeslider: { visible: true, range: [0, xMax], thickness: 0.07, bgcolor: 'rgba(10,12,20,0.8)', bordercolor: '#2a2a3a', borderwidth: 1 },
       hoverformat: '.2f' },
     yaxis: { title: { text: CURVE_STATE.scale === 'norm' ? 'σ / own σ<sub>y</sub>' : 'σ  (MPa)', font: { family: CURVE_MONO, size: 11, color: '#8a8aa6' }, standoff: 10 },

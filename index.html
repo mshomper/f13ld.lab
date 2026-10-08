@@ -43,7 +43,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.21.0</span>
+      <span class="fh-version">v0.22.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -116,83 +116,76 @@
     <div class="merged-scrubber" id="mergedScrubber"></div>
   </div>
 
-  <!-- ============ CONTROLS PANEL ============ -->
-  <div class="controls">
-    <div class="ctrl-block">
-      <div class="ctrl-label">Physics modes</div>
-      <div class="ctrl-row" id="physRow">
-        <div class="phys-toggle on" data-phys="elastic" onclick="onPhysToggle(this)"><span class="check">✓</span>Elastic</div>
-        <div class="phys-toggle on" data-phys="buckle"  onclick="onPhysToggle(this)"><span class="check">✓</span>Buckling</div>
-        <div class="phys-toggle on" data-phys="nonlin"  onclick="onPhysToggle(this)"><span class="check">✓</span>Nonlinear · J2 plasticity</div>
-        <div class="phys-toggle"    data-phys="thermal" onclick="onPhysToggle(this)"><span class="check">✓</span>Thermal κ</div>
-        <div class="spec-pill" id="thermalFillPill" title="What fills the pores in the thermal κ solve. Each ticked filler is a separate, fast solve; the cards switch between them with 'Pores filled with' on the Thermal κ tab. No vacuum option: no real part sits in one.">
-          <span class="key">Thermal fillers</span>
-          <label style="margin-left:6px"><input type="checkbox" checked onchange="onThermalFillerToggle('air', this.checked)"> air</label>
-          <label style="margin-left:6px"><input type="checkbox" checked onchange="onThermalFillerToggle('water', this.checked)"> water</label>
-          <label style="margin-left:6px"><input type="checkbox" checked onchange="onThermalFillerToggle('tissue', this.checked)"> tissue</label>
+  <!-- ============ BOTTOM DOCK (v0.22.0, 51-dock.js) ============
+       Run status strip (shown during / after a run) · Configure drawer
+       (slides up over the cards, never resizes them) · dock row. -->
+  <div class="bottom-dock" id="bottomDock">
+
+    <div class="dr-drawer" id="cfgDrawer" aria-label="Run configuration">
+      <nav class="dr-tabs">
+      <div class="dr-tab" data-tab="model" onclick="onDrawerTab('model')"><span class="ico ico-md mdl" data-ico="model"></span><span class="nm">Model</span><span class="mv" id="drModelVal">per design</span></div>
+      <div class="dr-tab" data-tab="elastic" data-phys-state="elastic" onclick="onDrawerTab('elastic')"><span class="ico ico-md" data-ico="elastic"></span><span class="nm">Elastic</span><button type="button" class="sw" role="switch" data-phys-sw="elastic" onclick="onPhysSwitch(event,'elastic')" title="Run Elastic, or skip it"></button></div>
+      <div class="dr-tab" data-tab="buckle" data-phys-state="buckle" onclick="onDrawerTab('buckle')"><span class="ico ico-md" data-ico="buckle"></span><span class="nm">Buckling</span><button type="button" class="sw" role="switch" data-phys-sw="buckle" onclick="onPhysSwitch(event,'buckle')" title="Run Buckling, or skip it"></button></div>
+      <div class="dr-tab" data-tab="nonlin" data-phys-state="nonlin" onclick="onDrawerTab('nonlin')"><span class="ico ico-md" data-ico="nonlin"></span><span class="nm">Crush</span><button type="button" class="sw" role="switch" data-phys-sw="nonlin" onclick="onPhysSwitch(event,'nonlin')" title="Run Crush, or skip it"></button></div>
+      <div class="dr-tab" data-tab="thermal" data-phys-state="thermal" onclick="onDrawerTab('thermal')"><span class="ico ico-md" data-ico="thermal"></span><span class="nm">Thermal κ</span><button type="button" class="sw" role="switch" data-phys-sw="thermal" onclick="onPhysSwitch(event,'thermal')" title="Run Thermal κ, or skip it"></button></div>
+      </nav>
+      <div class="dr-panes">
+      <section class="dr-pane" data-pane="model">
+        <div class="dr-ph"><span class="ico ico-lg mdl" data-ico="model"></span><div class="dr-pt-wrap"><div class="dr-pt">Model</div><div class="dr-ps">Material and voxel prep — apply to every design in the comparison</div></div></div>
+        <div class="dr-grid">
+          <div class="dr-f wide"><label>Material</label><div><div class="dd" id="materialDd"></div></div><div class="hint">AM library (docs/MATERIALS.md). “From design” keeps each design’s own material. Changing it re-solves on the next run.</div></div>
+          <div class="dr-f"><label>Connectivity</label><div><div class="dd" id="connDd"></div></div><div class="hint">Which connected pieces of the voxelized cell are analyzed.</div></div>
+          <div class="dr-f"><label>Surface voxels</label><div><div class="seg" data-seg="pv"><button type="button" data-v="pv" onclick="onSegClick(this)">Partial volume</button><button type="button" data-v="binary" onclick="onSegClick(this)">0/1 cube</button></div></div><div class="hint">Partial volume: each surface voxel carries its true solid fraction — exact solid fraction, stiffness grid-converged by 64³ on thin walls and struts. 0/1 cube reproduces results from before v0.19.0. Crush and buckling always use the 0/1 cube.</div></div>
         </div>
-        <div class="spec-pill" id="connPill" title="Which connected pieces of the voxelized cell are analyzed. All networks: every network that runs continuously through the tiled structure (e.g. both sides of an interwoven PI-TPMS), floating islands removed. Largest network: one side of a weave only. Keep everything: no removal (buckling still removes floating islands — they are free bodies).">
-          <span class="key">Connectivity</span>
-          <select id="connSel" onchange="onConnectivityChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;">
-            <option value="networks" selected>All networks · remove islands</option>
-            <option value="largest">Largest network only</option>
-            <option value="off">Keep everything</option>
-          </select>
+      </section>
+      <section class="dr-pane" data-pane="elastic" data-phys-state="elastic">
+        <div class="dr-ph"><span class="ico ico-lg" data-ico="elastic"></span><div class="dr-pt-wrap"><div class="dr-pt">Elastic</div><div class="dr-ps">Linear homogenization — full Cᵢⱼ, E*, ν*, directional stiffness</div></div><button type="button" class="sw" role="switch" data-phys-sw="elastic" onclick="onPhysSwitch(event,'elastic')" title="Run Elastic, or skip it"></button></div>
+        <div class="dr-grid">
+          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="grid"><button type="button" data-v="auto" onclick="onSegClick(this)">Auto</button><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div><div class="hint">Auto picks from your hardware (currently <span id="gridAutoVal">64³</span>). Thermal κ solves on the same grid.</div></div>
         </div>
-        <div class="spec-pill" id="pvPill" title="How voxels on the surface are treated in the stiffness solve. Partial volume (default): each voxel the surface passes through carries its true solid fraction and blends solid and void stiffness — the solid fraction is exact and stiffness is grid-converged by N = 64 on thin walls and struts. 0/1 cube: every voxel fully solid or fully void, the behaviour before v0.19.0 — thin features read low on coarse grids; use it to reproduce earlier results. Crush and buckling always use the 0/1 cube.">
-          <span class="key">Surface voxels</span>
-          <select id="pvSel" onchange="onSurfaceVoxelChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;">
-            <option value="pv" selected>Partial volume</option>
-            <option value="binary">0/1 cube (before v0.19.0)</option>
-          </select>
+      </section>
+      <section class="dr-pane" data-pane="buckle" data-phys-state="buckle">
+        <div class="dr-ph"><span class="ico ico-lg" data-ico="buckle"></span><div class="dr-pt-wrap"><div class="dr-pt">Buckling</div><div class="dr-ps">Linear eigenvalue buckling, free-sided (uniaxial-stress) loading</div></div><button type="button" class="sw" role="switch" data-phys-sw="buckle" onclick="onPhysSwitch(event,'buckle')" title="Run Buckling, or skip it"></button></div>
+        <div class="dr-grid">
+          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="buckleN"><button type="button" data-v="16" onclick="onSegClick(this)">16³</button><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button></div></div><div class="hint">Most sparse designs need 32³ or 64³ to buckle meaningfully. Floating islands are always removed.</div></div>
         </div>
+      </section>
+      <section class="dr-pane" data-pane="nonlin" data-phys-state="nonlin">
+        <div class="dr-ph"><span class="ico ico-lg" data-ico="nonlin"></span><div class="dr-pt-wrap"><div class="dr-pt">Crush</div><div class="dr-ps">Nonlinear J2 plasticity with Voce hardening, adaptive load steps on the GPU</div></div><button type="button" class="sw" role="switch" data-phys-sw="nonlin" onclick="onPhysSwitch(event,'nonlin')" title="Run Crush, or skip it"></button></div>
+        <div class="dr-grid">
+          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="nonlinN"><button type="button" data-v="16" onclick="onSegClick(this)">16³</button><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button></div></div><div class="hint">Crush always uses the 0/1 cube voxels.</div></div>
+          <div class="dr-f"><label>Strain cap</label><div><div class="seg" data-seg="cap"><button type="button" data-v="0.02" onclick="onSegClick(this)">2%</button><button type="button" data-v="0.05" onclick="onSegClick(this)">5%</button><button type="button" data-v="0.1" onclick="onSegClick(this)">10%</button></div></div><div class="hint">The adaptive crush stops at this strain.</div></div>
+          <div class="dr-f"><label>Load axis</label><div><div class="seg" data-seg="axis"><button type="button" data-v="zz" onclick="onSegClick(this)">ZZ</button><button type="button" data-v="xx" onclick="onSegClick(this)">XX</button><button type="button" data-v="yy" onclick="onSegClick(this)">YY</button><button type="button" data-v="all" onclick="onSegClick(this)">All</button></div></div><div class="hint">All crushes X, Y and Z in turn (about 3× the time); the cards then use the weakest axis.</div></div>
+        </div>
+      </section>
+      <section class="dr-pane" data-pane="thermal" data-phys-state="thermal">
+        <div class="dr-ph"><span class="ico ico-lg" data-ico="thermal"></span><div class="dr-pt-wrap"><div class="dr-pt">Thermal κ</div><div class="dr-ps">Steady-state conduction, effective conductivity tensor</div></div><button type="button" class="sw" role="switch" data-phys-sw="thermal" onclick="onPhysSwitch(event,'thermal')" title="Run Thermal κ, or skip it"></button></div>
+        <div class="dr-grid">
+          <div class="dr-f wide"><label>Pores filled with · k, W/m·K</label><div><div class="chipset"><button type="button" class="chip" data-filler="air" onclick="onFillerChip(this)"><i></i>air <small>0.027</small></button><button type="button" class="chip" data-filler="water" onclick="onFillerChip(this)"><i></i>water <small>0.63</small></button><button type="button" class="chip" data-filler="tissue" onclick="onFillerChip(this)"><i></i>tissue <small>0.5</small></button></div></div><div class="hint">Each ticked filler is a separate, fast solve; switch between them with “Pores filled with” on the Thermal κ tab. No vacuum option — no real part sits in one.</div></div>
+        </div>
+      </section>
       </div>
     </div>
 
-    <div class="ctrl-block">
-      <div class="ctrl-label">Solver configuration</div>
-      <div class="ctrl-row">
-        <div class="spec-pill lab" id="gridPill" onclick="onGridPillClick()" title="Auto-pick grid resolution">
-          <span class="key">Grid</span> <span class="v" id="gridPillVal">Auto</span> <span class="caret">▾</span>
-        </div>
-        <div class="spec-pill lab" id="bucklePill" onclick="onBucklePillClick()" title="Buckling grid resolution (CPU reference oracle)">
-          <span class="key">Buckle</span> <span class="v" id="bucklePillVal">32³</span> <span class="caret">▾</span>
-        </div>
-        <div class="spec-pill lab" id="nonlinPill" onclick="onNonlinPillClick()" title="Nonlinear crush grid resolution (GPU J2 plasticity, small strain)">
-          <span class="key">Nonlin</span> <span class="v" id="nonlinPillVal">32³</span> <span class="caret">▾</span>
-        </div>
-        <div class="spec-pill lab" id="nonlinCapPill" onclick="onNonlinCapPillClick()" title="Nonlinear crush strain cap (adaptive crush stops here)">
-          <span class="key">Crush ε</span> <span class="v" id="nonlinCapPillVal">5%</span> <span class="caret">▾</span>
-        </div>
-        <div class="spec-pill" id="nonlinAxisPill" title="Nonlinear crush load axis. All crushes X, Y and Z in turn (about 3× the time); the cards then use the weakest axis.">
-          <span class="key">Crush axis</span>
-          <select id="nonlinAxisSel" onchange="onNonlinAxisChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;">
-            <option value="zz" selected>ZZ</option>
-            <option value="xx">XX</option>
-            <option value="yy">YY</option>
-            <option value="all">All (XX·YY·ZZ)</option>
-          </select>
-        </div>
-        <div class="spec-pill" id="materialPill" title="Material for every design in this comparison (AM library, docs/MATERIALS.md). 'From design' keeps each design's own material.">
-          <span class="key">Material</span>
-          <select id="materialSel" onchange="onMaterialChange(this.value)" style="background:#0d1410;color:#cfe6dc;border:1px solid #2c4e30;border-radius:4px;font-family:inherit;font-size:inherit;padding:1px 6px;margin-left:4px;max-width:260px;"></select>
-        </div>
-        <div class="spec-pill" id="hardwarePill"><span class="key">Hardware</span> <span class="v" id="hardwarePillVal">detecting…</span></div>
-        <div class="spec-pill"><span class="key">Designs</span> <span class="v" id="designCountVal">3</span></div>
-        <div class="spec-pill"><span class="key">Est.</span> <span class="v" id="estTimeVal">~7.5 min</span></div>
+    <div class="prog-row" id="progRow" style="display:none">
+      <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
+      <span class="prog-status" id="progStatus">Idle</span>
+      <span class="prog-eta">ETA <span id="progEta">—:—</span></span>
+    </div>
+
+    <div class="dock" id="dock">
+      <button type="button" class="cfg-btn" id="cfgBtn" onclick="toggleDrawer()" aria-expanded="false" aria-controls="cfgDrawer" title="Physics modes, grids, material and voxel prep">
+        <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 4 H12 M2 10 H12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="5" cy="4" r="1.8" fill="#12141f" stroke="currentColor" stroke-width="1.3"/><circle cx="9.5" cy="10" r="1.8" fill="#12141f" stroke="currentColor" stroke-width="1.3"/></svg>
+        Configure
+        <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 6.5 L5 3.5 L8 6.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="dock-tags" id="dockTags"></div>
+      <div class="dock-meta">
+        <span id="designCountVal">3 designs</span><span class="sep">·</span><b id="estTimeVal">~7.5 min</b><span class="sep">·</span><span class="dock-hw" id="hardwarePill"><span id="hardwarePillVal">detecting…</span></span>
       </div>
+      <button type="button" class="run" id="runBtn" onclick="onRunClick()">Run all</button>
     </div>
 
-    <div class="run-block">
-      <button class="run-btn" id="runBtn" onclick="onRunClick()">▶ Run All</button>
-    </div>
-  </div>
-
-  <!-- progress row -->
-  <div class="prog-row" id="progRow" style="display:none">
-    <span class="prog-status" id="progStatus">Idle</span>
-    <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
-    <span class="prog-eta">ETA <span id="progEta">—:—</span></span>
   </div>
 
 </div>
@@ -236,6 +229,7 @@
 <script src="30-view-tabs.js"></script>
 <script src="40-design-grid.js"></script>
 <script src="50-controls.js"></script>
+<script src="51-dock.js"></script>
 <script src="60-add-design.js"></script>
 <script src="61-import-stl.js"></script>
 <script src="62-sweep.js"></script>

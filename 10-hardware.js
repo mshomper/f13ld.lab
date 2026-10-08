@@ -120,6 +120,7 @@ function paintHardwarePill(text, classMod){
   pill.classList.remove('green','warn','bad');
   if (classMod) pill.classList.add(classMod);
   val.textContent = text;
+  pill.title = text;
 }
 
 function paintSolverPill(text, classMod){

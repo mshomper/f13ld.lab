@@ -221,6 +221,7 @@ function onPhysToggle(el){
   if (PHYS_STATE[key]) el.classList.add('on');
   else                  el.classList.remove('on');
   recomputeEstimate();
+  if (typeof paintDock === 'function') paintDock();
 }
 
 /* ============================================================
@@ -244,13 +245,7 @@ function onGridPillClick(){
 }
 
 function paintGridPill(){
-  var val = document.getElementById('gridPillVal');
-  if (!val) return;
-  if (GRID_STATE.mode === 'auto'){
-    val.textContent = 'Auto · ' + GRID_STATE.N + '³';
-  } else {
-    val.textContent = GRID_STATE.N + '³';
-  }
+  if (typeof paintDock === 'function') paintDock();   /* v0.22.0 — grid lives in the dock drawer */
 }
 
 /* ============================================================
@@ -263,9 +258,7 @@ function onBucklePillClick(){
 }
 
 function paintBucklePill(){
-  var val = document.getElementById('bucklePillVal');
-  if (!val) return;
-  val.textContent = BUCKLE_STATE.N + '³';
+  if (typeof paintDock === 'function') paintDock();
 }
 
 /* ============================================================
@@ -279,9 +272,7 @@ function onNonlinPillClick(){
 }
 
 function paintNonlinPill(){
-  var val = document.getElementById('nonlinPillVal');
-  if (!val) return;
-  val.textContent = NONLIN_STATE.N + '³';
+  if (typeof paintDock === 'function') paintDock();
 }
 
 function onNonlinAxisChange(axis){
@@ -310,9 +301,7 @@ function onNonlinCapPillClick(){
 }
 
 function paintNonlinCapPill(){
-  var val = document.getElementById('nonlinCapPillVal');
-  if (!val) return;
-  val.textContent = Math.round(NONLIN_STATE.cap * 100) + '%';
+  if (typeof paintDock === 'function') paintDock();
 }
 
 /* ============================================================
@@ -418,7 +407,7 @@ function setEstimate(text){
 }
 function setDesignCount(text){
   var el = document.getElementById('designCountVal');
-  if (el) el.textContent = text;
+  if (el) el.textContent = text + (text === '1' ? ' design' : ' designs');
 }
 
 /* ============================================================
@@ -454,7 +443,7 @@ function startRun(){
   if (btn){
     btn.classList.add('running');
     btn.classList.remove('done');
-    btn.innerHTML = '■ Cancel';
+    btn.innerHTML = (typeof DOCK_RUN_CANCEL !== 'undefined') ? DOCK_RUN_CANCEL : '■ Cancel';
   }
   var prog = document.getElementById('progRow');
   if (prog) prog.style.display = 'flex';
@@ -973,9 +962,10 @@ async function runRealSweep(N, runToken){
    MATERIAL PILL (v0.7.2)
    ============================================================ */
 function initMaterialPicker(){
-  var sel = document.getElementById('materialSel');
-  if (!sel || typeof F13LD_MATERIALS === 'undefined') return;
+  if (typeof F13LD_MATERIALS === 'undefined') return;
   try { var saved = localStorage.getItem(MATERIAL_STORE_KEY); if (saved && (saved === F13LD_MATERIAL_RECIPE_ID || findMaterial(saved))) MATERIAL_STATE.id = saved; } catch (e) {}
+  var sel = document.getElementById('materialSel');   /* v0.22.0 — the dock drop-down (51-dock.js) replaces this select */
+  if (!sel) return;
   var html = '<option value="' + F13LD_MATERIAL_RECIPE_ID + '">From design (default Ti-6Al-4V)</option>';
   var fam = null;
   for (var i = 0; i < F13LD_MATERIALS.length; i++){
@@ -1235,7 +1225,7 @@ function finishRunFailed(reason){
   var btn = document.getElementById('runBtn');
   if (btn){
     btn.classList.remove('running');
-    btn.innerHTML = '▶ Run All';
+    btn.innerHTML = (typeof DOCK_RUN_IDLE !== 'undefined') ? DOCK_RUN_IDLE : '▶ Run All';
   }
   var prog = document.getElementById('progRow');
   if (prog) prog.style.display = 'none';
@@ -1302,10 +1292,10 @@ function finishRun(runToken){
   if (btn){
     btn.classList.remove('running');
     btn.classList.add('done');
-    btn.innerHTML = '✓ Run Complete';
+    btn.innerHTML = (typeof DOCK_RUN_DONE !== 'undefined') ? DOCK_RUN_DONE : '✓ Run Complete';
     setTimeout(function(){
       btn.classList.remove('done');
-      btn.innerHTML = '▶ Re-run';
+      btn.innerHTML = (typeof DOCK_RUN_RERUN !== 'undefined') ? DOCK_RUN_RERUN : '▶ Re-run';
     }, 2400);
   }
   var statusEl = document.getElementById('progStatus');
@@ -1345,7 +1335,7 @@ function cancelRun(){
   if (btn){
     btn.classList.remove('running');
     btn.classList.remove('done');
-    btn.innerHTML = '▶ Run All';
+    btn.innerHTML = (typeof DOCK_RUN_IDLE !== 'undefined') ? DOCK_RUN_IDLE : '▶ Run All';
   }
   var prog = document.getElementById('progRow');
   if (prog) prog.style.display = 'none';

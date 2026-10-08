@@ -25,7 +25,7 @@ function atlasAxNote(ax) { return ax && ax.byVf ? ' (target solid %)' : (ax && a
 var ATLAS_COL = {
   bg: '#06080f', panel: '#111118', panel2: '#0e0e1a', line: '#2a2a3a', lineSoft: '#1a1a2a',
   ink: '#e0e0ff', ink2: '#b8b8d0', mute: '#888', dim: '#555', head: '#7c8aaa',
-  green: '#1D9E75', neon: '#c8f542', lab: '#fbbf24', cyan: '#22d3ee', rose: '#fb7185',
+  green: '#1D9E75', neon: '#c8f542', lab: '#E06A6F', cyan: '#22d3ee', rose: '#fb7185',
   ax: ['#fb7185', '#c8f542', '#22d3ee'],                    /* x, y, z */
   cls: ['#7c8aaa', '#fbbf24', '#1D9E75']                    /* strands, partial, connected */
 };
