@@ -14,6 +14,7 @@
    ============================================================ */
 
 
+/* ==== F13LD-GEOM-TPMS v1 · shared geometry (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
 /* ============================================================
    resolveRawPreset — TPMS preset names → term arrays.
    Sweep ships these four; lab inherits the same set so any
@@ -118,7 +119,11 @@ var TpmsKernel = {
       terms:     terms,
       shellNorm: (g.shell_normalize !== undefined) ? !!g.shell_normalize : false,
       piNorm:    (g.pi_normalize    !== undefined) ? !!g.pi_normalize    : false,
-      pair:      tpmsResolvePair(recipe, terms)
+      pair:      tpmsResolvePair(recipe, terms),
+      /* v0.26.0 — per-axis cell scale [x,y,z] (null = cubic).  Only the
+         anisotropic shell wall reads it (shellWeightFactor, 14-rasterizer.js):
+         F13LD.mesh takes that wall's surface normal in world space. */
+      cellScale: Array.isArray(g.cellScale) ? g.cellScale : null
     };
   },
 
@@ -199,8 +204,10 @@ function tpmsResolvePair(recipe, termsA) {
 function tpmsPairB(pair, x, y, z, dx, dy, dz) {
   return pair.amp * (evaluateTpms(pair.terms, pair.k * x + dx, pair.k * y + dy, pair.k * z + dz) - pair.offset);
 }
+/* ==== /F13LD-GEOM-TPMS ==== */
 
 
+/* ==== F13LD-GEOM-NOISE v1 · shared geometry (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
 /* ════════════════════════════════════════════════════════════
    NoiseKernel — the ten deterministic noise types of F13LD.noise
    (v0.11.0): simplex / cellular / fbm / ridged / billow / foam /
@@ -569,8 +576,10 @@ function noiseFieldKey(p) {
     +p.potentialScale, +p.seed]);
 }
 function noiseNormKey(surface) { return noiseFieldKey(NoiseKernel._readField(surface || {})); }
+/* ==== /F13LD-GEOM-NOISE ==== */
 
 
+/* ==== F13LD-GEOM-GRAIN v1 · shared geometry (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
 /* ════════════════════════════════════════════════════════════
    GrainKernel — spinodoid + GRF + hyperuniform from F13LD.grain
    Reaction-diffusion is deferred (texture-based, not analytic).
@@ -893,6 +902,7 @@ var GrainKernel = {
   }
 };
 
+/* ==== /F13LD-GEOM-GRAIN ==== */
 
 /* ============================================================
    Family registry — kernel lookup by family name

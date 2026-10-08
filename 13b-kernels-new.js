@@ -343,6 +343,7 @@ var BundleKernel = {
 };
 
 
+/* ==== F13LD-GEOM-BEAM v1 · shared geometry (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
 /* ════════════════════════════════════════════════════════════
    BeamKernel — periodic capsule lattice (F13LD.beam)
    Verbatim port of mesh buildBeamSDF (non-pruneCtx path).  The
@@ -534,6 +535,7 @@ var BeamKernel = {
   }
 };
 
+/* ==== /F13LD-GEOM-BEAM ==== */
 
 /* ============================================================
    Register the three SDF families into the existing KERNELS

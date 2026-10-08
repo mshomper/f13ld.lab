@@ -35,7 +35,7 @@ var THERMAL_VOXEL_FILES = [
   '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
   '13c-import-kernel.js', '13d-foam-kernel.js', '14e-link-field.js'
 ];
-var THERMAL_VOXEL_VERSION = 'tv-3';   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
+var THERMAL_VOXEL_VERSION = 'tv-4';   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
 
 /* ── Stash: the elastic solves of this Run All ───────────────────────
    Entries { recipe, N, conn, raw, kept, m }, newest last, matched by the

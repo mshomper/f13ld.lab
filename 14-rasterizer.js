@@ -28,6 +28,27 @@ function isoC(E, nu) {
 }
 
 
+/* ==== F13LD-GEOM-VOXELS v1 · shared geometry (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
+/* ============================================================
+   shellWeightFactor — anisotropic shell wall (geometry.normal_weights).
+   Local wall = wt · (wx|nx| + wy|ny| + wz|nz|), n the unit WORLD-space
+   surface normal, exactly as F13LD.mesh builds it (m20 shellNormalAbs):
+   1e-3 central difference of the raw field in field coordinates, scaled
+   per axis by π·cellScale/5; a degenerate normal (|∇| < 1e-9) leaves the
+   wall at its nominal thickness.  cellScale [x,y,z] or null (cubic).
+   ============================================================ */
+function shellWeightFactor(evalFn, x, y, z, nw, cellScale) {
+  var e = 1e-3, fs = Math.PI / 5.0;
+  var sx = fs * (cellScale ? cellScale[0] : 1), sy = fs * (cellScale ? cellScale[1] : 1), sz = fs * (cellScale ? cellScale[2] : 1);
+  var dx = (evalFn(x + e, y, z) - evalFn(x - e, y, z)) * sx;
+  var dy = (evalFn(x, y + e, z) - evalFn(x, y - e, z)) * sy;
+  var dz = (evalFn(x, y, z + e) - evalFn(x, y, z - e)) * sz;
+  var len = Math.hypot(dx, dy, dz);
+  if (len < 1e-9) return 1;
+  return nw.wx * Math.abs(dx / len) + nw.wy * Math.abs(dy / len) + nw.wz * Math.abs(dz / len);
+}
+
+
 /* ============================================================
    buildVoxels — rasterize a recipe to an N³ binary mask.
 
@@ -160,20 +181,18 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
       }
     }
 
-  /* ── Anisotropic shell — gradient from periodic central differences ── */
+  /* ── Anisotropic shell — local wall from the world-space surface normal ── */
   } else if (mode === 'shell' && nWeights) {
-    var wx = nWeights.wx, wy = nWeights.wy, wz = nWeights.wz;
+    /* v0.26.0 — local wall from the surface normal exactly as F13LD.mesh
+       builds it (shellWeightFactor); was a central difference of the cached
+       grid, which at N = 16–32 bent the normal and ignored the cell scale. */
+    var cellS = params && params.cellScale;
     for (var i3 = iLo; i3 < iHi; i3++) {
-      var ip = (i3 + 1) % N, im = (i3 + N - 1) % N;
+      var xc3 = -L + (i3 + 0.5) * step;
       for (var j3 = 0; j3 < N; j3++) {
-        var jp = (j3 + 1) % N, jm = (j3 + N - 1) % N;
+        var yc3 = -L + (j3 + 0.5) * step;
         for (var k3 = 0; k3 < N; k3++) {
-          var kp = (k3 + 1) % N, km = (k3 + N - 1) % N;
-          var gx = (V[ip*N*N + j3*N + k3] - V[im*N*N + j3*N + k3]) / (2*step);
-          var gy = (V[i3*N*N + jp*N + k3] - V[i3*N*N + jm*N + k3]) / (2*step);
-          var gz = (V[i3*N*N + j3*N + kp] - V[i3*N*N + j3*N + km]) / (2*step);
-          var gLen = Math.sqrt(gx*gx + gy*gy + gz*gz) || 1;
-          var localWt = wt * (wx*Math.abs(gx/gLen) + wy*Math.abs(gy/gLen) + wz*Math.abs(gz/gLen));
+          var localWt = wt * shellWeightFactor(evalFn, xc3, yc3, -L + (k3 + 0.5) * step, nWeights, cellS);
           var idx = i3*N*N + j3*N + k3;
           if (shellNorm) {
             var grS = gradFC(-L+(i3+0.5)*step, -L+(j3+0.5)*step, -L+(k3+0.5)*step);
@@ -317,10 +336,7 @@ function buildVoxelMargin(family, params, offset, N, mode, wt, nWeights, pipeR, 
     v = evalFn(x, y, z);
     if (mode === 'shell') {
       var w = wt;
-      if (nWeights) {
-        var g = gradFC(x, y, z), gl = g.mag || 1;
-        w = wt * (nWeights.wx * Math.abs(g.gx / gl) + nWeights.wy * Math.abs(g.gy / gl) + nWeights.wz * Math.abs(g.gz / gl));
-      }
+      if (nWeights) w = wt * shellWeightFactor(evalFn, x, y, z, nWeights, params && params.cellScale);
       if (shellNorm) {
         var gs = gradFC(x, y, z), d = Math.abs(v - offset) / Math.max(gs.mag, NORM_EPS);
         if (d > NORM_CLIP_MULT * w) d = NORM_CLIP_MULT * w;
@@ -459,6 +475,7 @@ function buildPairField(pair, phaseShift, N) {
   }
   return { data: data, fieldMin: minV, fieldMax: maxV };
 }
+/* ==== /F13LD-GEOM-VOXELS ==== */
 
 
 /* ============================================================
@@ -541,6 +558,7 @@ function buildGamma(N, mu0, lam0, scheme) {
 }
 
 
+/* ==== F13LD-GEOM-BUILDARGS v1 · shared geometry (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
 /* ============================================================
    resolveMode — pulls the lab geometry mode from a recipe.
 
@@ -564,3 +582,4 @@ function resolveBuildArgs(recipe) {
     nWeights:   g.nWeights || null
   };
 }
+/* ==== /F13LD-GEOM-BUILDARGS ==== */

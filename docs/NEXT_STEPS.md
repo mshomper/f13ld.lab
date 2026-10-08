@@ -57,6 +57,7 @@
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
 | **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
 | **v0.17.2** | Tight crush = Newton tolerance only (NL_TIGHT_CG_TOL = null), retry reuses the first attempt's elastic setup (cache keyed by void + cgTol); foam: floor 0.3 %, ~45 s per axis (was setup 85.5 s). Nonlinear-tab cubes pause while a run is solving |
+| **v0.26.0** | Recipe parity with F13LD.noise / F13LD.mesh: noise kernel rebuilt (stored range, seed, hash33 + jitter, foam / strut / veined), noise 'shell' → noise-sheet, `normal_weights` read with Mesh's normal; shared `F13LD-GEOM-*` blocks with F13LD.sweep |
 | **v0.25.0** | Shear stress display fix, Stress tab (deform merged), VIEW tab icons and names, readout chips removed |
 | **v0.24.0** | Worker-pool voxel prep and viewer bakes, async shader compile, splash + status chip (`52-status.js`), defaults, saved settings, fixed grids |
 | **v0.23.0** | Thermal Phase 3: materials (k basis, c_p), sweep thermal columns, geometry columns (`14e` surface area, open pores), card rows, Atlas metrics. `THERMAL_SCOPE.md` §14 |

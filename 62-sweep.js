@@ -560,7 +560,7 @@ function sweepNotesFor(run, r) {
 }
 
 /* ── Geometry checks (worker) ─────────────────────────────── */
-var SWEEP_GEOM_VERSION = 'swg-5';   /* v0.23.0 — 14e geometry metrics (surface area, open pores) */
+var SWEEP_GEOM_VERSION = 'swg-6';   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — 14e geometry metrics (surface area, open pores) */
 var SWEEP_THIN_VOX = 6;          /* Matt, 2026-10-01: flag under 6 voxels across the thinnest feature */
 var _swWorker = null, _swJobs = {}, _swNext = 1;
 function sweepGeomWorker() {

@@ -5,6 +5,7 @@
    F13LD.mesh handoff (both gated on completed run).
    ============================================================ */
 
+/* ==== F13LD-GEOM-TPMS-PRESETS v1 · shared geometry (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
 /* ----------------------------------------------------------
    F13LD.tpms raw_preset expansion table.
    F13LD.tpms exports 9 named TPMS surfaces as `surface.type =
@@ -125,6 +126,7 @@ var TPMS_RAW_PRESET_TABLE = {
     ]
   }
 };
+/* ==== /F13LD-GEOM-TPMS-PRESETS ==== */
 
 /* ----------------------------------------------------------
    Add Design click handler. Two paths:
@@ -213,37 +215,15 @@ function ingestDesignFile(file){
   reader.readAsText(file);
 }
 
+/* ==== F13LD-GEOM-RECIPE v1 · shared recipe translation (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
 /* ----------------------------------------------------------
-   Normalize incoming JSON to the LAB_STATE design shape.
-
-   Two outputs share the design:
-     - The grid metadata (label/title/source/family/topology/etc.)
-       used by the design-card header and SVG-mock fallback.
-     - A `recipe` field — the full lab recipe shape that the
-       raymarcher and CPU solvers consume directly.  This is set
-       when the JSON is recognized as a valid lab recipe shape;
-       otherwise it's null and the card falls back to SVG mock.
-
-   Supports two input dialects:
-
-     A) LAB-INTERNAL shape (15-demo-recipes.js):
-        - Top-level `family` key
-        - camelCase geometry: cellSizeMm, wallThickness, pipeR, phaseShift
-        - Family-prefixed modes: 'noise-sheet', 'grain-half', etc.
-        - Material as `material: { Es_MPa, nu, ks_WmK, muFluid_PaS }`
-
-     B) EXTERNAL F13LD tools (TPMS/Noise/Grain export):
-        - No top-level `family` (inferred from meta.tool, surface.type, field presence)
-        - snake_case geometry: cell_scale, wall_thickness, pipe_radius, phase_shift
-        - Bare mode strings: 'half', 'sheet' (need family prefix added)
-        - Material absent (uses `homogenization.E_solid_GPa, poisson` instead)
-        - Noise has its surface in a `surface` block with type='noise'
-        - TPMS surface.type can be 'terms' (full) or 'raw_preset' (preset name only)
+   External F13LD recipe → lab recipe, with no DOM or lab state, so
+   F13LD.sweep builds every design through exactly this code too.
+     labRecipeInfo(json)                 family, mode, topology, cell size
+     labRecipeFromJson(json, title, info) the lab recipe (or null + note)
+   normalizeDesignJson below adds the card metadata around it.
    ---------------------------------------------------------- */
-function normalizeDesignJson(json, filename){
-  /* Slot/letter/color are assigned by reconcileDesignSlots() AFTER insertion
-     (slot-stable identity); here we only stamp a placeholder + unassigned slot. */
-
+function labRecipeInfo(json){
   /* ── 1. Family inference ─────────────────────────────────── */
   var family = json.family || json.tool || null;
   if (!family){
@@ -264,21 +244,6 @@ function normalizeDesignJson(json, filename){
     else family = 'unknown';
   }
 
-  /* ── 2. Variant (short string label, never an object) ────── */
-  var variant = 'custom';
-  if (typeof json.variant === 'string') variant = json.variant;
-  else if (typeof json.fieldType === 'string') variant = json.fieldType;
-  else if (json.field && typeof json.field.type === 'string') variant = json.field.type;
-  else if (json.surface && typeof json.surface.type === 'string') variant = json.surface.type;
-  else if (json.meta && typeof json.meta.preset === 'string') variant = json.meta.preset;
-  /* New-family variant hints (structure / symmetry make readable titles) */
-  if (variant === 'custom'){
-    if (family === 'bundle' && json.surface && json.surface.structure) variant = json.surface.structure;
-    else if (family === 'wave' && json.field && json.field.symmetry) variant = json.field.symmetry;
-    else if (family === 'beam') variant = (json.meta && json.meta.preset) || 'lattice';
-  }
-  if (family === 'foam') variant = (json.seeds && json.seeds.mode) || 'foam';
-
   /* ── 3. Topology / mode (external uses bare strings) ─────── */
   /* TPMS and Noise put the mode under `geometry.mode`.
      Grain puts it under `geometry.topology` instead.
@@ -294,7 +259,13 @@ function normalizeDesignJson(json, filename){
     if (rawMode === 'half')  labMode = family + '-half';
     else if (rawMode === 'sheet') labMode = family + '-sheet';
     else if (rawMode === 'solid') labMode = family + '-solid';
-    /* else: rawMode is already prefixed or is something else (e.g. 'shell' for noise) */
+    /* F13LD.noise exports its sheet topology as 'shell'.  v0.26.0: map it to
+       noise-sheet (|field − center| < half_width) — before, it ran the TPMS
+       shell branch on offset / wall_thickness, which agreed only because the
+       tool writes offset = center and wall_thickness = half_width, and a
+       half-width sweep then changed nothing. */
+    else if (rawMode === 'shell' && family === 'noise') labMode = 'noise-sheet';
+    /* else: rawMode is already prefixed or is something else */
   }
 
   /* ── 4. Cell size — external uses dimensionless cell_scale, lab uses cellSizeMm.
@@ -306,53 +277,12 @@ function normalizeDesignJson(json, filename){
   /* v0.14.0 — a foam tile is one lab cell; tile_mm is its edge at the tool's cell size */
   if (family === 'foam' && json.geometry && json.geometry.tile_mm > 0) cellSizeMm = json.geometry.tile_mm;
 
-  /* Nominal density as declared by the source tool — shown labelled
-     "nominal" until a solve reports the voxel density.  Sprint A: null (not an
-     invented 0.40) when the JSON does not declare one. */
-  var rho = json.rho_rel || json.density || json.relative_density ||
-            (json.homogenization && json.homogenization.volume_fraction != null
-              ? json.homogenization.volume_fraction / 100  /* external uses percentage */
-              : null);
+  return { family: family, rawMode: rawMode, labMode: labMode, topology: topology, cellSizeMm: cellSizeMm };
+}
 
-  /* ── 5. Title derivation ─────────────────────────────────── */
-  var presetLabel = (json.meta && json.meta.preset) || (json.surface && json.surface.label);
-  var title = json.title || json.name;
-  if (!title){
-    if (presetLabel){
-      title = presetLabel;
-      if (family === 'tpms' && rawMode) title += ' · ' + rawMode;
-    } else if (family === 'tpms') {
-      title = (json.tpms_type || 'TPMS') + (rawMode ? ' · ' + rawMode : '');
-    } else if (variant === 'spinodoid') {
-      title = 'Spinodoid · VMF';
-    } else if (variant === 'reaction_diffusion' || variant === 'reactiondiffusion') {
-      title = 'Trabecular · GS';
-    } else if (typeof variant === 'string' && variant !== 'custom'){
-      title = variant.charAt(0).toUpperCase() + variant.slice(1);
-    } else {
-      title = 'Custom design';
-    }
-  }
-
-  /* Field-pair PI-TPMS (v0.13.0): name both fields, e.g. "gyroid × Fischer-Koch S (2×) · pi-tpms" */
-  if (family === 'tpms' && !json.title && !json.name){
-    var _gB = json.geometry || {};
-    var _kB = Math.round(+(_gB.field_b_freq != null ? _gB.field_b_freq : _gB.fieldBFreq) || 1);
-    var _sB = json.surface_b || null;
-    if (_sB || _kB > 1){
-      var _aLbl = presetLabel || 'TPMS';
-      var _bLbl = _sB ? (_sB.label || (TPMS_RAW_PRESET_TABLE[_sB.preset] && TPMS_RAW_PRESET_TABLE[_sB.preset].label) || _sB.preset || 'custom') : _aLbl;
-      title = _aLbl + ' \u00d7 ' + _bLbl + (_kB > 1 ? ' (' + _kB + '\u00d7)' : '') + (rawMode ? ' \u00b7 ' + rawMode : '');
-    }
-  }
-
-  /* v0.14.0 — foam: "Foam · Poisson-disk · open · 40 cells" */
-  if (family === 'foam' && !json.title && !json.name){
-    var _fSd = json.seeds || {}, _fG = json.geometry || {};
-    var _fN = Array.isArray(_fSd.positions) && _fSd.positions.length ? _fSd.positions.length / 3 : (_fSd.count_actual || _fSd.count);
-    title = 'Foam \u00b7 ' + ((json.meta && json.meta.preset) || ((_fSd.mode || 'seeds') + ' \u00b7 ' + (_fG.mode || 'plateau'))) +
-            (_fN ? ' \u00b7 ' + _fN + ' cells' : '');
-  }
+function labRecipeFromJson(json, title, info){
+  info = info || labRecipeInfo(json);
+  var family = info.family, labMode = info.labMode, cellSizeMm = info.cellSizeMm;
 
   /* ── 6. Build a renderable lab recipe ─────────────────────── */
   var recipe = null;
@@ -393,6 +323,17 @@ function normalizeDesignJson(json, filename){
        keep their previous results). */
     if (extG.pi_normalize === true || extG.pi_normalize === false) labG.pi_normalize = extG.pi_normalize;
     if (extG.shell_normalize === true || extG.shell_normalize === false) labG.shell_normalize = extG.shell_normalize;
+    /* v0.26.0 — anisotropic shell wall (F13LD.sweep exports, read by F13LD.mesh):
+       normal_weights {wx,wy,wz} → nWeights.  Mesh takes the surface normal in
+       world space, so the per-axis cell scale rides along (cellScale) for it. */
+    var nw = extG.normal_weights != null ? extG.normal_weights : extG.nWeights;
+    if (nw != null) labG.nWeights = nw;
+    var csD = extG.cell_scale != null ? extG.cell_scale : 1;
+    var csX = extG.cell_scale_x != null ? extG.cell_scale_x : csD;
+    var csY = extG.cell_scale_y != null ? extG.cell_scale_y : csD;
+    var csZ = extG.cell_scale_z != null ? extG.cell_scale_z : csD;
+    if (Array.isArray(extG.cellScale)) labG.cellScale = extG.cellScale.slice();
+    else if (csX !== csD || csY !== csD || csZ !== csD) labG.cellScale = [csX, csY, csZ];
     /* half_invert — already matches */
     if (extG.half_invert != null) labG.half_invert = extG.half_invert;
     /* center / half_width — used by NoiseKernel.parseRecipe via surface block,
@@ -583,6 +524,112 @@ function normalizeDesignJson(json, filename){
   } else {
     recipeNote = 'family "' + family + '" not in KERNELS — falling back to SVG mock';
   }
+  return { recipe: recipe, recipeNote: recipeNote };
+}
+/* ==== /F13LD-GEOM-RECIPE ==== */
+
+/* ----------------------------------------------------------
+   Normalize incoming JSON to the LAB_STATE design shape.
+
+   Two outputs share the design:
+     - The grid metadata (label/title/source/family/topology/etc.)
+       used by the design-card header and SVG-mock fallback.
+     - A `recipe` field — the full lab recipe shape that the
+       raymarcher and CPU solvers consume directly.  This is set
+       when the JSON is recognized as a valid lab recipe shape;
+       otherwise it's null and the card falls back to SVG mock.
+
+   Supports two input dialects:
+
+     A) LAB-INTERNAL shape (15-demo-recipes.js):
+        - Top-level `family` key
+        - camelCase geometry: cellSizeMm, wallThickness, pipeR, phaseShift
+        - Family-prefixed modes: 'noise-sheet', 'grain-half', etc.
+        - Material as `material: { Es_MPa, nu, ks_WmK, muFluid_PaS }`
+
+     B) EXTERNAL F13LD tools (TPMS/Noise/Grain export):
+        - No top-level `family` (inferred from meta.tool, surface.type, field presence)
+        - snake_case geometry: cell_scale, wall_thickness, pipe_radius, phase_shift
+        - Bare mode strings: 'half', 'sheet' (need family prefix added)
+        - Material absent (uses `homogenization.E_solid_GPa, poisson` instead)
+        - Noise has its surface in a `surface` block with type='noise'
+        - TPMS surface.type can be 'terms' (full) or 'raw_preset' (preset name only)
+   ---------------------------------------------------------- */
+function normalizeDesignJson(json, filename){
+  /* Slot/letter/color are assigned by reconcileDesignSlots() AFTER insertion
+     (slot-stable identity); here we only stamp a placeholder + unassigned slot. */
+
+  /* ── 1, 3, 4. Family, topology / mode, cell size (labRecipeInfo) ── */
+  var info = labRecipeInfo(json);
+  var family = info.family, rawMode = info.rawMode, topology = info.topology,
+      labMode = info.labMode, cellSizeMm = info.cellSizeMm;
+
+  /* ── 2. Variant (short string label, never an object) ────── */
+  var variant = 'custom';
+  if (typeof json.variant === 'string') variant = json.variant;
+  else if (typeof json.fieldType === 'string') variant = json.fieldType;
+  else if (json.field && typeof json.field.type === 'string') variant = json.field.type;
+  else if (json.surface && typeof json.surface.type === 'string') variant = json.surface.type;
+  else if (json.meta && typeof json.meta.preset === 'string') variant = json.meta.preset;
+  /* New-family variant hints (structure / symmetry make readable titles) */
+  if (variant === 'custom'){
+    if (family === 'bundle' && json.surface && json.surface.structure) variant = json.surface.structure;
+    else if (family === 'wave' && json.field && json.field.symmetry) variant = json.field.symmetry;
+    else if (family === 'beam') variant = (json.meta && json.meta.preset) || 'lattice';
+  }
+  if (family === 'foam') variant = (json.seeds && json.seeds.mode) || 'foam';
+
+  /* Nominal density as declared by the source tool — shown labelled
+     "nominal" until a solve reports the voxel density.  Sprint A: null (not an
+     invented 0.40) when the JSON does not declare one. */
+  var rho = json.rho_rel || json.density || json.relative_density ||
+            (json.homogenization && json.homogenization.volume_fraction != null
+              ? json.homogenization.volume_fraction / 100  /* external uses percentage */
+              : null);
+
+  /* ── 5. Title derivation ─────────────────────────────────── */
+  var presetLabel = (json.meta && json.meta.preset) || (json.surface && json.surface.label);
+  var title = json.title || json.name;
+  if (!title){
+    if (presetLabel){
+      title = presetLabel;
+      if (family === 'tpms' && rawMode) title += ' · ' + rawMode;
+    } else if (family === 'tpms') {
+      title = (json.tpms_type || 'TPMS') + (rawMode ? ' · ' + rawMode : '');
+    } else if (variant === 'spinodoid') {
+      title = 'Spinodoid · VMF';
+    } else if (variant === 'reaction_diffusion' || variant === 'reactiondiffusion') {
+      title = 'Trabecular · GS';
+    } else if (typeof variant === 'string' && variant !== 'custom'){
+      title = variant.charAt(0).toUpperCase() + variant.slice(1);
+    } else {
+      title = 'Custom design';
+    }
+  }
+
+  /* Field-pair PI-TPMS (v0.13.0): name both fields, e.g. "gyroid × Fischer-Koch S (2×) · pi-tpms" */
+  if (family === 'tpms' && !json.title && !json.name){
+    var _gB = json.geometry || {};
+    var _kB = Math.round(+(_gB.field_b_freq != null ? _gB.field_b_freq : _gB.fieldBFreq) || 1);
+    var _sB = json.surface_b || null;
+    if (_sB || _kB > 1){
+      var _aLbl = presetLabel || 'TPMS';
+      var _bLbl = _sB ? (_sB.label || (TPMS_RAW_PRESET_TABLE[_sB.preset] && TPMS_RAW_PRESET_TABLE[_sB.preset].label) || _sB.preset || 'custom') : _aLbl;
+      title = _aLbl + ' \u00d7 ' + _bLbl + (_kB > 1 ? ' (' + _kB + '\u00d7)' : '') + (rawMode ? ' \u00b7 ' + rawMode : '');
+    }
+  }
+
+  /* v0.14.0 — foam: "Foam · Poisson-disk · open · 40 cells" */
+  if (family === 'foam' && !json.title && !json.name){
+    var _fSd = json.seeds || {}, _fG = json.geometry || {};
+    var _fN = Array.isArray(_fSd.positions) && _fSd.positions.length ? _fSd.positions.length / 3 : (_fSd.count_actual || _fSd.count);
+    title = 'Foam \u00b7 ' + ((json.meta && json.meta.preset) || ((_fSd.mode || 'seeds') + ' \u00b7 ' + (_fG.mode || 'plateau'))) +
+            (_fN ? ' \u00b7 ' + _fN + ' cells' : '');
+  }
+
+  /* ── 6. Build a renderable lab recipe (labRecipeFromJson) ── */
+  var built = labRecipeFromJson(json, title, info);
+  var recipe = built.recipe, recipeNote = built.recipeNote;
   console.log('[add-design] ' + filename + ': ' + recipeNote);
 
   /* ── 7. Pack the design entry ────────────────────────────── */
