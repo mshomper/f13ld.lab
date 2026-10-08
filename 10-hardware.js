@@ -124,6 +124,7 @@ function paintHardwarePill(text, classMod){
 }
 
 function paintSolverPill(text, classMod){
+  if (typeof labStatusSet === 'function' && labStatusSet(text, classMod)) return;   /* v0.24.0 — status chip (52-status) */
   var pill = document.getElementById('solverPill');
   if (!pill) return;
   pill.classList.remove('live','warn','bad');

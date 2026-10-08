@@ -1179,3 +1179,59 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
   padding:2px 7px; cursor:pointer; letter-spacing:0.05em; line-height:1;
 }
 .th-btn.active { background:var(--neon); border-color:var(--neon); color:#0a0a0a }
+
+/* ============ v0.24.0 — STARTUP SPLASH + STATUS CHIP (52-status.js) ============ */
+.lab-splash {
+  position:fixed; inset:0; z-index:1000; background:var(--bg);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;
+  transition:opacity 0.45s ease;
+}
+.lab-splash.out { opacity:0; pointer-events:none }
+.lsp-wm { font:700 58px 'Exo 2', sans-serif; letter-spacing:0.1em; display:flex; line-height:1 }
+.lsp-wm span { display:inline-block; min-width:0.62em; text-align:center }
+.lsp-wm .g { color:var(--green) }
+.lsp-wm .n { color:var(--neon) }
+.lsp-wm span.scr { color:var(--t3) }
+.lsp-wm span.lock { animation:lspLock 0.5s ease-out }
+@keyframes lspLock { 0% { text-shadow:0 0 16px rgba(200,245,66,0.95) } 100% { text-shadow:none } }
+.lsp-tool { font:700 15px 'Exo 2', sans-serif; letter-spacing:0.32em; color:var(--lab); text-transform:uppercase; margin-top:-4px }
+.lsp-sub { font:500 11px 'JetBrains Mono', monospace; color:var(--t3); letter-spacing:0.14em; text-transform:uppercase; min-height:14px }
+@media (max-width:600px) { .lsp-wm { font-size:40px } }
+
+/* VIEW row: status chip and the shared "◐ view" menu sit together at the right */
+.view-strip .right { gap:8px }
+#f13ViewHost { margin-left:8px !important; width:auto !important; min-width:66px }
+#f13ViewHost .f13v > button {
+  height:30px; padding:0 10px; border-radius:8px; border:1px solid var(--hair); background:var(--s1);
+  color:var(--t2); font:500 11px 'JetBrains Mono', monospace;
+}
+#f13ViewHost .f13v > button:hover, #f13ViewHost .f13v > button[aria-expanded=true] { color:var(--t1); border-color:var(--hair2) }
+#f13ViewHost { height:30px !important }
+.lab-status {
+  display:flex; align-items:center; gap:9px; height:30px; padding:0 12px 0 6px; border-radius:9px;
+  border:1px solid var(--hair); background:var(--s1); min-width:0; max-width:360px;
+  transition:border-color 0.3s, background 0.3s;
+}
+.lab-status .ls-mark { display:flex; align-items:center; flex-shrink:0 }
+.lab-status .ls-mark svg { display:block }
+.lab-status .ls-txt { font:500 11px 'JetBrains Mono', monospace; color:var(--t2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; letter-spacing:0.03em }
+.lab-status .ls-bar { width:64px; height:3px; border-radius:2px; background:var(--hair); overflow:hidden; display:none; flex-shrink:0 }
+.lab-status .ls-bar i { display:block; height:100%; width:0; background:linear-gradient(90deg, var(--green), var(--neon)); transition:width 0.3s }
+.lab-status.solving { border-color:rgba(200,245,66,0.28) }
+.lab-status.solving .ls-txt { color:var(--neon) }
+.lab-status.solving .ls-bar { display:block }
+.lab-status.done { border-color:rgba(29,158,117,0.55); background:rgba(29,158,117,0.08) }
+.lab-status.done .ls-txt { color:var(--teal) }
+.lab-status.warn { border-color:rgba(245,158,11,0.45) }
+.lab-status.warn .ls-txt { color:var(--warn) }
+.lab-status.error { border-color:rgba(251,113,133,0.5) }
+.lab-status.error .ls-txt { color:var(--bad) }
+@media (max-width:880px) { .lab-status .ls-bar { display:none !important } }
+
+/* Configure → Model: reset */
+.dr-resetrow { flex-direction:row; align-items:center; gap:12px }
+.dr-reset {
+  height:26px; padding:0 10px; border-radius:7px; border:1px solid var(--hair2); background:transparent;
+  color:var(--t2); font:500 11.5px 'Exo 2', sans-serif; cursor:pointer;
+}
+.dr-reset:hover { color:var(--lab-tile); border-color:var(--lab-ring) }

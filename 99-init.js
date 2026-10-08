@@ -7,13 +7,7 @@
 
 (function init(){
   // 1. Hardware detection (async — paints the pill when done)
-  detectHardware().then(function(){
-    if (GRID_STATE.mode === 'auto'){
-      GRID_STATE.N = autoPickGrid();
-      paintGridPill();
-      recomputeEstimate();
-    }
-  });
+  detectHardware().then(function(){ recomputeEstimate(); });   /* v0.24.0 — grid is fixed (no hardware Auto) */
 
   // 2. Initial pill paint (placeholder until detection completes)
   paintGridPill();
@@ -28,6 +22,7 @@
 
   // 3. First render (preloaded demo designs are already in LAB_STATE)
   renderDesignGrid();
+  if (typeof labSplashWatch === 'function') labSplashWatch();   /* v0.24.0 — splash hides when the viewers are ready */
 
   // 3b. Imported STL cells: load their grids from IndexedDB, then re-render
   //     (until then their cards show the SVG fallback and runs skip them)
@@ -47,7 +42,7 @@
     }, 150);
   });
 
-  console.log('%c F13LD.lab · v0.23.0 ', 'background:#8C2A2E; color:#F6E7E7; font-weight:bold; padding:2px 8px; border-radius:3px;');
+  console.log('%c F13LD.lab · v0.24.0 ', 'background:#8C2A2E; color:#F6E7E7; font-weight:bold; padding:2px 8px; border-radius:3px;');
   console.log('Phase 6 · nonlinear J2 plasticity + adaptive crush live · real σ_y retires the buckling seam · σ–ε comparison tab');
   console.log('Loaded demo recipes: ' + Object.keys(DEMO_RECIPES).join(', '));
 })();

@@ -10,6 +10,34 @@
 <link rel="stylesheet" href="lab.css">
 </head>
 <body>
+<!-- v0.24.0 — startup splash: the wordmark resolves from scrambled glyphs
+     while the viewers compile and bake (52-status.js hides it). Inline so it
+     animates before the solver scripts have loaded. -->
+<div class="lab-splash" id="labSplash" aria-hidden="true">
+  <div class="lsp-wm" id="labSplashWm"><span class="g">F</span><span class="n">1</span><span class="n">3</span><span class="g">L</span><span class="g">D</span></div>
+  <div class="lsp-tool">Lab</div>
+  <div class="lsp-sub" id="labSplashSub">loading solvers…</div>
+</div>
+<script>
+/* v0.24.0 — "Resolve": glyphs scramble, then lock F, L, D, 1, 3 (13 last, with a neon flash) */
+(function(){
+  var wm = document.getElementById('labSplashWm'); if (!wm) return;
+  var sp = wm.getElementsByTagName('span'), fin = ['F','1','3','L','D'], order = [0, 3, 4, 1, 2], locked = [], G = '0123456789ABCDEF\u03a3\u0394\u03bb\u03ba\u03c3#%';
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) return;
+  for (var i = 0; i < sp.length; i++) { sp[i].className += ' scr'; sp[i].textContent = G.charAt((Math.random() * G.length) | 0); }
+  var t = setInterval(function(){ for (var i = 0; i < sp.length; i++) if (!locked[i]) sp[i].textContent = G.charAt((Math.random() * G.length) | 0); }, 55);
+  var k = 0;
+  function lock(){
+    if (k >= order.length) { clearInterval(t); return; }
+    var i = order[k++]; locked[i] = true; sp[i].textContent = fin[i];
+    sp[i].className = sp[i].className.replace(' scr', '') + ' lock';
+    setTimeout(lock, 260);
+  }
+  setTimeout(lock, 420);
+  window.LAB_SPLASH_T0 = Date.now();
+})();
+</script>
 <div id="app">
 
   <!-- ============ HEADER ============ -->
@@ -43,7 +71,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.23.0</span>
+      <span class="fh-version">v0.24.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -83,24 +111,19 @@
     <!-- v0.20.0 — which solved pore filler the thermal cards show (thermal tab only) -->
     <div class="stress-norm-toggle-group" id="thermalFillerToggle">
       <span class="stress-norm-label">Pores filled with</span>
-      <button class="stress-norm-btn active" data-filler="air" onclick="onThermalFillerView('air')" title="Air at 37 °C, k = 0.027 W/m·K: bench tests, heat exchangers, a part before implantation">air</button>
-      <button class="stress-norm-btn" data-filler="water" onclick="onThermalFillerView('water')" title="Water at 37 °C, k = 0.63 W/m·K: saline or culture medium in the pores, wet testing">water</button>
+      <button class="stress-norm-btn" data-filler="air" onclick="onThermalFillerView('air')" title="Air at 37 °C, k = 0.027 W/m·K: bench tests, heat exchangers, a part before implantation">air</button>
+      <button class="stress-norm-btn active" data-filler="water" onclick="onThermalFillerView('water')" title="Water at 37 °C, k = 0.63 W/m·K: saline or culture medium in the pores, wet testing">water</button>
       <button class="stress-norm-btn" data-filler="tissue" onclick="onThermalFillerView('tissue')" title="Soft tissue, k = 0.5 W/m·K: an implant in the body, pores filled with ingrown tissue or marrow">tissue</button>
     </div>
     <div class="right">
-      <span class="pill" id="loadedPill">3 of 3 designs loaded</span>
-      <!-- Phase-6 tie-up #2 — branded "still working" spinner (shown only while a run is live) -->
-      <span class="solver-spinner" id="solverSpinner" aria-hidden="true" title="Solving…">
-        <svg width="16" height="16" viewBox="0 0 40 40">
-          <path class="ss-hex" d="M20 3 L34 11 L34 29 L20 37 L6 29 L6 11 Z" fill="none" stroke="#2c4e30" stroke-width="2"/>
-          <g class="ss-arcs">
-            <path d="M20 5 A15 15 0 0 1 34 18" fill="none" stroke="#c8f542" stroke-width="3" stroke-linecap="round"/>
-            <path d="M20 35 A15 15 0 0 1 6 22" fill="none" stroke="#1D9E75" stroke-width="3" stroke-linecap="round"/>
-          </g>
-          <circle class="ss-core" cx="20" cy="20" r="3.2" fill="#c8f542"/>
-        </svg>
-      </span>
-      <span class="pill" id="solverPill">solver idle</span>
+      <!-- v0.24.0 — status chip (52-status.js): animated F13LD mark + state +
+           progress; replaces the designs-loaded pill, spinner and solver pill.
+           #solverPill stays the text node 10-hardware / 50-controls write to. -->
+      <div class="lab-status" id="labStatus" role="status" aria-live="polite">
+        <span class="ls-mark" id="labStatusMark"></span>
+        <span class="ls-txt" id="solverPill">starting…</span>
+        <span class="ls-bar"><i id="labStatusBar"></i></span>
+      </div>
     </div>
   </div>
 
@@ -136,12 +159,13 @@
           <div class="dr-f wide"><label>Material</label><div><div class="dd" id="materialDd"></div></div><div class="hint">AM library (docs/MATERIALS.md). “From design” keeps each design’s own material. Changing it re-solves on the next run.</div></div>
           <div class="dr-f"><label>Connectivity</label><div><div class="dd" id="connDd"></div></div><div class="hint">Which connected pieces of the voxelized cell are analyzed.</div></div>
           <div class="dr-f"><label>Surface voxels</label><div><div class="seg" data-seg="pv"><button type="button" data-v="pv" onclick="onSegClick(this)">Partial volume</button><button type="button" data-v="binary" onclick="onSegClick(this)">0/1 cube</button></div></div><div class="hint">Partial volume: each surface voxel carries its true solid fraction — exact solid fraction, stiffness grid-converged by 64³ on thin walls and struts. 0/1 cube reproduces results from before v0.19.0. Crush and buckling always use the 0/1 cube.</div></div>
+          <div class="dr-f wide dr-resetrow"><div><button type="button" class="dr-reset" onclick="labResetSettings()" title="Elastic 64³ and Thermal κ (water) on, Buckling and Crush off, Ti-6Al-4V Grade 5 (HIP), all networks, partial volume">Reset run settings to defaults</button></div><div class="hint">Your settings are remembered in this browser.</div></div>
         </div>
       </section>
       <section class="dr-pane" data-pane="elastic" data-phys-state="elastic">
         <div class="dr-ph"><span class="ico ico-lg" data-ico="elastic"></span><div class="dr-pt-wrap"><div class="dr-pt">Elastic</div><div class="dr-ps">Linear homogenization — full Cᵢⱼ, E*, ν*, directional stiffness</div></div><button type="button" class="sw" role="switch" data-phys-sw="elastic" onclick="onPhysSwitch(event,'elastic')" title="Run Elastic, or skip it"></button></div>
         <div class="dr-grid">
-          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="grid"><button type="button" data-v="auto" onclick="onSegClick(this)">Auto</button><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div><div class="hint">Auto picks from your hardware (currently <span id="gridAutoVal">64³</span>). Thermal κ solves on the same grid.</div></div>
+          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="grid"><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div><div class="hint">64³ suits most designs; 128³ for thin walls and struts (slower, more GPU memory). Thermal κ solves on the same grid.</div></div>
         </div>
       </section>
       <section class="dr-pane" data-pane="buckle" data-phys-state="buckle">
@@ -230,6 +254,7 @@
 <script src="40-design-grid.js"></script>
 <script src="50-controls.js"></script>
 <script src="51-dock.js"></script>
+<script src="52-status.js"></script>
 <script src="60-add-design.js"></script>
 <script src="61-import-stl.js"></script>
 <script src="62-sweep.js"></script>

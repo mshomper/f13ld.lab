@@ -4,16 +4,21 @@
    run button with mock progress walkthrough.
    ============================================================ */
 
+/* v0.24.0 — starting defaults for a new browser (Matt, 2026-10-08):
+   Elastic at 64³ and Thermal κ (water) on, Buckling and Crush off,
+   Ti-6Al-4V Grade 5 (HIP), all networks, partial volume.  Every choice is
+   then remembered per browser (51-dock.js labLoadSettings / labSaveSettings). */
 var PHYS_STATE = {
   elastic: true,
-  buckle:  true,
-  nonlin:  true,
-  thermal: false
+  buckle:  false,
+  nonlin:  false,
+  thermal: true
 };
 
+/* v0.24.0 — fixed grid (32³ / 64³ / 128³); the hardware-tier Auto pick is gone */
 var GRID_STATE = {
-  mode: 'auto',     // 'auto' | 'manual'
-  N: 64             // resolved value (32, 64, 128)
+  mode: 'manual',
+  N: 64
 };
 
 /* Buckling runs on the CPU reference oracle (16c) at a much smaller grid
@@ -40,7 +45,9 @@ var NONLIN_STATE = { N: 32, axis: 'zz', cap: 0.05, view: 'zz' };
    comparison ('recipe' keeps each design's own).  The choice is a per-viewer
    convenience (localStorage, try/catch); results are keyed by recipe
    fingerprint, which includes the material, so a change re-solves. */
-var MATERIAL_STATE = { id: (typeof F13LD_MATERIAL_RECIPE_ID !== 'undefined') ? F13LD_MATERIAL_RECIPE_ID : 'recipe' };
+var LAB_DEFAULT_MATERIAL = 'ti64-g5-lpbf-hip';   /* v0.24.0 — Ti-6Al-4V Grade 5 (HIP) */
+var MATERIAL_STATE = { id: (typeof findMaterial === 'function' && findMaterial(LAB_DEFAULT_MATERIAL)) ? LAB_DEFAULT_MATERIAL
+                         : ((typeof F13LD_MATERIAL_RECIPE_ID !== 'undefined') ? F13LD_MATERIAL_RECIPE_ID : 'recipe') };
 var MATERIAL_STORE_KEY = 'f13ld.lab.material.v1';
 
 /* Transient per-design nonlinear results (id -> { sigma_y_eff, E0, curve,
@@ -56,7 +63,7 @@ var NONLIN_BY_DESIGN = {};
    signature, so ticking a filler back on never re-solves the others.
    Temperature and flux fields for the viewer are kept at half precision for
    every grid (v0.21.0, Matt: ~70 MB per design at 128³, ~9 MB at 64³). */
-var THERMAL_STATE = { fillers: { air: true, water: true, tissue: true }, tol: 1e-5, maxiter: 3000, captureMaxN: 128 };
+var THERMAL_STATE = { fillers: { air: false, water: true, tissue: false },   /* v0.24.0 default: water only */ tol: 1e-5, maxiter: 3000, captureMaxN: 128 };
 var THERMAL_BY_DESIGN = {};
 var THERMAL_FRAG_FLAG = 0.05;   /* > 5 % of the solid in sub-3³-voxel fragments the island trim drops → under-resolved (Matt, 2026-10-07: trim stays on, flag it) */
 function thermalFillersOn(){
@@ -259,17 +266,10 @@ function onPhysToggle(el){
    manual options. Cycles: Auto → 32³ → 64³ → 128³ → Auto
    ============================================================ */
 function onGridPillClick(){
-  var cycle = ['auto', 32, 64, 128];
-  var current = (GRID_STATE.mode === 'auto') ? 'auto' : GRID_STATE.N;
-  var idx = cycle.indexOf(current);
-  var next = cycle[(idx + 1) % cycle.length];
-  if (next === 'auto'){
-    GRID_STATE.mode = 'auto';
-    GRID_STATE.N = autoPickGrid();
-  } else {
-    GRID_STATE.mode = 'manual';
-    GRID_STATE.N = next;
-  }
+  var cycle = [32, 64, 128];
+  var idx = cycle.indexOf(GRID_STATE.N);
+  GRID_STATE.mode = 'manual';
+  GRID_STATE.N = cycle[(idx + 1) % cycle.length];
   paintGridPill();
   recomputeEstimate();
 }
@@ -437,7 +437,7 @@ function setEstimate(text){
 }
 function setDesignCount(text){
   var el = document.getElementById('designCountVal');
-  if (el) el.textContent = text + (text === '1' ? ' design' : ' designs');
+  if (el) el.textContent = (text === '0' || text === '—') ? 'no designs' : text + ' of 3 design' + (text === '1' ? '' : 's');   /* v0.24.0 — was the designs-loaded pill */
 }
 
 /* ============================================================
@@ -455,6 +455,14 @@ function onRunClick(){
   }
   if (LAB_STATE.designs.length === 0) return;
   startRun();
+}
+
+/* v0.24.0 — yield to the browser so status text paints before heavy work */
+function labYield(){
+  return new Promise(function(r){
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function(){ setTimeout(r, 0); });
+    else setTimeout(r, 0);
+  });
 }
 
 function startRun(){
@@ -620,13 +628,20 @@ async function runRealSweep(N, runToken){
         doneUnits++; bumpProgress();
         continue;
       }
-      paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · N=' + N + ' · solving…');
+      paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · N=' + N + ' · preparing voxels…');
       renderDesignGrid();
+      await labYield();   /* v0.24.0 — let the status paint before any heavy work */
 
       var elasticResult = null, solveErr = null;
       nFresh.elastic++;
       try {
-        elasticResult = await solveDesignElasticFull(recipe, N, connOpts());
+        /* v0.24.0 — voxel prep runs on the worker pool; show its progress */
+        var elOpts = Object.assign({}, connOpts(), { onPrepProgress: (function(dd, ii){ return function(p){
+          if (stale()) return;
+          paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(dd, ii) + ' · N=' + N + ' · preparing voxels ' + Math.round(p.done / p.total * 100) + '%');
+          if (p.done === p.total) paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(dd, ii) + ' · N=' + N + ' · solving…');
+        }; })(d, i) });
+        elasticResult = await solveDesignElasticFull(recipe, N, elOpts);
         /* v0.16.0 — compliant design: re-solve with the void scaled to it */
         var vSoft = elasticSoftVoid(elasticResult);
         if (vSoft != null && !stale()){
@@ -1217,6 +1232,7 @@ function stubResults(){
 function paintRunProgress(p){
   var fill = document.getElementById('progFill');
   if (fill) fill.style.width = (p * 100).toFixed(1) + '%';
+  if (typeof labStatusProgress === 'function') labStatusProgress(p);   /* v0.24.0 */
   /* tie-up #4 — live ETA.  progress is the work-unit fraction; we drain the
      per-mode time estimate by it.  Honest: it is an estimate, sharpened run
      over run by the measured calibration (RUN_CALIB). */
@@ -1231,6 +1247,7 @@ function paintRunProgress(p){
 
 /* tie-up #2 — toggle the branded "still working" spinner beside the solver pill. */
 function setSolverSpinner(on){
+  if (typeof labStatusSpin === 'function') labStatusSpin(on);   /* v0.24.0 — the status chip's mark ripples */
   var sp = document.getElementById('solverSpinner');
   if (sp) sp.classList.toggle('active', !!on);
 }

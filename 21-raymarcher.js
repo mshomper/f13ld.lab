@@ -872,21 +872,46 @@ LabRaymarcher.prototype._mkShader = function(type, src) {
   return sh;
 };
 
+/* v0.24.0 — non-blocking compile.  With KHR_parallel_shader_compile the
+   driver compiles and links in the background; _render polls
+   COMPLETION_STATUS_KHR and only then reads the status and uniform
+   locations (reading them earlier would block the page until it is done).
+   Without the extension it finishes at once, as before. */
 LabRaymarcher.prototype._compileShader = function() {
   var gl = this.gl;
-  var vs = this._mkShader(gl.VERTEX_SHADER,   LAB_RM_VS);
-  var fs = this._mkShader(gl.FRAGMENT_SHADER, buildLabRaymarcherFS(192));
-  if (!vs || !fs) return false;
+  var vs = gl.createShader(gl.VERTEX_SHADER);   gl.shaderSource(vs, LAB_RM_VS);                  gl.compileShader(vs);
+  var fs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs, buildLabRaymarcherFS(192));  gl.compileShader(fs);
   var prg = gl.createProgram();
   gl.attachShader(prg, vs);
   gl.attachShader(prg, fs);
   gl.linkProgram(prg);
-  gl.deleteShader(vs);
-  gl.deleteShader(fs);
+  this._pending = { prg: prg, vs: vs, fs: fs };
+  this._pcExt = gl.getExtension('KHR_parallel_shader_compile');
+  if (!this._pcExt) return this._finishProgram();
+  return true;
+};
+/* true once the program is linked (polls without blocking when it can) */
+LabRaymarcher.prototype._programReady = function() {
+  if (this._prog) return true;
+  if (!this._pending || this.failed) return false;
+  if (this._pcExt && !this.gl.getProgramParameter(this._pending.prg, this._pcExt.COMPLETION_STATUS_KHR)) return false;
+  if (!this._finishProgram()) { this.failed = true; return false; }
+  return true;
+};
+LabRaymarcher.prototype._finishProgram = function() {
+  var gl = this.gl, P = this._pending;
+  if (!P) return !!this._prog;
+  this._pending = null;
+  var prg = P.prg;
   if (!gl.getProgramParameter(prg, gl.LINK_STATUS)) {
+    if (!gl.getShaderParameter(P.vs, gl.COMPILE_STATUS)) console.error('[LabRaymarcher] shader compile failed:\n' + gl.getShaderInfoLog(P.vs));
+    if (!gl.getShaderParameter(P.fs, gl.COMPILE_STATUS)) console.error('[LabRaymarcher] shader compile failed:\n' + gl.getShaderInfoLog(P.fs));
     console.error('[LabRaymarcher] program link failed:\n' + gl.getProgramInfoLog(prg));
+    gl.deleteShader(P.vs); gl.deleteShader(P.fs);
     return false;
   }
+  gl.deleteShader(P.vs);
+  gl.deleteShader(P.fs);
   this._prog = prg;
   gl.useProgram(prg);
   /* Bind quad attribute */
@@ -1008,9 +1033,34 @@ LabRaymarcher.prototype._bakeAndUpload = function() {
      grid in the background (LAB_GEOM_N_FINE) so thin struts and sheets show. */
   var N = 48;
 
-  var t0 = performance.now();
-  var fr = buildRawField(family, params, N);
-  var tBake = performance.now() - t0;
+  /* v0.24.0 — every family but TPMS (milliseconds) bakes on the geometry
+     worker pool (17c) so page load never freezes; the tile fills in when
+     its field arrives.  TPMS and the no-worker case bake here as before. */
+  var self = this, tok = (this._bakeTok = (this._bakeTok || 0) + 1), t0 = performance.now();
+  if (family !== 'tpms' && typeof labBakeFieldAsync === 'function') {
+    this._baking = true;
+    labBakeFieldAsync(recipe, N).then(function (fr) {
+      if (!fr) throw new Error('no workers');
+      if (self._destroyed || self.failed || self._recipe !== recipe || self._bakeTok !== tok) return;
+      self._baking = false;
+      self._applyBake(fr, N, performance.now() - t0);
+    }).catch(function () {
+      if (self._destroyed || self.failed || self._recipe !== recipe || self._bakeTok !== tok) return;
+      self._baking = false;
+      self._applyBake(buildRawField(family, params, N), N, performance.now() - t0);
+    });
+    return;
+  }
+  this._baking = false;
+  this._applyBake(buildRawField(family, params, N), N, performance.now() - t0);
+};
+
+LabRaymarcher.prototype._applyBake = function(fr, N, tBake) {
+  var gl = this.gl;
+  if (!gl) return;
+  var recipe = this._recipe, family = recipe.family;
+  var params = KERNELS[family].parseRecipe(recipe);
+  var args   = resolveBuildArgs(recipe);
 
   this._uploadGeomField(fr, N);
 
@@ -1126,6 +1176,19 @@ function labPumpRefine() {
   if (rm.failed || rm._destroyed || !rm._recipe || !LAB_GEOM_N_FINE[rm._recipe.family]) { labPumpRefine(); return; }
   LAB_REFINE_BUSY = true;
   var recipe = rm._recipe, family = recipe.family, N = LAB_GEOM_N_FINE[family];
+  /* v0.24.0 — the fine bake runs on the geometry worker pool when it can */
+  if (typeof labBakeFieldAsync === 'function') {
+    labBakeFieldAsync(recipe, N).then(function (fr) {
+      if (!fr) throw new Error('no workers');
+      if (rm._recipe === recipe && !rm._destroyed && !rm.failed && rm.gl) {
+        rm._uploadGeomField(fr, N);
+        rm._dirty = true;
+        if (rm._nlPaused) rm._nlDrawOnce = true;
+      }
+      LAB_REFINE_BUSY = false; setTimeout(labPumpRefine, 0);
+    }).catch(function () { LAB_REFINE_BUSY = false; setTimeout(labPumpRefine, 0); });
+    return;
+  }
   var kernel = KERNELS[family], params = kernel.parseRecipe(recipe);
   var L = Math.PI, step = (2 * L) / N, data = new Float32Array(N * N * N);
   var minV = Infinity, maxV = -Infinity, iz = 0;
@@ -1741,7 +1804,7 @@ LabRaymarcher.prototype._render = function(t) {
   this._rafId = requestAnimationFrame(this._render.bind(this));
 
   var gl = this.gl;
-  if (!this._fieldUploaded || !this._prog) return;
+  if (!this._fieldUploaded || !this._programReady()) return;
   /* v0.17.2 — Nonlinear-tab cubes hold still while a run is solving; one
      frame is drawn after the cube is primed so it is not blank. */
   if (this._nlPaused) return;
@@ -1922,6 +1985,7 @@ LabRaymarcher.prototype.destroy = function() {
   if (this._stressTex) gl.deleteTexture(this._stressTex);  /* A.3 — stress texture */
   if (this._thermTex)  gl.deleteTexture(this._thermTex);   /* v0.21.0 — thermal field */
   if (this._prog)      gl.deleteProgram(this._prog);
+  if (this._pending)   { gl.deleteProgram(this._pending.prg); gl.deleteShader(this._pending.vs); gl.deleteShader(this._pending.fs); this._pending = null; }   /* v0.24.0 */
   if (this._quadBuf)   gl.deleteBuffer(this._quadBuf);
   /* Force-lose context to free GPU memory immediately */
   var ext = gl.getExtension('WEBGL_lose_context');
@@ -2126,3 +2190,17 @@ function pauseRaymarcherTilesForViewMode(mode) {
     pauseAllRaymarchers();
   }
 }
+
+/* v0.24.0 — viewers still compiling or baking (the startup splash waits
+   for 0, with a time limit) */
+function labViewersPending() {
+  var n = 0;
+  for (var id in LAB_RM_REGISTRY) {
+    if (!LAB_RM_REGISTRY.hasOwnProperty(id)) continue;
+    var rm = LAB_RM_REGISTRY[id];
+    if (rm.failed || rm._destroyed) continue;
+    if (!rm._fieldUploaded || !rm._programReady()) n++;
+  }
+  return n;
+}
+

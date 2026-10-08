@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.23.0 · alpha · **thermal in the sweep, surface area density and porosity columns, revised material conductivities** · **new bottom dock + Configure drawer in the Lab red** · **3-D temperature map with a section plane** · **thermal conductivity on the GPU (air / water / tissue in the pores)** · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.24.0 · alpha · **no more freezes on load or on Run; startup animation and status chip; settings remembered** · **thermal in the sweep, surface area density and porosity columns, revised material conductivities** · **new bottom dock + Configure drawer in the Lab red** · **3-D temperature map with a section plane** · **thermal conductivity on the GPU (air / water / tissue in the pores)** · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** [PolyForm Noncommercial 1.0.0](./LICENSE.md): free for research and non-commercial use; anyone may run it to reproduce published results (see [NOTICE](./NOTICE)). Commercial licences: matt@notarobot-eng.com
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -38,6 +38,17 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckling grid (Configure → Buckling) offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (Configure → Crush → Grid, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Load axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.24.0
+
+**Smoother start, smoother Run.**
+- **No freeze when you press Run.** Before the GPU starts, each design's voxels, surface grid and partial-volume fractions used to be built on the page itself: under a second for TPMS, but tens of seconds to minutes for grain and hyperuniform fields, with the page frozen and the status still reading "Idle". They now run in slabs on background workers across your CPU cores, with identical results (`validate-prep.js`). The status shows "preparing voxels nn%".
+- **No freeze on load.** The viewers' geometry fields bake on the same workers. Shader compiles no longer block the page where the browser supports background compiling.
+- **Startup animation.** The F13LD wordmark resolves from scrambled glyphs while the viewers get ready, then fades away.
+- **Status chip** at the right of the VIEW row replaces the designs-loaded pill, the spinner and the solving / run-complete pills. The F13LD mark's waves ripple while a run is solving; the chip shows the progress and then "✓ run complete". The design count moved to the dock ("3 of 3 designs").
+- **New starting defaults:** Ti-6Al-4V Grade 5 (HIP), all networks, partial volume, Elastic on at 64³, Buckling and Crush off, Thermal κ on with water in the pores.
+- **Settings remembered** in your browser: every Configure choice and the material. A new browser or cleared data starts from the defaults; *Configure → Model → Reset run settings to defaults* goes back to them.
+- **Fixed grids:** 32³ / 64³ / 128³. The hardware-based Auto grid is gone.
 
 ## What's new in v0.23.0
 

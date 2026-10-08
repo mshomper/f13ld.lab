@@ -55,7 +55,61 @@ var DOCK_STORE_KEY = 'f13ld.lab.dock.v1';
 /* ============================================================
    INIT
    ============================================================ */
+/* ── v0.24.0 — run settings remembered per browser ─────────────────
+   Everything in the Configure drawer (modes, grids, strain cap, load axis,
+   fillers, connectivity, surface voxels).  The material keeps its own key
+   (MATERIAL_STORE_KEY, 50-controls).  Nothing saved (new browser, cleared
+   data) → the defaults in 50-controls. */
+var LAB_SETTINGS_KEY = 'f13ld.lab.settings.v1';
+var LAB_SETTINGS_LOADED = false;
+var LAB_SETTINGS_DEFAULTS = null;
+function labSnapshotSettings(){
+  return { phys: { elastic: !!PHYS_STATE.elastic, buckle: !!PHYS_STATE.buckle, nonlin: !!PHYS_STATE.nonlin, thermal: !!PHYS_STATE.thermal },
+           gridN: GRID_STATE.N, buckleN: BUCKLE_STATE.N, nonlinN: NONLIN_STATE.N, cap: NONLIN_STATE.cap, axis: NONLIN_STATE.axis,
+           fillers: { air: !!THERMAL_STATE.fillers.air, water: !!THERMAL_STATE.fillers.water, tissue: !!THERMAL_STATE.fillers.tissue },
+           conn: GEOM_STATE.connectivity, pv: !!GEOM_STATE.partialVolume };
+}
+function labApplySettings(s){
+  if (!s || typeof s !== 'object') return;
+  var k;
+  if (s.phys) for (k in PHYS_STATE) if (typeof s.phys[k] === 'boolean') PHYS_STATE[k] = s.phys[k];
+  if ([32, 64, 128].indexOf(s.gridN) >= 0) { GRID_STATE.mode = 'manual'; GRID_STATE.N = s.gridN; }
+  if ([16, 32, 64].indexOf(s.buckleN) >= 0) BUCKLE_STATE.N = s.buckleN;
+  if ([16, 32, 64].indexOf(s.nonlinN) >= 0) NONLIN_STATE.N = s.nonlinN;
+  if ([0.02, 0.05, 0.1].indexOf(s.cap) >= 0) NONLIN_STATE.cap = s.cap;
+  if (['xx', 'yy', 'zz', 'all'].indexOf(s.axis) >= 0) { NONLIN_STATE.axis = s.axis; if (s.axis !== 'all') NONLIN_STATE.view = s.axis; }
+  if (s.fillers) {
+    var any = false;
+    for (k in THERMAL_STATE.fillers) if (s.fillers[k] === true) any = true;
+    if (any) for (k in THERMAL_STATE.fillers) THERMAL_STATE.fillers[k] = s.fillers[k] === true;
+  }
+  if (['networks', 'largest', 'off'].indexOf(s.conn) >= 0) onConnectivityChange(s.conn);
+  if (typeof s.pv === 'boolean') GEOM_STATE.partialVolume = s.pv;
+  /* the Thermal κ tab shows a filler that was solved */
+  if (typeof VIEW_STATE !== 'undefined' && !THERMAL_STATE.fillers[VIEW_STATE.thermalFiller]) {
+    var first = ['water', 'air', 'tissue'].filter(function(f){ return THERMAL_STATE.fillers[f]; })[0];
+    if (first && typeof onThermalFillerView === 'function') onThermalFillerView(first);
+  }
+}
+function labLoadSettings(){
+  if (!LAB_SETTINGS_DEFAULTS) LAB_SETTINGS_DEFAULTS = JSON.parse(JSON.stringify(labSnapshotSettings()));
+  try { labApplySettings(JSON.parse(localStorage.getItem(LAB_SETTINGS_KEY) || 'null')); } catch (e) {}
+  LAB_SETTINGS_LOADED = true;
+}
+function labSaveSettings(){
+  if (!LAB_SETTINGS_LOADED) return;
+  try { localStorage.setItem(LAB_SETTINGS_KEY, JSON.stringify(labSnapshotSettings())); } catch (e) {}
+}
+function labResetSettings(){
+  try { localStorage.removeItem(LAB_SETTINGS_KEY); localStorage.removeItem(MATERIAL_STORE_KEY); } catch (e) {}
+  if (LAB_SETTINGS_DEFAULTS) labApplySettings(JSON.parse(JSON.stringify(LAB_SETTINGS_DEFAULTS)));
+  if (typeof LAB_DEFAULT_MATERIAL !== 'undefined' && typeof findMaterial === 'function' && findMaterial(LAB_DEFAULT_MATERIAL)) MATERIAL_STATE.id = LAB_DEFAULT_MATERIAL;
+  recomputeEstimate();
+  paintDock();
+}
+
 function initDock(){
+  labLoadSettings();   /* v0.24.0 — before the first paint */
   try {
     var saved = JSON.parse(localStorage.getItem(DOCK_STORE_KEY) || 'null');
     if (saved && typeof saved === 'object'){
@@ -113,8 +167,7 @@ function onPhysSwitch(ev, key){
 function onSegClick(btn){
   var group = btn.parentNode.getAttribute('data-seg'), v = btn.getAttribute('data-v');
   if (group === 'grid'){
-    if (v === 'auto'){ GRID_STATE.mode = 'auto'; GRID_STATE.N = autoPickGrid(); }
-    else { GRID_STATE.mode = 'manual'; GRID_STATE.N = +v; }
+    GRID_STATE.mode = 'manual'; GRID_STATE.N = +v;
   } else if (group === 'buckleN'){
     BUCKLE_STATE.N = +v;
   } else if (group === 'nonlinN'){
@@ -230,7 +283,7 @@ function onDockKey(e){
 /* ============================================================
    PAINT — state → every dock + drawer control
    ============================================================ */
-function dockGridLabel(){ return GRID_STATE.mode === 'auto' ? 'Auto · ' + GRID_STATE.N + '³' : GRID_STATE.N + '³'; }
+function dockGridLabel(){ return GRID_STATE.N + '³'; }
 function dockSummary(key){
   if (key === 'elastic') return dockGridLabel();
   if (key === 'buckle')  return BUCKLE_STATE.N + '³';
@@ -257,16 +310,15 @@ function paintSegGroup(group, value){
 
 function paintDock(){
   if (!document.getElementById('dock')) return;
+  labSaveSettings();   /* v0.24.0 — every change goes through here */
   var i, el, els;
   /* segmented controls */
-  paintSegGroup('grid', GRID_STATE.mode === 'auto' ? 'auto' : GRID_STATE.N);
+  paintSegGroup('grid', GRID_STATE.N);
   paintSegGroup('buckleN', BUCKLE_STATE.N);
   paintSegGroup('nonlinN', NONLIN_STATE.N);
   paintSegGroup('cap', NONLIN_STATE.cap);
   paintSegGroup('axis', NONLIN_STATE.axis);
   paintSegGroup('pv', GEOM_STATE.partialVolume ? 'pv' : 'binary');
-  el = document.getElementById('gridAutoVal');
-  if (el) el.textContent = (typeof autoPickGrid === 'function' ? autoPickGrid() : GRID_STATE.N) + '³';
   /* switches + on/off styling (tabs, panes) */
   els = document.querySelectorAll('[data-phys-sw]');
   for (i = 0; i < els.length; i++){

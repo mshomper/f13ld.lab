@@ -1570,14 +1570,23 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var args   = resolveBuildArgs(recipe);
 
   var t0 = performance.now();
-  var solid = buildVoxels(family, params, args.offset, N, args.mode, args.wt,
+  /* v0.24.0 — voxels, margin and partial-volume fractions on the geometry
+     worker pool (17c), off the main thread and in parallel; identical
+     results.  Falls back to the main-thread path without workers. */
+  var prep = null;
+  if (opts.parallelPrep !== false && typeof labPrepElasticParallel === 'function') {
+    try { prep = await labPrepElasticParallel(recipe, N, opts, opts.onPrepProgress); }
+    catch (ePrep) { console.warn('[elastic] parallel prep failed, using the main thread:', ePrep); prep = null; }
+  }
+  var solid = prep ? prep.raw : buildVoxels(family, params, args.offset, N, args.mode, args.wt,
                           args.nWeights, args.pipeR, args.phaseShift);
   var insideRaw = 0;   /* v0.10.0 sweep — solid fraction before island trim */
   for (var vr = 0; vr < solid.length; vr++) insideRaw += solid[vr];
   var rawSolid = solid;   /* v0.19.0 — kept for the partial-volume trim test */
   /* Connectivity gate — keep only the largest periodic solid component so
      floating islands don't seed spurious modes (default-on from the run). */
-  if (opts.pruneLargest && typeof pruneVoxels === 'function') {
+  if (prep) solid = prep.kept;
+  else if (opts.pruneLargest && typeof pruneVoxels === 'function') {
     solid = pruneVoxels(solid, N, family, opts);
   }
   var tRast = performance.now() - t0;
@@ -1634,9 +1643,14 @@ async function solveDesignElasticFull(recipe, N, opts) {
   var rhoBinary = rho, pvFrac = 0, tPv = 0, partialVolume = false;
   if (opts.partialVolume && typeof buildVoxelMargin === 'function') {
     var tPv0 = performance.now();
+    if (prep && prep.m) {   /* v0.24.0 — already built on the pool */
+      if (typeof thermalStashMargin === 'function') thermalStashMargin(recipe, N, opts, prep.m);
+      solid = prep.pv;
+    } else {
     var mg = buildVoxelMargin(family, params, args.offset, N, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
     if (typeof thermalStashMargin === 'function') thermalStashMargin(recipe, N, opts, mg.m);   /* v0.20.0 — thermal reuses it */
     solid = voxelFractionsFromMargin(mg, N, solid, rawSolid, opts.pvSub || (N >= 128 ? 3 : 4));
+    }
     var insidePv = 0, nPart = 0;
     for (var vp = 0; vp < solid.length; vp++) { insidePv += solid[vp]; if (solid[vp] > 0 && solid[vp] < 1) nPart++; }
     rho = insidePv / solid.length; pvFrac = nPart / solid.length; partialVolume = true;

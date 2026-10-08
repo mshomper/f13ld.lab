@@ -16,7 +16,7 @@ var VIEW_STATE = {
   stressNormMode: 'per',                   // A.3.3 — 'per' (auto per-design) | 'shared' (global p95, linear)
   stressSat:  { /* designId: 0..2 */ },    // 4b — per-design saturation multiplier on auto p95 cap
   buckleExag: { /* designId: 0..30 */ },   // buckling tab mode-shape exaggeration (% of cell), default 10
-  thermalFiller: 'air',                     // v0.20.0 — which solved pore filler the thermal cards show
+  thermalFiller: 'water',                   /* v0.24.0 — matches the default filler */                     // v0.20.0 — which solved pore filler the thermal cards show
   thermalView: 'temp',                      // v0.21.0 — 'temp' | 'dev' | 'flux' | 'kappa' (all thermal tiles)
   thermalAxis: 'x',                         // v0.21.0 — gradient axis of the map (all thermal tiles)
   thermalDT: 10                             // v0.21.0 — ΔT across one cell, K (Matt: per cell, fixed default)

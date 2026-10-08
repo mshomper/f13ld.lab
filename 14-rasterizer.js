@@ -44,9 +44,15 @@ function isoC(E, nu) {
 
    Returns: Float32Array(N³), 0=void / 1=solid, indexed as i*N² + j*N + k.
 
+   iRange (v0.24.0, optional) [i0, i1): fill only those x-slabs (the rest
+   stays 0) — the geometry worker pool (17c) splits a grid this way.  The
+   field is evaluated on the slabs plus one periodic neighbour slab each
+   side (the anisotropic-shell gradient stencil), so every voxel in range
+   is bit-identical to the full build.
+
    Domain: [-π, +π]³ in solver coords, sampled at voxel centers.
    ============================================================ */
-function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phaseShift) {
+function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phaseShift, iRange) {
   var L    = Math.PI;
   var step = (2 * L) / N;
   var N3   = N * N * N;
@@ -92,7 +98,18 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
   /* Pass 1 — full field cache. Needed for shell+nWeights gradient stencil
      and reused below for all single-eval-per-point modes. */
   var V = new Float32Array(N3);
-  for (var i = 0; i < N; i++) {
+  var iLo = iRange ? iRange[0] : 0, iHi = iRange ? iRange[1] : N, NNs = N * N;
+  var full = (iLo === 0 && iHi === N);
+  /* field slabs: the range, plus one neighbour each side when partial */
+  var fieldRows = [];
+  if (full) { for (var fr0 = 0; fr0 < N; fr0++) fieldRows.push(fr0); }
+  else {
+    fieldRows.push((iLo - 1 + N) % N);
+    for (var fr1 = iLo; fr1 < iHi; fr1++) fieldRows.push(fr1);
+    if (fieldRows.indexOf(iHi % N) < 0) fieldRows.push(iHi % N);
+  }
+  for (var fri = 0; fri < fieldRows.length; fri++) {
+    var i = fieldRows[fri];
     var x = -L + (i + 0.5) * step;
     for (var j = 0; j < N; j++) {
       var y = -L + (j + 0.5) * step;
@@ -118,7 +135,7 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
        preview (which already subtracted it).  offset is 0 for every other recipe. */
     var off = offset || 0;
     var pair = params && params.pair;          /* field-pair PI-TPMS, null for self-pairs */
-    for (var i2 = 0; i2 < N; i2++) {
+    for (var i2 = iLo; i2 < iHi; i2++) {
       var x2 = -L + (i2 + 0.5) * step;
       for (var j2 = 0; j2 < N; j2++) {
         var y2 = -L + (j2 + 0.5) * step;
@@ -146,7 +163,7 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
   /* ── Anisotropic shell — gradient from periodic central differences ── */
   } else if (mode === 'shell' && nWeights) {
     var wx = nWeights.wx, wy = nWeights.wy, wz = nWeights.wz;
-    for (var i3 = 0; i3 < N; i3++) {
+    for (var i3 = iLo; i3 < iHi; i3++) {
       var ip = (i3 + 1) % N, im = (i3 + N - 1) % N;
       for (var j3 = 0; j3 < N; j3++) {
         var jp = (j3 + 1) % N, jm = (j3 + N - 1) % N;
@@ -177,11 +194,11 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
     var hw  = params.halfWidth;
     var inv = !!params.halfInvert;
     if (mode === 'noise-sheet') {
-      for (var n1 = 0; n1 < N3; n1++) solid[n1] = Math.abs(V[n1] - iso) < hw ? 1 : 0;
+      for (var n1 = iLo * NNs; n1 < iHi * NNs; n1++) solid[n1] = Math.abs(V[n1] - iso) < hw ? 1 : 0;
     } else if (mode === 'noise-half') {
-      for (var n2 = 0; n2 < N3; n2++) solid[n2] = inv ? (V[n2] < iso ? 1 : 0) : (V[n2] > iso ? 1 : 0);
+      for (var n2 = iLo * NNs; n2 < iHi * NNs; n2++) solid[n2] = inv ? (V[n2] < iso ? 1 : 0) : (V[n2] > iso ? 1 : 0);
     } else {
-      for (var n3 = 0; n3 < N3; n3++) solid[n3] = Math.abs(V[n3] - iso) > hw ? 1 : 0;
+      for (var n3 = iLo * NNs; n3 < iHi * NNs; n3++) solid[n3] = Math.abs(V[n3] - iso) > hw ? 1 : 0;
     }
 
   /* ── Grain modes — V is RAW (NOT normalized to [-1,1] like noise) ─── */
@@ -190,16 +207,16 @@ function buildVoxels(family, params, offset, N, mode, wt, nWeights, pipeR, phase
     var ghw  = params.halfWidth;
     var ginv = !!params.halfInvert;
     if (mode === 'grain-sheet') {
-      for (var g1 = 0; g1 < N3; g1++) solid[g1] = Math.abs(V[g1] - giso) < ghw ? 1 : 0;
+      for (var g1 = iLo * NNs; g1 < iHi * NNs; g1++) solid[g1] = Math.abs(V[g1] - giso) < ghw ? 1 : 0;
     } else if (mode === 'grain-half') {
-      for (var g2 = 0; g2 < N3; g2++) solid[g2] = ginv ? (V[g2] < giso ? 1 : 0) : (V[g2] > giso ? 1 : 0);
+      for (var g2 = iLo * NNs; g2 < iHi * NNs; g2++) solid[g2] = ginv ? (V[g2] < giso ? 1 : 0) : (V[g2] > giso ? 1 : 0);
     } else {
-      for (var g3 = 0; g3 < N3; g3++) solid[g3] = Math.abs(V[g3] - giso) > ghw ? 1 : 0;
+      for (var g3 = iLo * NNs; g3 < iHi * NNs; g3++) solid[g3] = Math.abs(V[g3] - giso) > ghw ? 1 : 0;
     }
 
   /* ── Solid (TPMS, default) or isotropic shell ──────────────────────── */
   } else {
-    for (var idx2 = 0; idx2 < N3; idx2++) {
+    for (var idx2 = iLo * NNs; idx2 < iHi * NNs; idx2++) {
       if (mode === 'shell') {
         if (shellNorm) {
           var ia = (idx2/(N*N))|0, rem = idx2 - ia*N*N, ja = (rem/N)|0, ka = rem - ja*N;
@@ -330,14 +347,16 @@ function buildVoxelMargin(family, params, offset, N, mode, wt, nWeights, pipeR, 
   return { m: m, fn: margin, step: step, L: L, N: N };
 }
 
-function voxelFractionsFromMargin(mg, N, kept, raw, sub) {
+function voxelFractionsFromMargin(mg, N, kept, raw, sub, iRange) {
   sub = sub || 4;
   var m = mg.m, fn = mg.fn, step = mg.step, L = mg.L;
   var NN = N * N, N3 = NN * N, out = Float32Array.from(kept);
   var w = new Float64Array(sub);
   for (var s0 = 0; s0 < sub; s0++) w[s0] = (s0 + 0.5) / sub * step;
   var c = new Float64Array(8), inv = 1 / (sub * sub * sub);
-  for (var i = 0; i < N; i++) {
+  /* v0.24.0 — iRange [i0, i1): only those x-slabs (geometry worker pool) */
+  var iLo = iRange ? iRange[0] : 0, iHi = iRange ? iRange[1] : N;
+  for (var i = iLo; i < iHi; i++) {
     var i1 = (i + 1) % N;
     for (var j = 0; j < N; j++) {
       var j1 = (j + 1) % N;

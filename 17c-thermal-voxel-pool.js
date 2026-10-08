@@ -35,7 +35,7 @@ var THERMAL_VOXEL_FILES = [
   '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
   '13c-import-kernel.js', '13d-foam-kernel.js', '14e-link-field.js'
 ];
-var THERMAL_VOXEL_VERSION = 'tv-2';   /* v0.23.0 — slabs also return wall area */   /* bump when a worker file changes (blob workers cache separately) */
+var THERMAL_VOXEL_VERSION = 'tv-3';   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
 
 /* ── Stash: the elastic solves of this Run All ───────────────────────
    Entries { recipe, N, conn, raw, kept, m }, newest last, matched by the
@@ -79,11 +79,38 @@ var THERMAL_VOXEL_ONMESSAGE =
   '  var mg = buildVoxelMargin(family, params, a.offset, N, a.mode, a.wt, a.nWeights, a.pipeR, a.phaseShift, true);\n' +
   '  _fnCache = { key: key, fn: mg.fn }; return mg.fn;\n' +
   '}\n' +
+  /* v0.24.0 — rows packed by the main thread (only the slabs a job reads) */
+  'function placeRows(N, rows, data){\n' +
+  '  var NN = N*N, full = new Float32Array(NN*N);\n' +
+  '  for (var r = 0; r < rows.length; r++) full.set(data.subarray(r*NN, (r+1)*NN), rows[r]*NN);\n' +
+  '  return full;\n' +
+  '}\n' +
   'onmessage = function(e){\n' +
   '  var job = e.data, N = job.N, NN = N*N;\n' +
   '  try {\n' +
   '    if (job.importGrid) registerImportGrid(job.importGrid);\n' +
+  /* v0.24.0 — elastic prep: 0/1 voxels of a slab (bit-identical to buildVoxels) */
+  '    if (job.type === "voxels"){\n' +
+  '      var fam = job.recipe.family, pv0 = KERNELS[fam].parseRecipe(job.recipe), av = resolveBuildArgs(job.recipe);\n' +
+  '      var sv = buildVoxels(fam, pv0, av.offset, N, av.mode, av.wt, av.nWeights, av.pipeR, av.phaseShift, [job.i0, job.i1]);\n' +
+  '      var vs = sv.slice(job.i0*NN, job.i1*NN);\n' +
+  '      postMessage({ id: job.id, ok: true, v: vs }, [vs.buffer]); return;\n' +
+  '    }\n' +
+  /* v0.24.0 — viewer field bake (buildRawField, whole grid; one job per design) */
+  '    if (job.type === "rawfield"){\n' +
+  '      var famR = job.recipe.family, prR = KERNELS[famR].parseRecipe(job.recipe), fr = buildRawField(famR, prR, N);\n' +
+  '      postMessage({ id: job.id, ok: true, data: fr.data, fieldMin: fr.fieldMin, fieldMax: fr.fieldMax }, [fr.data.buffer]); return;\n' +
+  '    }\n' +
   '    var fn = marginFn(job.recipe, N, job.key);\n' +
+  /* v0.24.0 — partial-volume solid fractions of a slab (voxelFractionsFromMargin) */
+  '    if (job.type === "pv"){\n' +
+  '      var mFull = placeRows(N, job.mRows, job.m), kFull = placeRows(N, job.kRows, job.kept);\n' +
+  '      var rFull = job.raw ? placeRows(N, job.kRows, job.raw) : null;\n' +
+  '      var L0 = Math.PI, st0 = 2*L0/N;\n' +
+  '      var pf = voxelFractionsFromMargin({ m: mFull, fn: fn, step: st0, L: L0 }, N, kFull, rFull, job.sub, [job.i0, job.i1]);\n' +
+  '      var ps = pf.slice(job.i0*NN, job.i1*NN);\n' +
+  '      postMessage({ id: job.id, ok: true, v: ps }, [ps.buffer]); return;\n' +
+  '    }\n' +
   '    if (job.type === "margin"){\n' +
   '      var L = Math.PI, step = 2*L/N, m = new Float32Array((job.i1 - job.i0) * NN);\n' +
   '      for (var i = job.i0; i < job.i1; i++){ var x = -L + i*step, o = (i - job.i0)*NN;\n' +
@@ -226,3 +253,86 @@ async function thermalVoxelSelfTest(recipe, N) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { buildVoxelTensorsParallel: buildVoxelTensorsParallel, thermalStashVoxels: thermalStashVoxels, thermalStashMargin: thermalStashMargin };
 }
+
+/* ── v0.24.0 — elastic prep and viewer bakes on the pool ──────────────
+   Run All used to build the 0/1 voxels, the corner margin and the
+   partial-volume fractions on the main thread before the GPU started:
+   seconds to minutes on grain and hyperuniform fields, with the page
+   frozen.  The same functions now run here in x-slabs, in parallel, with
+   identical results (validate-prep.js); only the island trim stays on the
+   main thread (fast, needs the whole grid).
+
+   labPrepElasticParallel(recipe, N, opts, onProgress)
+     → Promise<{ raw, kept, m (null without partial volume), pv } | null>
+       null = no workers (the caller falls back to the old path)
+   labBakeFieldAsync(recipe, N) → Promise<{ data, fieldMin, fieldMax } | null>
+   ------------------------------------------------------------------ */
+function _tvRowList(N, i0, i1, before, after) {
+  var rows = [], r;
+  for (r = i0 - before; r < i1 + after; r++) { var w = ((r % N) + N) % N; if (rows.indexOf(w) < 0) rows.push(w); }
+  return rows;
+}
+function _tvPackRows(arr, N, rows) {
+  var NN = N * N, out = new Float32Array(rows.length * NN);
+  for (var r = 0; r < rows.length; r++) out.set(arr.subarray(rows[r] * NN, (rows[r] + 1) * NN), r * NN);
+  return out;
+}
+/* one-entry cache: the compliant-design re-solve and the sweep's repeat
+   solves of the same recipe object reuse the prep */
+var _TV_PREP_CACHE = null;
+async function labPrepElasticParallel(recipe, N, opts, onProgress) {
+  opts = opts || {};
+  if (!_tvCanUseWorkers() || opts.noWorkers) return null;
+  var ck = N + '|' + (opts.pruneLargest ? 1 : 0) + '|' + (opts.connectivity || 'networks') + '|' + (opts.partialVolume ? 1 : 0) + '|' + (opts.pvSub || 0);
+  if (_TV_PREP_CACHE && _TV_PREP_CACHE.recipe === recipe && _TV_PREP_CACHE.ck === ck) {
+    if (onProgress) onProgress({ stage: 'cached', done: 1, total: 1 });
+    return _TV_PREP_CACHE.res;
+  }
+  var res = await _labPrepElasticParallel(recipe, N, opts, onProgress);
+  _TV_PREP_CACHE = { recipe: recipe, ck: ck, res: res };
+  return res;
+}
+async function _labPrepElasticParallel(recipe, N, opts, onProgress) {
+  var NN = N * N, N3 = NN * N, family = recipe.family;
+  var key = (typeof recipeFingerprint === 'function' ? recipeFingerprint(recipe) : String(linkNowMs())) + '|' + N;
+  var importGrid = (family === 'import' && typeof importGridMessage === 'function') ? importGridMessage(recipe) : null;
+  var slabs = _tvSlabs(N, _tvPoolSize()), wantPv = !!opts.partialVolume;
+  var total = slabs.length * (wantPv ? 3 : 1), done = 0;
+  function tick(stage) { done++; if (onProgress) onProgress({ stage: stage, done: done, total: total }); }
+  var raw = new Float32Array(N3), m = wantPv ? new Float32Array(N3) : null;
+  var jobs = slabs.map(function (sl) {
+    return _tvRun({ type: 'voxels', recipe: recipe, N: N, key: key, i0: sl[0], i1: sl[1], importGrid: importGrid }).then(function (r) {
+      raw.set(r.v, sl[0] * NN); tick('voxels');
+    });
+  });
+  if (wantPv) jobs = jobs.concat(slabs.map(function (sl) {
+    return _tvRun({ type: 'margin', recipe: recipe, N: N, key: key, i0: sl[0], i1: sl[1], importGrid: importGrid }).then(function (r) {
+      m.set(r.m, sl[0] * NN); tick('margin');
+    });
+  }));
+  await Promise.all(jobs);
+  var kept = raw;
+  if (opts.pruneLargest && typeof pruneVoxels === 'function') kept = pruneVoxels(raw, N, family, opts);
+  var pv = kept;
+  if (wantPv) {
+    pv = Float32Array.from(kept);
+    var sub = opts.pvSub || (N >= 128 ? 3 : 4);
+    await Promise.all(slabs.map(function (sl) {
+      var mRows = _tvRowList(N, sl[0], sl[1], 0, 1), kRows = _tvRowList(N, sl[0], sl[1], 1, 1);
+      var msg = { type: 'pv', recipe: recipe, N: N, key: key, i0: sl[0], i1: sl[1], sub: sub, importGrid: importGrid,
+                  mRows: mRows, m: _tvPackRows(m, N, mRows), kRows: kRows, kept: _tvPackRows(kept, N, kRows),
+                  raw: kept !== raw ? _tvPackRows(raw, N, kRows) : null };
+      return _tvRun(msg, [msg.m.buffer, msg.kept.buffer].concat(msg.raw ? [msg.raw.buffer] : [])).then(function (r) {
+        pv.set(r.v, sl[0] * NN); tick('pv');
+      });
+    }));
+  }
+  return { raw: raw, kept: kept, m: m, pv: pv };
+}
+async function labBakeFieldAsync(recipe, N) {
+  if (!_tvCanUseWorkers()) return null;
+  var importGrid = (recipe.family === 'import' && typeof importGridMessage === 'function') ? importGridMessage(recipe) : null;
+  var r = await _tvRun({ type: 'rawfield', recipe: recipe, N: N, importGrid: importGrid });
+  return { data: r.data, fieldMin: r.fieldMin, fieldMax: r.fieldMax };
+}
+
