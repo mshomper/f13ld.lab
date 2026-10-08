@@ -30,6 +30,9 @@ var LAB_ICONS = {
   buckle:  '<path d="M10 5 H30 M10 35 H30"' + LAB_ICON_SV + '/><path d="M20 5 C 32 13, 32 27, 20 35"' + LAB_ICON_SV + '/><path d="M20 9 V31"' + LAB_ICON_SV + ' stroke-width="1.6" stroke-dasharray="0.1 4.2" opacity=".6"/><circle class="acc" cx="29" cy="20" r="3.2"/>',
   nonlin:  '<path d="M5 4 V35 H37"' + LAB_ICON_SV + ' opacity=".7"/><path d="M5 35 L13 15 C 16 10, 21 10.5, 36 11.5"' + LAB_ICON_SV + '/><circle class="acc" cx="13.5" cy="14" r="3.2"/>',
   thermal: '<path d="M16.5 25 V8.5 a3.5 3.5 0 0 1 7 0 V25 a6.5 6.5 0 1 1 -7 0 Z"' + LAB_ICON_SV + '/><path d="M20 15 V27"' + LAB_ICON_SV + ' stroke-width="3"/><circle class="acc" cx="20" cy="29.5" r="3.3"/><path d="M28.5 10 H33 M28.5 15.5 H33 M28.5 21 H31"' + LAB_ICON_SV + ' stroke-width="2.2" opacity=".75"/>',
+  /* v0.25.0 — VIEW tabs: stress (contour rings around a hot spot), stiffness (directional surface rosette) */
+  stress:  '<path d="M20 5 C 31 5, 36 12, 35 21 C 34 31, 26 36, 18 35 C 9 34, 4 27, 5 18 C 6 10, 12 5, 20 5 Z"' + LAB_ICON_SV + ' opacity=".55"/><path d="M21 11 C 28 11, 30 17, 29 22 C 28 28, 23 30, 18 29 C 12 28, 10 23, 11 18 C 12 13, 16 11, 21 11 Z"' + LAB_ICON_SV + ' opacity=".8"/><circle class="acc" cx="20" cy="20" r="3.6"/>',
+  stiff:   '<path d="M20 3 V37 M3 20 H37"' + LAB_ICON_SV + ' stroke-width="1.4" opacity=".45"/><path d="M20 6 C 24 14, 26 16, 34 20 C 26 24, 24 26, 20 34 C 16 26, 14 24, 6 20 C 14 16, 16 14, 20 6 Z"' + LAB_ICON_SV + '/><circle class="acc" cx="34" cy="20" r="3.2"/>',
   /* planned — fluids (LBM wall shear): streamlines around a strut */
   fluid:   '<circle cx="20" cy="20" r="5.5"' + LAB_ICON_SV + '/><path d="M3 12 C 12 12, 14 8.5, 20 8.5 S 29 12, 37 12 M3 28 C 12 28, 14 31.5, 20 31.5 S 29 28, 37 28 M3 20 H10 M30 20 H37"' + LAB_ICON_SV + ' stroke-width="2.2"/><circle class="acc" cx="25.5" cy="16" r="2.8"/>'
 };

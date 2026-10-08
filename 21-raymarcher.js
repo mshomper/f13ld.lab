@@ -1301,6 +1301,10 @@ function fieldsetToTexOrder(fs) {
 
 LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
   if (this.failed || !fieldsObj) return;
+  /* v0.25.0 — declared here, not only inside the u' branch: shear fieldsets
+     (u' null) left it undefined, so the σ_VM cap became NaN and every
+     shear-axis surface painted the bottom colour (navy). */
+  var epsR = 1e-12;
   fieldsObj = fieldsetToTexOrder(fieldsObj);   /* solver order → texture order (x fastest) */
   var gl = this.gl;
   var N  = fieldsObj.N;

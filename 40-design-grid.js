@@ -837,7 +837,7 @@ function renderDesignGrid(){
         viewportInner +
         buckleChip +
         ((useRM || useSV) ? buildGimbalOverlay() : '') +
-        (readout ? '<div class="vp-readout"><span class="v">'+readout+'</span></div>' : '') +
+        /* v0.25.0 — the red readout chip is gone (Matt: the values are reported elsewhere) */
         (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +
         (showBuckleBar ? buildBuckleColorbar() : '') +
         ((VIEW_STATE.mode === 'thermal' && useRM) ? buildThermalColorbar(d) + buildClipPills() : '') +
@@ -846,7 +846,7 @@ function renderDesignGrid(){
           ? (VIEW_STATE.mode === 'stress'
               ? buildStressControl(d.id,
                                    (typeof getStressSat === 'function') ? getStressSat(d.id) : 1.0,
-                                   (typeof getStressAxis === 'function') ? getStressAxis(d.id) : 'zz')
+                                   (typeof getStressAxis === 'function') ? getStressAxis(d.id) : 'zz', amp)
               : (VIEW_STATE.mode === 'buckle'
                   ? buildBuckleControl(d.id,
                                        (typeof getBuckleExag === 'function') ? getBuckleExag(d.id) : 10,
@@ -1068,6 +1068,20 @@ function renderDesignGrid(){
         return;
       }
 
+      /* v0.25.0 — Stress tile: deformation only on the normal axes */
+      if (VIEW_STATE.mode === 'stress') {
+        var ctl = btn.closest ? btn.closest('.vp-stress-control') : null;
+        var amp2 = ctl ? ctl.querySelector('.amp-slider') : null;
+        if (amp2) {
+          var isShear = (axis === 'yz' || axis === 'xz' || axis === 'xy');
+          amp2.disabled = isShear;
+          amp2.parentNode.classList.toggle('dis', isShear);
+          var lv = amp2.parentNode.querySelector('.v');
+          if (lv) lv.textContent = isShear ? 'n/a' : (parseFloat(amp2.value) * 20).toFixed(1) + '% cell';
+          if (!isShear && rm && rm.setDeformAmp) rm.setDeformAmp(parseFloat(amp2.value));
+        }
+      }
+
       /* Swap visual active state across the three siblings, inline. */
       var siblings = btn.parentNode.querySelectorAll('.load-axis-btn');
       for (var sb = 0; sb < siblings.length; sb++){
@@ -1208,18 +1222,26 @@ function buildBuckleColorbar(){
    with default 1.0.  Reuses the .amp-slider visual but class-tagged
    .sat-slider for handler routing.  Sampling kernel hardcoded to
    cubic — see buildDeformControl note. */
-function buildStressControl(designId, sat, axis){
+function buildStressControl(designId, sat, axis, amp){
   function btn(ax) {
     var active = (axis === ax);
     return '<button class="load-axis-btn'+(active ? ' active' : '')+'" data-design-id="'+designId+'" data-axis="'+ax+'">'+ax.toUpperCase()+'</button>';
   }
-  return '<div class="vp-deform-control show">' +
+  /* v0.25.0 — the Deformed tab is folded in here: saturation AND
+     deformation.  Shear axes have no displacement field, so the
+     deformation slider is disabled on them (toggled inline on axis click). */
+  if (amp == null) amp = (typeof getDeformAmp === 'function') ? getDeformAmp(designId) : 0.25;
+  var shear = (axis === 'yz' || axis === 'xz' || axis === 'xy');
+  return '<div class="vp-deform-control vp-stress-control show">' +
     '<div class="load-axis-toggle six">' +
       btn('xx') + btn('yy') + btn('zz') + btn('yz') + btn('xz') + btn('xy') +
     '</div>' +
-    '<label>sat</label>' +
+    '<span class="vp-sl"><label>sat</label>' +
     '<input type="range" min="0" max="2" step="0.05" value="'+sat+'" data-design-id="'+designId+'" class="sat-slider">' +
-    '<span class="v">×'+sat.toFixed(2)+' auto</span>' +
+    '<span class="v">×'+sat.toFixed(2)+' auto</span></span>' +
+    '<span class="vp-sl'+(shear ? ' dis' : '')+'" title="'+(shear ? 'Shear load cases have no displacement field' : 'Deformation: largest displacement as a share of the cell')+'"><label>deform</label>' +
+    '<input type="range" min="0" max="1" step="0.01" value="'+amp+'" data-design-id="'+designId+'" class="amp-slider"'+(shear ? ' disabled' : '')+'>' +
+    '<span class="v">'+(shear ? 'n/a' : (amp*20).toFixed(1)+'% cell')+'</span></span>' +
     '</div>';
 }
 

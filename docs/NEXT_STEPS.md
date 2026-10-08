@@ -1,5 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
+> **2026-10-08 · v0.25.0** — shear-axis stresses paint (viewer NaN cap on fieldsets without u′, `uploadFields`); Deformed folded into **Stress** (saturation + deformation sliders, deformation off on shear axes); VIEW tabs renamed to match Configure with dock-style icons (new Stress and Stiffness icons); viewport readout chips removed. **Next session:** move Buckling and Crush voxel prep onto the 17c worker pool (as v0.24.0 did for elastic). Recap: [`SESSION_RECAP_2026-10-08.md`](SESSION_RECAP_2026-10-08.md).
+>
 > **2026-10-08 · v0.24.0** — Run and load no longer freeze the page: elastic voxel prep (voxels, margin, partial volume) and viewer field bakes moved to the 17c worker pool in slabs (bit-identical, `validate-prep.js`), non-blocking shader compile (KHR_parallel_shader_compile); startup splash ("Resolve") and VIEW-row status chip with the rippling F13LD mark (`52-status.js`); new defaults (Ti-6Al-4V G5 HIP, Elastic 64³ + Thermal water); Configure settings saved per browser with a reset; fixed grids (Auto removed). Still on the main thread: buckling and crush voxelization (off by default).
 >
 > **2026-10-08 · v0.23.0** — thermal Phase 3 (branch `thermal-phase3`): material conductivities revised from the literature (as-built AM where published, else wrought — Matt), heat capacity for every entry; Surface Area Density and Diffusivity rows on the Thermal κ cards; sweep *Physics: stiffness + thermal* with per-filler columns; geometry columns (porosity, surface area density, hydraulic diameter, open pore axes) on every sweep run; Atlas metrics. [`THERMAL_SCOPE.md`](THERMAL_SCOPE.md) §14.
@@ -55,6 +57,7 @@
 | **v0.17.0** | Plotly stress–strain plot (`20b-curve-plotly.js`, vendored basic bundle, SVG fallback): MPa / log / ÷ own yield, focus X/Y/Z/All, legend toggles, unified hover, zoom + range slider, PNG export; scrubber = shared strain timeline, linked both ways with the plot; KPI crush cards |
 | **v0.17.1** | Crush restarts at NL_TIGHT_NEWTON_TOL / NL_TIGHT_CG_TOL (1e-5) when the step-1 side-stress floor > 5 %, later axes of that design start tight; crush void from the softest axis; elastic macro stiffness reused across axes (`axStore._macro`) |
 | **v0.17.2** | Tight crush = Newton tolerance only (NL_TIGHT_CG_TOL = null), retry reuses the first attempt's elastic setup (cache keyed by void + cgTol); foam: floor 0.3 %, ~45 s per axis (was setup 85.5 s). Nonlinear-tab cubes pause while a run is solving |
+| **v0.25.0** | Shear stress display fix, Stress tab (deform merged), VIEW tab icons and names, readout chips removed |
 | **v0.24.0** | Worker-pool voxel prep and viewer bakes, async shader compile, splash + status chip (`52-status.js`), defaults, saved settings, fixed grids |
 | **v0.23.0** | Thermal Phase 3: materials (k basis, c_p), sweep thermal columns, geometry columns (`14e` surface area, open pores), card rows, Atlas metrics. `THERMAL_SCOPE.md` §14 |
 | **v0.22.0** | Bottom dock + Configure drawer (`51-dock.js`), physics icons, Lab red |

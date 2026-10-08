@@ -48,6 +48,7 @@ function onThermalFillerView(id){
    triggers re-render of the comparison area.
    ---------------------------------------------------------- */
 function onViewModeClick(mode){
+  if (mode === 'deform') mode = 'stress';   /* v0.25.0 — Deformed is part of the Stress tab */
   VIEW_STATE.mode = mode;
 
   // Update tab visual state

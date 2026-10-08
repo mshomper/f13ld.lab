@@ -71,7 +71,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.24.0</span>
+      <span class="fh-version">v0.25.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -88,14 +88,14 @@
   <!-- ============ VIEW MODE STRIP ============ -->
   <div class="view-strip">
     <span class="view-label">VIEW</span>
+    <!-- v0.25.0 — names and icons match the Configure drawer; Deformed is part of Stress -->
     <div class="view-tabs" id="viewTabs">
-      <button class="view-tab active" data-mode="geom"    onclick="onViewModeClick('geom')">Geometry</button>
-      <button class="view-tab"        data-mode="deform"  onclick="onViewModeClick('deform')">Deformed</button>
-      <button class="view-tab"        data-mode="stress"  onclick="onViewModeClick('stress')">Stress field</button>
-      <button class="view-tab"        data-mode="stiff"   onclick="onViewModeClick('stiff')">Stiffness ⊕</button>
-      <button class="view-tab"        data-mode="thermal" onclick="onViewModeClick('thermal')">Thermal κ</button>
-      <button class="view-tab"        data-mode="buckle"  onclick="onViewModeClick('buckle')">Buckling modes</button>
-      <button class="view-tab"        data-mode="curve"   onclick="onViewModeClick('curve')">Nonlinear</button>
+      <button class="view-tab active" data-mode="geom"    onclick="onViewModeClick('geom')"><span class="ico ico-vt mdl" data-ico="model"></span>Geometry</button>
+      <button class="view-tab"        data-mode="stress"  onclick="onViewModeClick('stress')"><span class="ico ico-vt" data-ico="stress"></span>Stress</button>
+      <button class="view-tab"        data-mode="stiff"   onclick="onViewModeClick('stiff')"><span class="ico ico-vt" data-ico="stiff"></span>Stiffness</button>
+      <button class="view-tab"        data-mode="thermal" onclick="onViewModeClick('thermal')"><span class="ico ico-vt" data-ico="thermal"></span>Thermal κ</button>
+      <button class="view-tab"        data-mode="buckle"  onclick="onViewModeClick('buckle')"><span class="ico ico-vt" data-ico="buckle"></span>Buckling</button>
+      <button class="view-tab"        data-mode="curve"   onclick="onViewModeClick('curve')"><span class="ico ico-vt" data-ico="nonlin"></span>Crush</button>
     </div>
     <!-- A.3.3 — Stress-normalization toggle (per-design auto vs shared linear).
          Hidden in non-stress modes; toggled via onViewModeClick. -->
