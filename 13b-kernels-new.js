@@ -40,6 +40,7 @@
    ============================================================ */
 
 
+/* ==== F13LD-GEOM-WAVE v1 · shared geometry (Lab ↔ Sweep). Keep byte-identical; check with f13ld.sweep tests/parity/geomsync.js ==== */
 /* ════════════════════════════════════════════════════════════
    WaveKernel — cymatic standing-wave field (F13LD.wave)
    Sum of cosine modes under one of five symmetry operators.
@@ -101,6 +102,7 @@ var WaveKernel = {
     return params.signFlip ? -cym : cym;
   }
 };
+/* ==== /F13LD-GEOM-WAVE ==== */
 
 
 /* ════════════════════════════════════════════════════════════
