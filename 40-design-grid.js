@@ -813,6 +813,11 @@ function renderDesignGrid(){
                      : ' \u2014 stocky, resolves at the coarse grid');
       sourceText += ' <span class="dc-predict-pill ' + _bpCls + '" title="' + _bpTip + '">' + _bpTxt + '</span>';
     }
+    /* v0.26.1 — stretched cells are solved as cubes here (until Lab takes them) */
+    var _st = (typeof labCellStretch === 'function') ? labCellStretch(d.raw_json) : null;
+    if (_st) sourceText += ' <span class="dc-predict-pill prone" title="This design\u2019s cell is stretched (edges ' +
+      _st.map(function (v) { return v.toFixed(2); }).join(' \u00d7 ') + '). F13LD.lab still solves every cell as a cube, so stiffness, ' +
+      'conductivity and transport here will differ from F13LD.sweep, which solves the stretched cell.">stretched cell</span>';
     /* STL import — geometry state, not-periodic tag, wall offset */
     if (d.family === 'import' && typeof importCardPills === 'function') sourceText += importCardPills(d);
     /* v0.8.0 — governing failure mode, on every tab: yield vs buckling. */

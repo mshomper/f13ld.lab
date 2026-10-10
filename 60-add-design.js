@@ -659,6 +659,32 @@ function normalizeDesignJson(json, filename){
   };
 }
 
+/* v0.26.1 — a design whose cell has unequal edges (TPMS cell_scale_x/y/z,
+   beam scale_xyz, wave field.stretch). Lab still solves every cell as a
+   cube, so its numbers differ from F13LD.sweep, which solves the stretched
+   cell (Matt, 2026-10-10: warn until Lab solves them). Returns the edges
+   relative to the longest, or null for a cube. Foam's anisotropy stretches
+   the cells inside a cubic tile, so foam is not flagged. */
+function labCellStretch(json){
+  if (!json) return null;
+  var fam = json.family || '', g = json.geometry || {}, e = null;
+  var pos3 = function (a) { return Array.isArray(a) && a.length === 3 && a.every(function (v) { return typeof v === 'number' && isFinite(v) && v > 0; }); };
+  if (fam === 'wave' || (json.field && Array.isArray(json.field.modes))) {
+    if (json.field && pos3(json.field.stretch)) e = json.field.stretch.slice();
+  } else if (fam === 'beam' || Array.isArray(json.beams)) {
+    if (pos3(g.scale_xyz)) e = g.scale_xyz.slice();
+    else if (pos3([g.cell_scale_x, g.cell_scale_y, g.cell_scale_z])) e = [g.cell_scale_x, g.cell_scale_y, g.cell_scale_z];
+  } else if (fam === 'tpms' || (json.surface && (json.surface.type === 'terms' || json.surface.type === 'raw_preset'))) {
+    var d = typeof g.cell_scale === 'number' && g.cell_scale > 0 ? g.cell_scale : 1;
+    var c = [g.cell_scale_x != null ? g.cell_scale_x : d, g.cell_scale_y != null ? g.cell_scale_y : d, g.cell_scale_z != null ? g.cell_scale_z : d];
+    if (pos3(c)) e = c.map(function (v) { return 1 / v; });   /* cells per unit → edge */
+  }
+  if (!e) return null;
+  var m = Math.max(e[0], e[1], e[2]);
+  e = e.map(function (v) { return v / m; });
+  return (Math.min(e[0], e[1], e[2]) > 0.995) ? null : e;
+}
+
 /* Sprint A — first free id among loaded designs: base, base-2, base-3 … */
 function uniqueDesignId(base, designs){
   designs = designs || ((typeof LAB_STATE !== 'undefined') ? LAB_STATE.designs : []);
