@@ -231,7 +231,27 @@ function tpmsPairB(pair, x, y, z, dx, dy, dz) {
    matches and the range is recomputed exactly as the tool's export
    does (_prepass: 32³ corner-inclusive scan, ±5 % pad).  Recipes
    with no stamp (older imports, tests) keep their stored range.
+
+   ── Revisions (surface.noise_rev) ─────────────────────────────
+   1 (absent) — recipes from F13LD.noise ≤ v0.11.0.  The CPU simplex
+     picked lattice gradients with floor(j·0.142857142857), a hair under
+     1/7 in 64-bit floats, so ~12 % of lattice corners got a wrong,
+     oversized gradient (range ≈ ±4.5).  Kept bit-for-bit so recipes
+     already baked keep building the same part.
+   2 — F13LD.noise v0.12.0+, defined so that 64-bit JS and 32-bit GPU
+     shaders compute the same lattice exactly (range ≈ ±1):
+       · gradient index: exact integer mod 49 and divide by 7;
+       · gradient fold: integer test |4x−13| + |4y−13| ≥ 14 instead of
+         h ≤ 0 — 7 of the 49 gradients sit exactly on h = 0, where the
+         float test flips with rounding (64- and 32-bit disagree on all 7);
+       · Worley cell seeds: PCG3D integer hash (Jarzynski & Olano 2020)
+         of the cell index — the float hash33 loses ~0.002 at large
+         coordinates in 32-bit floats;
+       · domain warp displaces with min(octaves, 2) octaves of FBM, as the
+         tool's preview always did.
+   Anything newer is refused rather than guessed.
    ════════════════════════════════════════════════════════════ */
+var NOISE_REV_LATEST = 2;
 var NOISE_TYPES = ['simplex', 'cellular', 'fbm', 'ridged', 'billow', 'foam', 'strut', 'veined', 'curl', 'warp'];
 
 var NoiseKernel = {
@@ -241,6 +261,7 @@ var NoiseKernel = {
   _permute: function (x) { return this._mod289(((x * 34.0) + 1.0) * x); },
   _tis:     function (r) { return 1.79284291400159 - 0.85373472095314 * r; },
   _frac:    function (x) { return x - Math.floor(x); },
+  _rev2:    false,     /* set per call by _sampleRaw from params.noiseRev */
 
   /* 3D simplex noise — verbatim from Noise tool DeterministicNoise.snoise */
   _snoise: function (vx, vy, vz) {
@@ -262,14 +283,22 @@ var NoiseKernel = {
     var p2 = this._permute(this._permute(this._permute(iz+i2z)+iy+i2y)+ix+i2x);
     var p3 = this._permute(this._permute(this._permute(iz+1)+iy+1)+ix+1);
     var nx = 0.285714285714, ny = -0.928571428571, nz = 0.142857142857;
-    var j0 = p0-49*Math.floor(p0*nz*nz);
-    var j1 = p1-49*Math.floor(p1*nz*nz);
-    var j2 = p2-49*Math.floor(p2*nz*nz);
-    var j3 = p3-49*Math.floor(p3*nz*nz);
-    var x0_ = Math.floor(j0*nz), y0_ = Math.floor(j0-7*x0_);
-    var x1_ = Math.floor(j1*nz), y1_ = Math.floor(j1-7*x1_);
-    var x2_ = Math.floor(j2*nz), y2_ = Math.floor(j2-7*x2_);
-    var x3_ = Math.floor(j3*nz), y3_ = Math.floor(j3-7*x3_);
+    var j0, j1, j2, j3, x0_, x1_, x2_, x3_;
+    if (this._rev2) {
+      /* noise rev 2: exact integer mod 49 and divide by 7 (as the GPU) */
+      j0 = p0-49*Math.floor(p0/49); j1 = p1-49*Math.floor(p1/49);
+      j2 = p2-49*Math.floor(p2/49); j3 = p3-49*Math.floor(p3/49);
+      x0_ = Math.floor(j0/7); x1_ = Math.floor(j1/7);
+      x2_ = Math.floor(j2/7); x3_ = Math.floor(j3/7);
+    } else {
+      /* noise rev 1 (legacy): truncated 1/7 — see Revisions above */
+      j0 = p0-49*Math.floor(p0*nz*nz); j1 = p1-49*Math.floor(p1*nz*nz);
+      j2 = p2-49*Math.floor(p2*nz*nz); j3 = p3-49*Math.floor(p3*nz*nz);
+      x0_ = Math.floor(j0*nz); x1_ = Math.floor(j1*nz);
+      x2_ = Math.floor(j2*nz); x3_ = Math.floor(j3*nz);
+    }
+    var y0_ = Math.floor(j0-7*x0_), y1_ = Math.floor(j1-7*x1_);
+    var y2_ = Math.floor(j2-7*x2_), y3_ = Math.floor(j3-7*x3_);
     var xs0 = x0_*nx+ny, ys0 = y0_*nx+ny;
     var xs1 = x1_*nx+ny, ys1 = y1_*nx+ny;
     var xs2 = x2_*nx+ny, ys2 = y2_*nx+ny;
@@ -278,7 +307,15 @@ var NoiseKernel = {
     var h1 = 1-Math.abs(xs1)-Math.abs(ys1);
     var h2 = 1-Math.abs(xs2)-Math.abs(ys2);
     var h3 = 1-Math.abs(xs3)-Math.abs(ys3);
-    var sh0 = h0<=0?-1:0, sh1 = h1<=0?-1:0, sh2 = h2<=0?-1:0, sh3 = h3<=0?-1:0;
+    var sh0, sh1, sh2, sh3;
+    if (this._rev2) {   /* exact fold test (h is 0 exactly on 7 of the 49 gradients) */
+      sh0 = Math.abs(4*x0_-13)+Math.abs(4*y0_-13) >= 14 ? -1 : 0;
+      sh1 = Math.abs(4*x1_-13)+Math.abs(4*y1_-13) >= 14 ? -1 : 0;
+      sh2 = Math.abs(4*x2_-13)+Math.abs(4*y2_-13) >= 14 ? -1 : 0;
+      sh3 = Math.abs(4*x3_-13)+Math.abs(4*y3_-13) >= 14 ? -1 : 0;
+    } else {
+      sh0 = h0<=0?-1:0; sh1 = h1<=0?-1:0; sh2 = h2<=0?-1:0; sh3 = h3<=0?-1:0;
+    }
     var pp0x = xs0+(Math.floor(xs0)*2+1)*sh0, pp0y = ys0+(Math.floor(ys0)*2+1)*sh0, pp0z = h0;
     var pp1x = xs1+(Math.floor(xs1)*2+1)*sh1, pp1y = ys1+(Math.floor(ys1)*2+1)*sh1, pp1z = h1;
     var pp2x = xs2+(Math.floor(xs2)*2+1)*sh2, pp2y = ys2+(Math.floor(ys2)*2+1)*sh2, pp2z = h2;
@@ -305,10 +342,24 @@ var NoiseKernel = {
      tool (JS + GLSL) and Mesh m10-noise.js.  Replaces the old sin-fract
      hash, which the tool dropped because it clustered. */
   _hash33: function (px, py, pz) {
+    if (this._rev2) return this._pcg3(px, py, pz);
     var qx = this._frac(px*0.1031), qy = this._frac(py*0.1030), qz = this._frac(pz*0.0973);
     var d = qx*(qy+33.33) + qy*(qx+33.33) + qz*(qz+33.33);
     qx += d; qy += d; qz += d;
     return [this._frac((qx+qy)*qz), this._frac((qx+qx)*qy), this._frac((qx+qy)*qx)];
+  },
+
+  /* PCG3D integer hash of an integer cell index → [0,1)³ (noise rev 2).
+     Same bits as the GLSL uvec3 version: 32-bit wrapping multiplies, top
+     24 bits kept so the float result is exact in 32-bit floats too. */
+  _pcg3: function (cx, cy, cz) {
+    var x = (Math.imul(cx|0, 1664525) + 1013904223) >>> 0;
+    var y = (Math.imul(cy|0, 1664525) + 1013904223) >>> 0;
+    var z = (Math.imul(cz|0, 1664525) + 1013904223) >>> 0;
+    x = (x + Math.imul(y, z)) >>> 0; y = (y + Math.imul(z, x)) >>> 0; z = (z + Math.imul(x, y)) >>> 0;
+    x = (x ^ (x >>> 16)) >>> 0; y = (y ^ (y >>> 16)) >>> 0; z = (z ^ (z >>> 16)) >>> 0;
+    x = (x + Math.imul(y, z)) >>> 0; y = (y + Math.imul(z, x)) >>> 0; z = (z + Math.imul(x, y)) >>> 0;
+    return [(x >>> 8) / 16777216, (y >>> 8) / 16777216, (z >>> 8) / 16777216];
   },
 
   /* Worley loop shared by cellular / foam / strut: 3×3×3 neighbourhood,
@@ -381,9 +432,11 @@ var NoiseKernel = {
   },
 
   _warp: function (px, py, pz, strength, octaves, lacunarity, gain) {
-    var qx = this._fbm(px, py, pz, octaves, lacunarity, gain);
-    var qy = this._fbm(px+5.2, py+1.3, pz+8.1, octaves, lacunarity, gain);
-    var qz = this._fbm(px+3.7, py+9.4, pz+2.8, octaves, lacunarity, gain);
+    /* rev 2: the displacement uses at most 2 octaves; rev 1 used them all */
+    var qo = this._rev2 ? Math.min(octaves, 2) : octaves;
+    var qx = this._fbm(px, py, pz, qo, lacunarity, gain);
+    var qy = this._fbm(px+5.2, py+1.3, pz+8.1, qo, lacunarity, gain);
+    var qz = this._fbm(px+3.7, py+9.4, pz+2.8, qo, lacunarity, gain);
     return this._fbm(px+strength*qx, py+strength*qy, pz+strength*qz, octaves, lacunarity, gain);
   },
 
@@ -440,6 +493,7 @@ var NoiseKernel = {
   /* Raw field at noise-input point (sx,sy,sz) — the tool's
      DeterministicNoise.sample(): seed offset first, then type dispatch. */
   _sampleRaw: function (params, sx, sy, sz) {
+    this._rev2 = params.noiseRev >= 2;
     var so = params.seedOffset;
     if (so) { sx += so[0]; sy += so[1]; sz += so[2]; }
     var t = params.noiseType;
@@ -501,8 +555,13 @@ var NoiseKernel = {
       throw new Error('NoiseKernel: unknown noise type "' + t + '" (supported: ' + NOISE_TYPES.join(', ') + ')');
     }
     var seed = s.seed != null ? +s.seed : 0;
+    var rev = s.noise_rev != null ? +s.noise_rev : 1;
+    if (!(rev === 1 || rev === 2)) {
+      throw new Error('NoiseKernel: noise revision ' + s.noise_rev + ' is newer than this tool knows (latest ' + NOISE_REV_LATEST + ')');
+    }
     return {
       noiseType:      t,
+      noiseRev:       rev,
       frequency:      s.frequency != null ? s.frequency : 0.3,
       /* the tool's prepass and voxelizer read scaleX||1 */
       scaleX:         s.scale_x || 1.0,
@@ -571,9 +630,12 @@ var NoiseKernel = {
    range), from parsed params.  noiseNormKey(surface) is the stamp
    60-add-design.js writes to surface.norm_for on import. */
 function noiseFieldKey(p) {
-  return JSON.stringify([p.noiseType, +p.frequency, +p.scaleX, +p.scaleY, +p.scaleZ, +p.octaves, +p.lacunarity,
+  var k = [p.noiseType, +p.frequency, +p.scaleX, +p.scaleY, +p.scaleZ, +p.octaves, +p.lacunarity,
     +p.gain, +p.warpStrength, p.distanceMetric, +p.jitter, +p.veinTurb, +p.veinFreq, +p.curlStep,
-    +p.potentialScale, +p.seed]);
+    +p.potentialScale, +p.seed];
+  /* rev 1 keys stay exactly as before, so stamps already written still match */
+  if (p.noiseRev >= 2) k.push('rev' + p.noiseRev);
+  return JSON.stringify(k);
 }
 function noiseNormKey(surface) { return noiseFieldKey(NoiseKernel._readField(surface || {})); }
 /* ==== /F13LD-GEOM-NOISE ==== */

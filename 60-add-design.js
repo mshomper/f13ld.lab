@@ -424,7 +424,11 @@ function labRecipeFromJson(json, title, info){
           geometry: buildLabGeometry(json.geometry, 'noise-sheet'),
           material: json.material || DEFAULT_MATERIAL
         };
-        recipeNote = 'Noise recipe accepted';
+        /* noise_rev absent = revision 1 (F13LD.noise <= v0.11.0, legacy simplex): it builds
+           exactly as before, but F13LD.vault only takes revision 2 (F13LD.ingest rule). */
+        recipeNote = nSurf.noise_rev == null || +nSurf.noise_rev < 2
+          ? 'Noise recipe accepted (legacy noise revision 1 — builds as before; F13LD.vault takes revision 2 only)'
+          : 'Noise recipe accepted';
       } else {
         recipeNote = 'Noise recipe missing surface block (type="noise") — falling back to SVG mock';
       }
