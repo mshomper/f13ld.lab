@@ -560,7 +560,7 @@ function sweepNotesFor(run, r) {
 }
 
 /* ── Geometry checks (worker) ─────────────────────────────── */
-var SWEEP_GEOM_VERSION = 'swg-6';   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — 14e geometry metrics (surface area, open pores) */
+var SWEEP_GEOM_VERSION = 'swg-7';   /* v0.27.0 — straight-reach load axes (14a) */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — 14e geometry metrics (surface area, open pores) */
 var SWEEP_THIN_VOX = 6;          /* Matt, 2026-10-01: flag under 6 voxels across the thinnest feature */
 var _swWorker = null, _swJobs = {}, _swNext = 1;
 function sweepGeomWorker() {
@@ -628,8 +628,14 @@ function sweepFlags(run, st) {
   if (st.vf_raw === 0) { f.push({ level: 'skip', short: 'empty', text: 'empty cell: no solid at this setting' }); return f; }
   if (st.vf_trim === 0) { f.push({ level: 'skip', short: 'no load path', text: 'every piece is a floating island; nothing spans the cell' }); return f; }
   if (st.vf_trim >= 0.999) { f.push({ level: 'skip', short: 'fully solid', text: 'the cell is fully solid at this setting' }); return f; }
-  if (!st.spans.x && !st.spans.y && !st.spans.z) { f.push({ level: 'skip', short: 'no load path', text: 'the solid spans the cell on no axis' }); return f; }
-  if (!(st.spans.x && st.spans.y && st.spans.z)) {
+  /* v0.27.0 — spans is the straight reach; a piece that only meets its copy
+     diagonally (tilted sheets) carries no load along x, y or z but still
+     conducts heat, so it is solved with a warning, not skipped */
+  var reach = st.reach || st.spans;
+  if (!reach.x && !reach.y && !reach.z) { f.push({ level: 'skip', short: 'no load path', text: 'the solid spans the cell on no axis' }); return f; }
+  if (!st.spans.x && !st.spans.y && !st.spans.z) {
+    f.push({ level: 'warn', short: 'no straight load path', text: 'the solid only meets itself diagonally (tilted sheets or fibres), so it carries no load along x, y or z; stiffness will sit near the void level on every axis' });
+  } else if (!(st.spans.x && st.spans.y && st.spans.z)) {
     var ax = ['x', 'y', 'z'].filter(function (a) { return st.spans[a]; }).join(', ');
     f.push({ level: 'warn', short: 'spans ' + ax + ' only', text: 'carries load along ' + ax + ' only; stiffness on the other axes will sit near the void level (about ' + (SWEEP_STATE.voidRatio || 1e-4).toExponential(0) + ' of the solid)' });
   }

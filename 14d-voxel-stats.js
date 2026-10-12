@@ -43,11 +43,14 @@ function sweepGeometryStats(recipe, N, connectivity) {
   var trim = 0;
   for (var j = 0; j < N3; j++) trim += kept[j];
   var out = { N: N, vf_raw: raw / N3, vf_trim: trim / N3, spans: { x: false, y: false, z: false },
-              networks: 0, islands: 0, thinVox: null, medVox: null };
+              reach: { x: false, y: false, z: false }, networks: 0, islands: 0, thinVox: null, medVox: null };
   if (!trim) return out;
-  var pc = periodicComponents(kept, N), bits = 0;
-  for (var c = 1; c <= pc.count; c++) { if (pc.wraps[c]) { out.networks++; bits |= pc.wraps[c]; } else out.islands++; }
-  out.spans = { x: !!(bits & 1), y: !!(bits & 2), z: !!(bits & 4) };
+  /* v0.27.0 — spans = the straight reach (carries load along the axis);
+     reach = any wrap, e.g. sheets tilted 45° (heat and fluid follow them) */
+  var pc = periodicComponents(kept, N), bits = 0, ax = 0;
+  for (var c = 1; c <= pc.count; c++) { if (pc.wraps[c]) { out.networks++; bits |= pc.wraps[c]; ax |= pc.axial[c]; } else out.islands++; }
+  out.spans = { x: !!(ax & 1), y: !!(ax & 2), z: !!(ax & 4) };
+  out.reach = { x: !!(bits & 1), y: !!(bits & 2), z: !!(bits & 4) };
   if (trim < N3) {
     var ft = sweepFeatureThickness(kept, N);
     out.thinVox = ft.thin; out.medVox = ft.med;

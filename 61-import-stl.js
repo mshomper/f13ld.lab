@@ -129,9 +129,10 @@ function importSpanning(hash, offsetField) {
   var N = 64;
   var params = ImportKernel.parseRecipe({ import: { hash: hash } });
   var solid = buildVoxels('import', params, offsetField, N, 'solid');
+  /* v0.27.0 — spanning = the straight reach (carries load along the axis) */
   var pc = periodicComponents(solid, N), bits = 0, networks = 0, islands = 0;
   for (var c = 1; c <= pc.count; c++) {
-    if (pc.wraps[c]) { networks++; bits |= pc.wraps[c]; } else islands++;
+    if (pc.wraps[c]) { networks++; bits |= pc.axial[c]; } else islands++;
   }
   return { x: !!(bits & 1), y: !!(bits & 2), z: !!(bits & 4), networks: networks, islands: islands };
 }
