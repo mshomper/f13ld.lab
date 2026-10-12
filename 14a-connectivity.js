@@ -336,25 +336,57 @@ function pruneSmallIslands(solid, N, opts) {
    direction.  A component that wraps no axis is a finite floating island
    in the tiled structure — it carries no load.
    Returns { label:Int32Array (0 = void), sizes:[0, s1, …], wraps:[0, bits…],
-   count } with wrap bits 1 = x, 2 = y, 4 = z.
+   axial:[0, bits…], count } with bits 1 = x, 2 = y, 4 = z.
+
+   v0.27.0 — `wraps` is ANY reach: a sheet tilted 45° meets its own copy
+   one cell over on x AND y, so it wraps x and y. Heat, fluid and in-plane
+   shear follow such a sheet. Uniaxial LOAD does not: pulled along x, tilted
+   sheets slide past each other. `axial` is the straight reach — the axes a
+   piece meets its own copy straight along (after one or more cells): the
+   axis lies in the span of the component's wrap vectors. Load-path checks
+   (loadBearingAxes, the sweep's spans) read `axial`.
    ============================================================ */
+function wrapSpanAdd(B, v) {
+  /* B: reduced basis rows (≤ 3), v: integer wrap vector → true if added */
+  var r = [v[0], v[1], v[2]], i, k, f, b;
+  for (i = 0; i < B.length; i++) { b = B[i]; f = r[b.p] / b.v[b.p]; if (f) for (k = 0; k < 3; k++) r[k] -= f * b.v[k]; }
+  var p = -1, best = 1e-9;
+  for (k = 0; k < 3; k++) if (Math.abs(r[k]) > best) { best = Math.abs(r[k]); p = k; }
+  if (p < 0) return false;
+  for (i = 0; i < B.length; i++) { b = B[i]; f = b.v[p] / r[p]; if (f) for (k = 0; k < 3; k++) b.v[k] -= f * r[k]; }
+  B.push({ v: r, p: p });
+  return true;
+}
+function wrapSpanAxes(B) {
+  /* bit a set iff the unit vector e_a lies in span(B) */
+  if (B.length === 3) return 7;
+  var bits = 0, a, i, k, f, b, r;
+  for (a = 0; a < 3; a++) {
+    r = [0, 0, 0]; r[a] = 1;
+    for (i = 0; i < B.length; i++) { b = B[i]; f = r[b.p] / b.v[b.p]; if (f) for (k = 0; k < 3; k++) r[k] -= f * b.v[k]; }
+    if (Math.abs(r[0]) < 1e-9 && Math.abs(r[1]) < 1e-9 && Math.abs(r[2]) < 1e-9) bits |= 1 << a;
+  }
+  return bits;
+}
 function periodicComponents(solid, N) {
   var N3 = N * N * N, SA = N * N, SB = N, Nm1 = N - 1;
   var label = new Int32Array(N3), stack = new Int32Array(N3);
   var ox = new Int8Array(N3), oy = new Int8Array(N3), oz = new Int8Array(N3);
-  var sizes = [0], wraps = [0], comp = 0, top = 0;
+  var sizes = [0], wraps = [0], axial = [0], comp = 0, top = 0, span = [];
   function visit(nb, cx, cy, cz, cId) {
     if (!solid[nb]) return;
     if (!label[nb]) { label[nb] = cId; ox[nb] = cx; oy[nb] = cy; oz[nb] = cz; stack[top++] = nb; return; }
-    var w = 0;
-    if (ox[nb] !== ((cx << 24) >> 24)) w |= 1;   /* compare as int8 (offsets wrap in the typed array) */
-    if (oy[nb] !== ((cy << 24) >> 24)) w |= 2;
-    if (oz[nb] !== ((cz << 24) >> 24)) w |= 4;
-    if (w) wraps[cId] |= w;
+    var dx = (((cx << 24) >> 24) - ox[nb]) << 24 >> 24;   /* int8 differences (offsets wrap in the typed array) */
+    var dy = (((cy << 24) >> 24) - oy[nb]) << 24 >> 24;
+    var dz = (((cz << 24) >> 24) - oz[nb]) << 24 >> 24;
+    if (!(dx || dy || dz)) return;
+    wraps[cId] |= (dx ? 1 : 0) | (dy ? 2 : 0) | (dz ? 4 : 0);
+    if (span.length < 3) wrapSpanAdd(span, [dx, dy, dz]);
   }
   for (var seed = 0; seed < N3; seed++) {
     if (!solid[seed] || label[seed]) continue;
-    comp++; sizes.push(0); wraps.push(0);
+    if (comp) axial.push(wrapSpanAxes(span));
+    comp++; sizes.push(0); wraps.push(0); span = [];
     top = 0; stack[top++] = seed; label[seed] = comp; ox[seed] = 0; oy[seed] = 0; oz[seed] = 0;
     while (top > 0) {
       var idx = stack[--top]; sizes[comp]++;
@@ -369,7 +401,17 @@ function periodicComponents(solid, N) {
       visit(a * SA + b * SB + (c === Nm1 ? 0 : c + 1), X, Y, c === Nm1 ? Z + 1 : Z, comp);
     }
   }
-  return { label: label, sizes: sizes, wraps: wraps, count: comp };
+  if (comp) axial.push(wrapSpanAxes(span));
+  return { label: label, sizes: sizes, wraps: wraps, axial: axial, count: comp };
+}
+
+/* v0.27.0 — the axes the solid carries uniaxial load along: some piece
+   meets its own copy straight along the axis (periodicComponents.axial).
+   → { x, y, z, reach: { x, y, z } } — reach = any wrap (heat, fluid). */
+function loadBearingAxes(solid, N) {
+  var pc = periodicComponents(solid, N), ax = 0, any = 0;
+  for (var c = 1; c <= pc.count; c++) { ax |= pc.axial[c]; any |= pc.wraps[c]; }
+  return { x: !!(ax & 1), y: !!(ax & 2), z: !!(ax & 4), reach: { x: !!(any & 1), y: !!(any & 2), z: !!(any & 4) } };
 }
 
 /* ============================================================

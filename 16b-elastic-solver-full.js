@@ -1612,6 +1612,9 @@ async function solveDesignElasticFull(recipe, N, opts) {
   if (typeof checkVoxelConnectivity === 'function') {
     var tConn0 = performance.now();
     connectivity = checkVoxelConnectivity(solid, N);
+    /* v0.27.0 — the axes the solid carries load along (straight reach);
+       the cards hide the Zener ratio when it is not all three */
+    if (typeof loadBearingAxes === 'function') connectivity.loadAxes = loadBearingAxes(solid, N);
     var tConn  = performance.now() - tConn0;
     if (connectivity.numComponents > 1) {
       console.warn('[connectivity] ' + connectivity.orphans + ' orphan voxel(s) in ' +

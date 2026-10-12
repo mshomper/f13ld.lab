@@ -167,6 +167,10 @@ function statsForDesign(d, mode){
   }
   var zVal = (r.zener > 0 && isFinite(r.zener)) ? r.zener.toFixed(2) : '\u2014';
   var zDesc = (r.zener > 0 && isFinite(r.zener)) ? zenerDescriptor(r.zener) : '\u2014';
+  /* v0.27.0 — the Zener ratio compares the cubic axes; it means nothing
+     when the solid carries load along only some of them */
+  var loadNote = loadAxesNote(r);
+  if (loadNote) { zVal = '\u2014'; zDesc = loadNote; }
 
   // Default: stiffness-flavored summary
   if (mode === 'geom' || mode === 'deform' || mode === 'stress' || mode === 'stiff'){
@@ -491,6 +495,16 @@ function thermalReadout(d){
   if (!f) return (th && th.error) ? ('\u03ba \u2014 ' + th.error) : '\u03ba = \u2014 \u00b7 enable Thermal \u03ba + Run';
   return '\u03ba ' + fmtKappa(f.kx).replace(' W/m\u00b7K', '') + ' / ' + fmtKappa(f.ky).replace(' W/m\u00b7K', '') + ' / ' +
          fmtKappa(f.kz) + ' \u00b7 ' + fid + ' \u00b7 N=' + th.N;
+}
+
+/* v0.27.0 — 'carries load on z only' / 'no straight load path' when the
+   solid carries load along fewer than three axes (connectivity.loadAxes,
+   16b), else null. */
+function loadAxesNote(r){
+  var la = r && r.connectivity && r.connectivity.loadAxes;
+  if (!la || (la.x && la.y && la.z)) return null;
+  var ax = ['x', 'y', 'z'].filter(function (a) { return la[a]; });
+  return ax.length ? 'carries load on ' + ax.join(', ') + ' only' : 'no straight load path';
 }
 
 function zenerDescriptor(z){
@@ -1308,6 +1322,9 @@ function readoutForDesign(d, mode){
             return '—';
           }
           var anisoStr = isFinite(ss.aniso) ? ss.aniso.toFixed(2) : '∞';
+          /* v0.27.0 — E_min is the void when an axis carries no load */
+          var ln = loadAxesNote(d.results);
+          if (ln) anisoStr = '— (' + ln + ')';
           return 'E_max ' + fmtE(ss.E_max) + ' · E_min ' + fmtE(ss.E_min) +
                  ' · aniso ' + anisoStr;
         }
