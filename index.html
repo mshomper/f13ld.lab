@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="lab.css">
+<link rel="stylesheet" href="lab.css?v=0.29.1">
 </head>
 <body>
 <!-- v0.24.0 — startup splash: the wordmark resolves from scrambled glyphs
@@ -120,10 +120,10 @@
     <div class="stress-norm-toggle-group flow-anim-group" id="flowAnimToggle">
       <span class="stress-norm-label">Particles</span>
       <button class="stress-norm-btn flow-play" title="Pause" onclick="onFlowPlayToggle(this)"></button>
-      <span class="fa-sl" title="Animation speed. Changes how fast particles move, not how long the streaks are."><label>speed</label><input type="range" min="0.25" max="3" step="0.05" value="1" oninput="onFlowSpeed(this)"><output>1.00&times;</output></span>
-      <span class="fa-sl" title="Streak length: how much flow time each streak covers. Faster fluid still draws longer streaks."><label>length</label><input type="range" min="0.25" max="2" step="0.05" value="1" oninput="onFlowLength(this)"><output>1.00&times;</output></span>
-      <span class="fa-sl" title="Streak width"><label>size</label><input type="range" min="0.5" max="4" step="0.1" value="1" oninput="onFlowSize(this)"><output>1.0&times;</output></span>
-      <span class="fa-sl" title="Particles per tile"><label>count</label><input type="range" min="500" max="6000" step="250" value="2500" oninput="onFlowCount(this)"><output>2500</output></span>
+      <span class="fa-sl" title="Animation speed. Changes how fast particles move, not how long the streaks are."><span class="fa-l">speed</span><input type="range" min="0.25" max="3" step="0.05" value="1" oninput="onFlowSpeed(this)"><span class="fa-v">1.00&times;</span></span>
+      <span class="fa-sl" title="Streak length: how much flow time each streak covers. Faster fluid still draws longer streaks."><span class="fa-l">length</span><input type="range" min="0.25" max="2" step="0.05" value="1" oninput="onFlowLength(this)"><span class="fa-v">1.00&times;</span></span>
+      <span class="fa-sl" title="Streak width"><span class="fa-l">size</span><input type="range" min="0.5" max="4" step="0.1" value="1" oninput="onFlowSize(this)"><span class="fa-v">1.0&times;</span></span>
+      <span class="fa-sl" title="Particles per tile"><span class="fa-l">count</span><input type="range" min="500" max="6000" step="250" value="2500" oninput="onFlowCount(this)"><span class="fa-v">2500</span></span>
     </div>
     <div class="right">
       <!-- v0.24.0 — status chip (52-status.js): animated F13LD mark + state +
@@ -267,11 +267,11 @@
 <script src="20-svg-mocks.js"></script>
 <script src="20b-curve-plotly.js"></script>
 <script src="20c-f13-shade.js"></script>
-<script src="21-raymarcher.js"></script>
+<script src="21-raymarcher.js?v=0.29.1"></script>
 <script src="22-stiffness-viz.js"></script>
-<script src="23-flow-viz.js"></script>
-<script src="30-view-tabs.js"></script>
-<script src="40-design-grid.js"></script>
+<script src="23-flow-viz.js?v=0.29.1"></script>
+<script src="30-view-tabs.js?v=0.29.1"></script>
+<script src="40-design-grid.js?v=0.29.1"></script>
 <script src="50-controls.js"></script>
 <script src="51-dock.js"></script>
 <script src="52-status.js"></script>

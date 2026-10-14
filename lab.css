@@ -623,15 +623,25 @@ html, body {
   padding:3px 9px; cursor:pointer; letter-spacing:0.05em; line-height:1;
 }
 .stress-norm-btn.active { background:var(--neon); border-color:var(--neon); color:#0a0a0a }
-/* v0.29.1 — shared tracer particle controls in the view strip; wraps, never scrolls */
+/* v0.29.1 — shared tracer particle controls in the view strip; wraps, never scrolls.
+   Same type as the strip: 9–10 px JetBrains Mono, dim uppercase labels,
+   values in the lab accent, thin track with a neon thumb. */
 .view-strip { flex-wrap:wrap; row-gap:8px }
-.flow-anim-group.show { display:inline-flex; flex-wrap:wrap; row-gap:6px; column-gap:12px; min-width:0; max-width:100% }
-.flow-anim-group .stress-norm-label { margin-right:0 }
-.flow-anim-group .flow-play { display:inline-flex; align-items:center; justify-content:center; padding:3px 7px; color:rgba(255,255,255,0.8) }
+.flow-anim-group.show { display:inline-flex; flex-wrap:wrap; align-items:center; row-gap:6px; column-gap:14px; min-width:0; max-width:100% }
+.flow-anim-group .stress-norm-label { margin-right:-4px }
+.flow-anim-group .flow-play { display:inline-flex; align-items:center; justify-content:center; height:20px; padding:0 7px; color:rgba(255,255,255,0.8); flex:none }
 .flow-anim-group .flow-play svg { display:block }
-.fa-sl { display:inline-flex; align-items:center; gap:6px; font:10px 'JetBrains Mono', ui-monospace, monospace; color:rgba(255,255,255,0.55); letter-spacing:0.06em }
-.fa-sl input[type=range] { width:84px; accent-color:var(--neon) }
-.fa-sl output { min-width:38px; color:rgba(255,255,255,0.8) }
+.fa-sl { display:inline-flex; flex:none; align-items:center; gap:7px; height:20px; white-space:nowrap; line-height:1 }
+.fa-sl .fa-l { font:9px 'JetBrains Mono', ui-monospace, monospace; color:rgba(255,255,255,0.5); text-transform:uppercase; letter-spacing:0.12em }
+.fa-sl .fa-v { font:600 10px 'JetBrains Mono', ui-monospace, monospace; color:var(--lab); min-width:36px; text-align:left }
+.fa-sl input[type=range] { -webkit-appearance:none; appearance:none; width:76px; height:14px; margin:0; padding:0; background:transparent; cursor:pointer }
+.fa-sl input[type=range]:focus { outline:none }
+.fa-sl input[type=range]::-webkit-slider-runnable-track { height:2px; background:rgba(255,255,255,0.18); border-radius:1px }
+.fa-sl input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:10px; height:10px; margin-top:-4px; border-radius:50%; background:var(--neon); border:0 }
+.fa-sl input[type=range]::-moz-range-track { height:2px; background:rgba(255,255,255,0.18); border-radius:1px; border:0 }
+.fa-sl input[type=range]::-moz-range-progress { height:2px; background:var(--neon) }
+.fa-sl input[type=range]::-moz-range-thumb { width:10px; height:10px; border-radius:50%; background:var(--neon); border:0 }
+.fa-sl input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow:0 0 0 3px rgba(200,245,66,0.25) }
 
 /* ============ RESPONSIVE ============ */
 @media (max-width: 1280px) {

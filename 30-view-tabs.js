@@ -76,7 +76,7 @@ function onFlowPlayToggle(btn){
 }
 /* v0.29.1 — the sliders live once, in the view strip (#flowAnimToggle) */
 function flowSliderLabel(el, txt){
-  var o = el && el.parentNode ? el.parentNode.querySelector('output') : null;
+  var o = el && el.parentNode ? el.parentNode.querySelector('.fa-v') : null;
   if (o) o.textContent = txt;
 }
 function onFlowSpeed(el){
