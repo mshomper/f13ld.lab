@@ -423,7 +423,7 @@ Answered (Matt, 2026-10-07):
 - Zick–Homsy and Sangani–Acrivos table values: taken from the Basilisk test-case transcriptions and cross-checked against the dilute Hasimoto forms (§12).
 - CLI coefficients: written from Ginzburg, Verhaeghe & d'Humières (2008), *Two-relaxation-time lattice Boltzmann scheme: about parametrization, velocity, pressure and mixed boundary conditions*, Commun. Comput. Phys. 3:427 (https://www.researchgate.net/publication/230703724). The paper text could not be fetched in-session, so the form in §3.2 rests on checks F2 and F3: it reduces to halfway at q = ½, is second order on Poiseuille, and holds viscosity independence to 2 ppm.
 
-**Still open:** the adapter's storage-binding limit and real throughput on Matt's machine (the benchmark page reports both).
+**Measured on Matt's machine (2026-10-14):** storage-binding limit 2 GB and 16 storage buffers per stage; throughput in §12.
 
 ---
 
@@ -522,6 +522,19 @@ Float64 CPU reference (`19f-flow-cpu-ref.js`) on geometry built through `14e bui
 - **Two things for Phase 2 (wall shear):**
   - Wall probes near sharp concave corners read low (F5). Lattices have filleted junctions rather than 90° corners, but the force-balance residual will show it on real designs. A velocity-gradient fallback where the probe stencil touches solid is the likely fix.
   - Touching contacts (F6 at φ 0.5236) need the grid flag rather than a solver change.
-- **Speed:** the CPU reference runs about 7.6 M node updates per second on the 2-core VM, so it stays a check tool at N ≤ 48. GPU numbers come from the benchmark page.
+- **Speed:** the CPU reference runs about 7.6 M node updates per second on the 2-core VM, so it stays a check tool at N ≤ 48.
+
+**GPU benchmark (Matt's RTX 4070 Ti Super, Chrome, 2026-10-14):** sheet gyroid t 0.4 (74 % pore), τ⁺ 1.5, tolerance 1e-6, one flow direction from rest.
+
+| Grid | Throughput (fluid nodes) | Est. bandwidth | Steps | Time, one direction | Geometry build (JS) | k / L² |
+|---|---|---|---|---|---|---|
+| 32³ | 249 M/s (too small to time) | — | 1,000 | 0.02 s | 0.11 s | 2.0104e-3 |
+| 64³ | 5,050 M/s | 790 GB/s (44 MB fits in the 48 MB L2 cache) | 2,000 | 0.09 s | 0.49 s | 2.0221e-3 |
+| 128³ | 2,048 M/s | 320 GB/s (about half the card's 672 GB/s) | 5,000 | 2.9 s | 2.8 s | 2.0267e-3 |
+
+- GPU vs CPU check at 32³ after 600 steps: mean velocity 9.8e-7, populations 7.4e-7 (F10 preview passes on real hardware).
+- k / L² is monotone with grid and changes 0.58 % from 32 to 64 and 0.23 % from 64 to 128.
+- A full design (three directions) at 128³ is about 9 s of solving, against the one to a few minutes budgeted in §6. The 2.8 s geometry build is single-threaded JS on the page and should move to the worker pool.
+- 128³ needs 160 MB per population copy, well inside this card's 2 GB binding limit.
 
 **Sources for the reference tables:** Zick & Homsy (1982) Table 2 and Sangani & Acrivos (1982) Table 1, as transcribed in the Basilisk test cases (basilisk.fr `src/test/spheres.c`, `src/test/cylinders.c`). Checked against the dilute Hasimoto forms: spheres φ 0.027 → 2.009 (table 2.008); cylinders φ 0.05 → 15.55 (table 15.56). Drag is the force per cell over 6πμaU (spheres) or μU per unit length (cylinders), with U the superficial velocity and force = G × cell volume.
