@@ -47,7 +47,7 @@
      flowGPUSolver(N) / flowGPURelease() the cached solver (WGPU_DEVICE_CACHE_KEYS)
    ============================================================ */
 
-var FLOW_GPU_VERSION = 'fg-1';
+var FLOW_GPU_VERSION = 'fg-2';   /* v0.29.0 — runs keep velocity fields for the flow view */
 var FLOW_TAU_PLUS = 1.5;
 var FLOW_CHECK_EVERY = 500;
 var FLOW_MIN_STEPS = 1000;
@@ -174,6 +174,29 @@ var FLOW_REDUCE_WGSL = [
   '  if (li == 0u) { red[0] = shA[0].x * Rp.invFluid; red[1] = shA[0].y * Rp.invN3; red[2] = shA[0].z * Rp.invN3; red[3] = shA[0].w * Rp.invN3; red[4] = shB[0] * Rp.invN3; }',
   '}'].join('\n');
 
+/* v0.29.0 — velocity at every fluid cell from the post-collision populations
+   (the Guo force adds F to the momentum in collision, so the half-force
+   velocity is (Σ f* c − F/2) / ρ), for the flow viewer. */
+var FLOW_VELOCITY_WGSL = [
+  'struct Params { N: u32, N3: u32, invFluid: f32, invN3: f32, Fx: f32, Fy: f32, Fz: f32, wP: f32, wM: f32, p0: f32, p1: f32, p2: f32 };',
+  '@group(0) @binding(0) var<storage, read> fin: array<f32>;',
+  '@group(0) @binding(1) var<storage, read> flags: array<u32>;',
+  '@group(0) @binding(2) var<storage, read_write> uout: array<f32>;',
+  '@group(0) @binding(3) var<uniform> P: Params;',
+  '@compute @workgroup_size(256)',
+  'fn main(@builtin(global_invocation_id) gid: vec3<u32>) {',
+  '  let c = gid.x; if (c >= P.N3) { return; }',
+  '  if ((flags[c] & 1u) != 0u) { uout[3u * c] = 0.0; uout[3u * c + 1u] = 0.0; uout[3u * c + 2u] = 0.0; return; }',
+  '  let N3 = P.N3; var f: array<f32, 19>;',
+  '  for (var i = 0u; i < 19u; i = i + 1u) { f[i] = fin[i * N3 + c]; }',
+  '  var dr = 0.0; for (var i = 0u; i < 19u; i = i + 1u) { dr = dr + f[i]; }',
+  '  let jx = f[1] - f[2] + f[7] - f[8] + f[9] - f[10] + f[11] - f[12] + f[13] - f[14];',
+  '  let jy = f[3] - f[4] + f[7] - f[8] - f[9] + f[10] + f[15] - f[16] + f[17] - f[18];',
+  '  let jz = f[5] - f[6] + f[11] - f[12] - f[13] + f[14] + f[15] - f[16] - f[17] + f[18];',
+  '  let ir = 1.0 / (1.0 + dr);',
+  '  uout[3u * c] = (jx - 0.5 * P.Fx) * ir; uout[3u * c + 1u] = (jy - 0.5 * P.Fy) * ir; uout[3u * c + 2u] = (jz - 0.5 * P.Fz) * ir;',
+  '}'].join('\n');
+
 /* ---------- solver (one per grid, cached per device) ---------- */
 function FlowGPUSolver(N) {
   var dev = WGPU.device;
@@ -199,6 +222,8 @@ function FlowGPUSolver(N) {
   this.rb = buf(16, GPUBufferUsage.UNIFORM | CD);
   this.pStep = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: flowStepWGSL() }), entryPoint: 'main' } });
   this.pRed = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: FLOW_REDUCE_WGSL }), entryPoint: 'main' } });
+  this.pVel = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: FLOW_VELOCITY_WGSL }), entryPoint: 'main' } });
+  this.ubuf = null;   /* 3·N³ velocity, made on the first readVelocity */
   this.bytes = 2 * popBytes + 2 * N3 * 4 + this.nWG * 32;
 }
 FlowGPUSolver.prototype.upload = function (T) {
@@ -270,13 +295,27 @@ FlowGPUSolver.prototype.solve = async function (F, opts) {
            history: history, t_ms: performance.now() - t0, nu: (tauP - 0.5) / 3 };
 };
 /* Current populations (after the last solve), solver order i·N³ + cell. */
+/* v0.29.0 — the converged velocity field of the last solve, 3 floats per
+   cell in solver order (lattice units).  Uses that solve's force. */
+FlowGPUSolver.prototype.readVelocity = async function () {
+  var dev = this.device, bytes = 3 * this.N3 * 4;
+  if (!this.ubuf) this.ubuf = this._buf(bytes, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  var bg = dev.createBindGroup({ layout: this.pVel.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: this._last || this.A } }, { binding: 1, resource: { buffer: this.flags } },
+    { binding: 2, resource: { buffer: this.ubuf } }, { binding: 3, resource: { buffer: this.ub } }] });
+  var rd = dev.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  var enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+  pass.setPipeline(this.pVel); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(this.nWG); pass.end();
+  enc.copyBufferToBuffer(this.ubuf, 0, rd, 0, bytes); dev.queue.submit([enc.finish()]);
+  await rd.mapAsync(GPUMapMode.READ); var v = new Float32Array(rd.getMappedRange().slice(0)); rd.unmap(); rd.destroy(); return v;
+};
 FlowGPUSolver.prototype.readState = async function () {
   var dev = this.device, rd = dev.createBuffer({ size: this.popBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
   var enc = dev.createCommandEncoder(); enc.copyBufferToBuffer(this._last || this.A, 0, rd, 0, this.popBytes); dev.queue.submit([enc.finish()]);
   await rd.mapAsync(GPUMapMode.READ); var v = new Float32Array(rd.getMappedRange().slice(0)); rd.unmap(); rd.destroy(); return v;
 };
 FlowGPUSolver.prototype.destroy = function () {
-  ['A', 'B', 'flags', 'wslot', 'qtab', 'part', 'red', 'stage', 'ub', 'rb'].forEach(function (k) { if (this[k]) { try { this[k].destroy(); } catch (e) {} this[k] = null; } }, this);
+  ['A', 'B', 'flags', 'wslot', 'qtab', 'part', 'red', 'stage', 'ub', 'rb', 'ubuf'].forEach(function (k) { if (this[k]) { try { this[k].destroy(); } catch (e) {} this[k] = null; } }, this);
 };
 
 function flowGPUSolver(N) {
@@ -291,6 +330,39 @@ function flowGPURelease() {
   if (window.__flowGPU) { try { window.__flowGPU.destroy(); } catch (e) {} window.__flowGPU = null; }
 }
 if (typeof WGPU_DEVICE_CACHE_KEYS !== 'undefined' && WGPU_DEVICE_CACHE_KEYS.indexOf('__flowGPU') < 0) WGPU_DEVICE_CACHE_KEYS.push('__flowGPU');
+
+/* ---------- v0.29.0 — velocity fields for the viewer ----------
+   Kept at M = min(N, 64) per axis (128³ averaged over 2×2×2 blocks), half
+   precision, as the velocity for a unit body force along that axis divided
+   by N² — a scale-free field: any flow direction is Σ_j G_j ũ_j (flow is
+   linear at these speeds).  mask: open-pore cells at M (a block counts as
+   pore when at least half of it is).  About 4.7 MB per design. */
+var FLOW_VIZ_MAX = 64;
+function flowVizInit(mask, N) {
+  var M = Math.min(N, FLOW_VIZ_MAX), f = N / M, M3 = M * M * M, mk = new Uint8Array(M3), NN = N * N, MM = M * M;
+  for (var I = 0; I < M; I++) for (var J = 0; J < M; J++) for (var K = 0; K < M; K++) {
+    var n = 0;
+    for (var a = 0; a < f; a++) for (var b = 0; b < f; b++) for (var c = 0; c < f; c++) n += mask[(I * f + a) * NN + (J * f + b) * N + (K * f + c)];
+    mk[I * MM + J * M + K] = (2 * n >= f * f * f) ? 1 : 0;
+  }
+  return { M: M, N: N, mask: mk, u: [null, null, null], mean: [0, 0, 0], version: 1 };
+}
+function flowVizAddAxis(viz, ax, vel, N, g) {
+  var M = viz.M, f = N / M, M3 = M * M * M, NN = N * N, MM = M * M, s = 1 / (g * N * N * f * f * f);
+  var h = new Uint16Array(3 * M3), sum = 0, nf = 0;
+  for (var I = 0; I < M; I++) for (var J = 0; J < M; J++) for (var K = 0; K < M; K++) {
+    var vx = 0, vy = 0, vz = 0;
+    for (var a = 0; a < f; a++) for (var b = 0; b < f; b++) for (var c = 0; c < f; c++) {
+      var q = 3 * ((I * f + a) * NN + (J * f + b) * N + (K * f + c));
+      vx += vel[q]; vy += vel[q + 1]; vz += vel[q + 2];
+    }
+    vx *= s; vy *= s; vz *= s;
+    var o = I * MM + J * M + K;
+    h[3 * o] = thermalF32ToF16(vx); h[3 * o + 1] = thermalF32ToF16(vy); h[3 * o + 2] = thermalF32ToF16(vz);
+    if (viz.mask[o]) { sum += Math.sqrt(vx * vx + vy * vy + vz * vz); nf++; }
+  }
+  viz.u[ax] = h; viz.mean[ax] = nf ? sum / nf : 0;
+}
 
 /* ---------- fluid connectivity ---------- */
 function flowFluidDomain(solid, N) {
@@ -347,6 +419,7 @@ async function _homogenizeFlowGPU(recipe, N, opts, st) {
   /* force scaled so ⟨u⟩ lands near the same lattice speed at every grid */
   var g = 1e-5 * (64 / N) * (64 / N), tS = performance.now(), idx = 0;
   out.g = g;
+  var viz = null;
   for (var ax = 0; ax < 3; ax++) {
     if (!(dom.openBits & (1 << ax))) { out.perAxis.push({ open: false }); continue; }
     if (opts.onProgress) opts.onProgress({ axis: 'xyz'[ax], index: idx, total: nOpenAxes, step: 0, rel: 1 });
@@ -358,8 +431,16 @@ async function _homogenizeFlowGPU(recipe, N, opts, st) {
     for (var i = 0; i < 3; i++) out.K[i * 3 + ax] = r.nu * r.U[i] / g;
     out.tort[ax] = r.U[ax] > 0 ? r.Uabs / r.U[ax] : NaN;
     out.perAxis.push({ open: true, converged: r.converged, steps: r.steps, t_ms: r.t_ms, U: r.U, rel: r.rel, massCorr: r.massCorr });
+    if (opts.keepFields !== false) {
+      st.step = 'velocity field along ' + 'XYZ'[ax];
+      var vel = await S.readVelocity();
+      if (opts.isStale && opts.isStale()) return null;
+      if (!viz) viz = flowVizInit(dom.mask, N);
+      flowVizAddAxis(viz, ax, vel, N, g);
+    }
     idx++;
   }
+  if (viz) out.viz = viz;
   /* symmetrize over solved columns (an unsolved axis has no column) */
   var dia = 0, offd = 0;
   for (var p = 0; p < 3; p++) for (var q = 0; q < 3; q++) {

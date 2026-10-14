@@ -127,6 +127,14 @@ function buildLabRaymarcherFS(stepCount) {
     /* plane outline + drag handle (backbuffer px), drawn over the image */
     'uniform vec2 uClipC0; uniform vec2 uClipC1; uniform vec2 uClipC2; uniform vec2 uClipC3;',
     'uniform vec2 uClipHandle; uniform float uClipDpr; uniform vec3 uClipCol;',
+    /* v0.29.0 — flow view (uViewMode 4): speed ÷ mean on an R16F field
+       (TEXTURE5), painted where the section plane crosses the pores
+       (uFlowPlane); the solid keeps the geometry shading.  Every pixel also
+       writes its depth (distance along the ray ÷ 64) so the particle streaks
+       drawn after the march (LAB_FLOW_LINE_*) hide behind struts. */
+    'uniform float uFlowOn; uniform float uFlowPlane; uniform float uFlowHi; uniform float uFlowN;',
+    'uniform highp sampler3D uFlowSpd;',
+    'float gDepth = 1.0;',
 
     'const float H = 3.141593;',
 
@@ -533,7 +541,7 @@ function buildLabRaymarcherFS(stepCount) {
        the kept half through filler (not solid), paint the filler's field
        there, dimmed, so the cut shows heat in the pores as well as in the
        metal.  Solid on the plane is the marched cut face below. */
-    '  if (uViewMode > 2.5 && uThermOn > 0.5 && uClipAxis > 0.5) {',
+    '  if (uViewMode > 2.5 && uViewMode < 3.5 && uThermOn > 0.5 && uClipAxis > 0.5) {',
     '    float rda = clipCoord(rd), roa = clipCoord(ro);',
     '    if (abs(rda) > 1e-6 && uClipSide * rda < 0.0) {',
     '      float tp = (uClipPos * H - roa) / rda;',
@@ -541,7 +549,23 @@ function buildLabRaymarcherFS(stepCount) {
     '        vec3 pp = ro + rd * tp;',
     '        if (implicit0(pp) > 0.0) {',
     '          vec3 fc = mix(bgCol, thermColor(pp), 0.5);',
+    '          gDepth = clamp(tp / 64.0, 0.0, 1.0);',
     '          return vec4(clamp(mix(bgCol, fc, exp(-tp * 0.010)), 0.0, 1.0), 1.0);',
+    '        }',
+    '      }',
+    '    }',
+    '  }',
+    /* v0.29.0 — flow speed on the section plane, through the pores */
+    '  if (uViewMode > 3.5 && uFlowOn > 0.5 && uFlowPlane > 0.5 && uClipAxis > 0.5) {',
+    '    float rdf = clipCoord(rd), rof = clipCoord(ro);',
+    '    if (abs(rdf) > 1e-6 && uClipSide * rdf < 0.0) {',
+    '      float tq = (uClipPos * H - rof) / rdf;',
+    '      if (tq > tEn && tq < tEx && !nearCap && (!hit || t > tq + 1e-3)) {',
+    '        vec3 pq = ro + rd * tq;',
+    '        if (implicit0(pq) > 0.0) {',
+    '          float sp = textureLod(uFlowSpd, fract(pq / (2.0 * H) + 0.5), 0.0).r;',
+    '          gDepth = clamp(tq / 64.0, 0.0, 1.0);',
+    '          return vec4(clamp(mix(bgCol, turbo(sp / max(uFlowHi, 1e-6)), exp(-tq * 0.006)), 0.0, 1.0), 1.0);',
     '        }',
     '      }',
     '    }',
@@ -584,7 +608,7 @@ function buildLabRaymarcherFS(stepCount) {
        principled, and pairs with the JS-side dilation that handles
        the larger interface-contamination issue. */
     '  vec3 col;',
-    '  if (uViewMode > 2.5 && uThermOn > 0.5) {',
+    '  if (uViewMode > 2.5 && uViewMode < 3.5 && uThermOn > 0.5) {',
     '    col = f13ShadeData(thermColor(pos), pos, n, rd, rot, H*0.3, uNrmStep, f13TMax);',
     '  } else if (uViewMode > 1.5 && uViewMode < 2.5 && uStressUploaded > 0.5) {',
     '    float cAmpS = uDeformAmp * uDeformSign;',
@@ -604,6 +628,7 @@ function buildLabRaymarcherFS(stepCount) {
     '    col = f13Shade(uBodyColor, pos, n, rd, rot, !hit, H*0.3, uNrmStep, f13TMax);',
     '  }',
     '  col = mix(bgCol, col, exp(-t * 0.010));',
+    '  gDepth = clamp(t / 64.0, 0.0, 1.0);',
     '  return vec4(clamp(col, 0.0, 1.0), 1.0);',
     '}',
     /* v0.21.0 — section plane outline and drag handle drawn over the image
@@ -622,6 +647,7 @@ function buildLabRaymarcherFS(stepCount) {
     '    c.rgb = mix(c.rgb, uClipCol, max(aL, max(aR, aD)));',
     '  }',
     '  fragColor = c;',
+    '  gl_FragDepth = gDepth;',
     '}'
   ].join('\n');
 }
@@ -941,7 +967,9 @@ LabRaymarcher.prototype._finishProgram = function() {
    'uBodyColor',
    /* v0.21.0 — thermal view + clip plane */
    'uThermOn','uThermView','uThermAxis','uThermScale','uThermHi','uDT','uTherm','uThermN',
-   'uClipAxis','uClipPos','uClipSide','uClipC0','uClipC1','uClipC2','uClipC3','uClipHandle','uClipDpr','uClipCol'].forEach(function(name){
+   'uClipAxis','uClipPos','uClipSide','uClipC0','uClipC1','uClipC2','uClipC3','uClipHandle','uClipDpr','uClipCol',
+   /* v0.29.0 — flow view */
+   'uFlowOn','uFlowPlane','uFlowHi','uFlowN','uFlowSpd'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -1524,6 +1552,122 @@ LabRaymarcher.prototype.setThermalParams = function(p) {
   this._dirty = true;
 };
 
+/* ── v0.29.0 — flow view ───────────────────────────────────────────
+   uploadFlowSpeed(spd, M): speed ÷ mean (solver order) on an R16F texture,
+   read where the section plane crosses the pores (setFlowParams.plane).
+   setFlowParticles(ps): a FlowParticles (23-flow-viz.js) drawn every frame
+   as camera-facing ribbons with a bright head, coloured by speed on the
+   same turbo ramp, depth-tested against the marched surface. */
+LabRaymarcher.prototype.uploadFlowSpeed = function(spd, M) {
+  if (this.failed || !spd || spd.length !== M * M * M) return;
+  var gl = this.gl, tex = solverToTexOrder(spd, M);
+  if (!this._flowTex) this._flowTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, this._flowTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R16F, M, M, M, 0, gl.RED, gl.FLOAT, tex);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+  gl.bindTexture(gl.TEXTURE_3D, null);
+  this._flowUploaded = true; this._flowN = M; this._dirty = true;
+};
+LabRaymarcher.prototype.setFlowParams = function(p) {
+  if (this.failed || !p) return;
+  this._u.flowPlane = !!p.plane; this._u.flowHi = (p.hi > 0) ? p.hi : 1; this._dirty = true;
+};
+LabRaymarcher.prototype.setFlowParticles = function(ps) {
+  if (this.failed) return;
+  this._flowPs = ps || null; this._dirty = true;
+};
+var LAB_FLOW_LINE_VS = [
+  '#version 300 es',
+  'precision highp float;',
+  'in vec3 aPos; in vec3 aOther; in float aSide; in float aEnd; in float aAlong; in float aSpd; in float aHead;',
+  'uniform mat3 rot; uniform float zoom; uniform vec2 uPan; uniform vec2 res; uniform float uWidth; uniform float uHi;',
+  'out vec4 vCol; out float vDist;',
+  'vec3 turbo(float x) {',
+  '  x = clamp(x, 0.0, 1.0); float xs = x * 7.0; float seg = min(floor(xs), 6.0); float t = xs - seg;',
+  '  vec3 c[8] = vec3[8](vec3(0.140,0.150,0.500), vec3(0.150,0.400,0.950), vec3(0.100,0.700,0.900), vec3(0.150,0.900,0.550),',
+  '                      vec3(0.550,0.980,0.250), vec3(0.950,0.850,0.150), vec3(0.970,0.500,0.150), vec3(0.880,0.130,0.080));',
+  '  int i = int(seg); return mix(c[i], c[i + 1], t);',
+  '}',
+  'vec3 cam(vec3 p) { return transpose(rot) * p - vec3(uPan, zoom); }',
+  'vec2 scr(vec3 c) { return res * 0.5 + (1.6 * c.xy / -c.z) * min(res.x, res.y); }',
+  'void main() {',
+  '  vec3 c = cam(aPos), o = cam(aOther);',
+  '  if (c.z > -0.05 || o.z > -0.05) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); vCol = vec4(0.0); vDist = 1.0; return; }',
+  '  vec2 s = scr(c), so = scr(o);',
+  '  vec2 d = (aEnd < 0.5) ? (so - s) : (s - so); float L = length(d); d = (L > 1e-4) ? d / L : vec2(1.0, 0.0);',
+  '  vec2 px = s + vec2(-d.y, d.x) * aSide * 0.5 * uWidth * mix(0.55, 1.0, aAlong) * (aHead > 0.5 ? 1.8 : 1.0);',
+  '  gl_Position = vec4(px / res * 2.0 - 1.0, 0.0, 1.0);',
+  '  vec3 col = turbo(aSpd / uHi);',
+  '  if (aHead > 0.5) col = mix(col, vec3(1.0), 0.55);',
+  '  vCol = vec4(col, (aHead > 0.5) ? 1.0 : 0.85 * aAlong * aAlong);',
+  '  vDist = length(c);',
+  '}'].join('\n');
+var LAB_FLOW_LINE_FS = [
+  '#version 300 es',
+  'precision highp float;',
+  'in vec4 vCol; in float vDist; out vec4 o;',
+  'void main() { gl_FragDepth = clamp(vDist / 64.0, 0.0, 1.0); o = vCol; }'].join('\n');
+LabRaymarcher.prototype._flowLineSetup = function() {
+  var gl = this.gl;
+  function sh(type, src) { var x = gl.createShader(type); gl.shaderSource(x, src); gl.compileShader(x);
+    if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { console.error('[flow streaks] shader:', gl.getShaderInfoLog(x)); return null; } return x; }
+  var vs = sh(gl.VERTEX_SHADER, LAB_FLOW_LINE_VS), fs = sh(gl.FRAGMENT_SHADER, LAB_FLOW_LINE_FS);
+  if (!vs || !fs) return null;
+  var prog = gl.createProgram(); gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  gl.deleteShader(vs); gl.deleteShader(fs);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.error('[flow streaks] link:', gl.getProgramInfoLog(prog)); return null; }
+  var vao = gl.createVertexArray(), buf = gl.createBuffer(), ibuf = gl.createBuffer();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  var names = [['aPos', 3], ['aOther', 3], ['aSide', 1], ['aEnd', 1], ['aAlong', 1], ['aSpd', 1], ['aHead', 1]], off = 0;
+  for (var i = 0; i < names.length; i++) {
+    var loc = gl.getAttribLocation(prog, names[i][0]);
+    if (loc >= 0) { gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, names[i][1], gl.FLOAT, false, 44, off * 4); }
+    off += names[i][1];
+  }
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+  gl.bindVertexArray(null);
+  var U = {};
+  ['rot', 'zoom', 'uPan', 'res', 'uWidth', 'uHi'].forEach(function (n) { U[n] = gl.getUniformLocation(prog, n); });
+  return { prog: prog, vao: vao, buf: buf, ibuf: ibuf, U: U, nIdxSeg: 0 };
+};
+LabRaymarcher.prototype._drawFlowStreaks = function(rot, S, w, h, dpr, dt) {
+  var gl = this.gl, ps = this._flowPs;
+  if (!this._flowLine) { this._flowLine = this._flowLineSetup(); if (!this._flowLine) { this._flowPs = null; return; } }
+  var FL = this._flowLine;
+  ps.advance(dt);
+  var V = ps.vertices();
+  if (!V.nSeg) return;
+  gl.bindVertexArray(FL.vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, FL.buf);
+  gl.bufferData(gl.ARRAY_BUFFER, V.data, gl.DYNAMIC_DRAW);
+  if (FL.nIdxSeg < V.nSeg) {
+    var idx = new Uint32Array(6 * V.nSeg);
+    for (var k = 0; k < V.nSeg; k++) { var b = 4 * k, o = 6 * k; idx[o] = b; idx[o + 1] = b + 1; idx[o + 2] = b + 2; idx[o + 3] = b + 2; idx[o + 4] = b + 1; idx[o + 5] = b + 3; }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, FL.ibuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+    FL.nIdxSeg = V.nSeg;
+  }
+  gl.useProgram(FL.prog);
+  gl.uniformMatrix3fv(FL.U.rot, false, rot);
+  gl.uniform1f(FL.U.zoom, S.zoom);
+  gl.uniform2f(FL.U.uPan, S.panX || 0, S.panY || 0);
+  gl.uniform2f(FL.U.res, w, h);
+  gl.uniform1f(FL.U.uWidth, 1.6 * dpr * (ps.size || 1));   /* v0.29.1 — size slider */
+  gl.uniform1f(FL.U.uHi, S.flowHi || 1);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
+  gl.drawElements(gl.TRIANGLES, 6 * V.nSeg, gl.UNSIGNED_INT, 0);
+  gl.disable(gl.BLEND); gl.depthMask(true); gl.disable(gl.DEPTH_TEST);
+  gl.bindVertexArray(null);
+  gl.useProgram(this._prog);
+};
+
 /* Section plane, shared by every thermal tile (one cut compared across the
    designs).  Same state and pills as F13LD.tpms: axis 0 off / 1 x / 2 y / 3 z,
    pos in half-cells (−1..1), side +1 keeps coord < pos. */
@@ -1579,6 +1723,7 @@ LabRaymarcher.prototype.setViewMode = function(mode) {
   if (mode === 'deform' && this._dispUploaded) effective = 1;
   else if (mode === 'stress' && this._stressUploaded) effective = 2;
   else if (mode === 'thermal' && this._thermUploaded) effective = 3;   /* v0.21.0 */
+  else if (mode === 'flow') effective = 4;                              /* v0.29.0 */
   this._u.viewMode = effective;
   this._dirty = true;
 };
@@ -1740,7 +1885,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     if (self._extControl || self._viewMode === 'geom') return;
     /* v0.21.0 — grabbing the section-plane handle scrubs the plane (F13LD.tpms) */
     var hs = self._clipScreen;
-    if (hs && self._viewMode === 'thermal') {
+    if (hs && (self._viewMode === 'thermal' || self._viewMode === 'flow')) {
       var rc = self.canvas.getBoundingClientRect();
       if (Math.hypot(e.clientX - rc.left - hs.x, e.clientY - rc.top - hs.y) < 16) self._scrub = true;
     }
@@ -1913,7 +2058,18 @@ LabRaymarcher.prototype._render = function(t) {
     gl.bindTexture(gl.TEXTURE_3D, this._thermTex);
     gl.uniform1i(u.uTherm, 4);
   }
-  var C = (this._viewMode === 'thermal') ? labClipState() : null;
+  var C = (this._viewMode === 'thermal' || this._viewMode === 'flow') ? labClipState() : null;
+  /* v0.29.0 — flow view uniforms (speed field on TEXTURE5) */
+  var flowOn = (this._viewMode === 'flow' && this._flowUploaded);
+  gl.uniform1f(u.uFlowOn,    flowOn ? 1 : 0);
+  gl.uniform1f(u.uFlowPlane, S.flowPlane ? 1 : 0);
+  gl.uniform1f(u.uFlowHi,    S.flowHi || 1);
+  gl.uniform1f(u.uFlowN,     this._flowN || 32);
+  if (this._flowTex) {
+    gl.activeTexture(gl.TEXTURE5);
+    gl.bindTexture(gl.TEXTURE_3D, this._flowTex);
+    gl.uniform1i(u.uFlowSpd, 5);
+  }
   var cAx = (C && C.axis > 0) ? C.axis : 0;
   gl.uniform1f(u.uClipAxis, cAx);
   gl.uniform1f(u.uClipPos,  C ? C.pos : 0);
@@ -1959,7 +2115,14 @@ LabRaymarcher.prototype._render = function(t) {
   }
 
   if (typeof f13View !== 'undefined' && f13View) f13View.apply(gl, this._prog);
+  /* v0.29.0 — with particles on, the march writes depth (gl_FragDepth) for the streak pass */
+  var streaks = (this._viewMode === 'flow' && this._flowPs && this._flowPs.ready());
+  if (streaks) {
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.ALWAYS); gl.depthMask(true);
+    gl.clearDepth(1.0); gl.clear(gl.DEPTH_BUFFER_BIT);
+  } else gl.disable(gl.DEPTH_TEST);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  if (streaks) this._drawFlowStreaks(rot, S, w, h, dpr, dt);
 };
 
 
@@ -1988,6 +2151,8 @@ LabRaymarcher.prototype.destroy = function() {
   if (this._dispTex)   gl.deleteTexture(this._dispTex);    /* A.2 — displacement texture */
   if (this._stressTex) gl.deleteTexture(this._stressTex);  /* A.3 — stress texture */
   if (this._thermTex)  gl.deleteTexture(this._thermTex);   /* v0.21.0 — thermal field */
+  if (this._flowTex)   gl.deleteTexture(this._flowTex);    /* v0.29.0 — flow speed field */
+  if (this._flowLine)  { gl.deleteProgram(this._flowLine.prog); gl.deleteBuffer(this._flowLine.buf); gl.deleteBuffer(this._flowLine.ibuf); gl.deleteVertexArray(this._flowLine.vao); this._flowLine = null; }
   if (this._prog)      gl.deleteProgram(this._prog);
   if (this._pending)   { gl.deleteProgram(this._pending.prg); gl.deleteShader(this._pending.vs); gl.deleteShader(this._pending.fs); this._pending = null; }   /* v0.24.0 */
   if (this._quadBuf)   gl.deleteBuffer(this._quadBuf);
@@ -2190,7 +2355,8 @@ function mountRaymarcherTiles() {
 /* Pause all when grid loses geom/deform/stress view (e.g. user clicks Buckle tab) */
 function pauseRaymarcherTilesForViewMode(mode) {
   var kappaSurface = (mode === 'thermal' && typeof VIEW_STATE !== 'undefined' && VIEW_STATE.thermalView === 'kappa');   /* v0.21.0 — κ(n) uses the surface viewer */
-  if ((mode !== 'geom' && mode !== 'deform' && mode !== 'stress' && mode !== 'buckle' && mode !== 'thermal') || kappaSurface) {
+  var flowSurface = (mode === 'flow' && typeof VIEW_STATE !== 'undefined' && VIEW_STATE.flowView === 'surface');   /* v0.29.0 — K(n) uses the surface viewer */
+  if ((mode !== 'geom' && mode !== 'deform' && mode !== 'stress' && mode !== 'buckle' && mode !== 'thermal' && mode !== 'flow') || kappaSurface || flowSurface) {
     pauseAllRaymarchers();
   }
 }

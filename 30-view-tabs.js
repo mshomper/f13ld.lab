@@ -19,7 +19,14 @@ var VIEW_STATE = {
   thermalFiller: 'water',                   /* v0.24.0 — matches the default filler */                     // v0.20.0 — which solved pore filler the thermal cards show
   thermalView: 'temp',                      // v0.21.0 — 'temp' | 'dev' | 'flux' | 'kappa' (all thermal tiles)
   thermalAxis: 'x',                         // v0.21.0 — gradient axis of the map (all thermal tiles)
-  thermalDT: 10                             // v0.21.0 — ΔT across one cell, K (Matt: per cell, fixed default)
+  thermalDT: 10,                            // v0.21.0 — ΔT across one cell, K (Matt: per cell, fixed default)
+  flowView: 'particles',                    // v0.29.0 — 'particles' | 'speed' | 'surface' (all flow tiles)
+  flowDir: 'x',                             // v0.29.0 — mean flow along 'x' | 'y' | 'z' | 'xyz'
+  flowSpeed: 1,                             // v0.29.0 — particle animation speed
+  flowCount: 2500,                          // v0.29.0 — particles per tile
+  flowLength: 1,                            // v0.29.1 — streak length multiplier (0.25–2), flow time
+  flowSize: 1,                              // v0.29.1 — streak width multiplier
+  flowPlay: true                            // v0.29.0 — particles moving
 };
 
 /* v0.21.0 — thermal map controls (shared by every thermal tile, so the
@@ -47,9 +54,62 @@ function onThermalFillerView(id){
    Click handler for view tabs. Updates global mode and
    triggers re-render of the comparison area.
    ---------------------------------------------------------- */
+/* v0.29.0 — flow view controls (shared by every flow tile).  The speed map
+   needs a section plane, so picking it with none set turns on Z at the
+   middle; the particle view is also opened with that cut the first time,
+   as in a CFD cut-away.  Speed, count and play act on the particles
+   directly — no re-render while a slider is dragged. */
+function flowEnsureClip(){
+  if (typeof LAB_CLIP !== 'undefined' && LAB_CLIP.axis === 0){ LAB_CLIP.axis = 3; LAB_CLIP.pos = 0.0; LAB_CLIP.side = 1; }
+}
+function onFlowViewPick(v){
+  VIEW_STATE.flowView = v;
+  if (v === 'speed') flowEnsureClip();
+  onViewModeClick('flow');
+}
+function onFlowDirPick(d){ VIEW_STATE.flowDir = d; if (typeof renderDesignGrid === 'function') renderDesignGrid(); }
+function onFlowPlayToggle(btn){
+  VIEW_STATE.flowPlay = !VIEW_STATE.flowPlay;
+  for (var id in FLOW_PS) FLOW_PS[id].playing = VIEW_STATE.flowPlay;
+  var bs = document.querySelectorAll('.flow-play');
+  for (var i = 0; i < bs.length; i++){ bs[i].innerHTML = VIEW_STATE.flowPlay ? FLOW_ICON_PAUSE : FLOW_ICON_PLAY; bs[i].title = VIEW_STATE.flowPlay ? 'Pause' : 'Play'; }
+}
+/* v0.29.1 — the sliders live once, in the view strip (#flowAnimToggle) */
+function flowSliderLabel(el, txt){
+  var o = el && el.parentNode ? el.parentNode.querySelector('.fa-v') : null;
+  if (o) o.textContent = txt;
+}
+function onFlowSpeed(el){
+  VIEW_STATE.flowSpeed = +el.value;
+  for (var id in FLOW_PS) FLOW_PS[id].speed = VIEW_STATE.flowSpeed;
+  flowSliderLabel(el, VIEW_STATE.flowSpeed.toFixed(2) + '\u00d7');
+}
+function onFlowLength(el){
+  VIEW_STATE.flowLength = +el.value;
+  for (var id in FLOW_PS) FLOW_PS[id].setLength(VIEW_STATE.flowLength);
+  flowSliderLabel(el, VIEW_STATE.flowLength.toFixed(2) + '\u00d7');
+}
+function onFlowSize(el){
+  VIEW_STATE.flowSize = +el.value;
+  for (var id in FLOW_PS) FLOW_PS[id].size = VIEW_STATE.flowSize;
+  flowSliderLabel(el, VIEW_STATE.flowSize.toFixed(1) + '\u00d7');
+}
+function onFlowCount(el){
+  VIEW_STATE.flowCount = +el.value;
+  for (var id in FLOW_PS) FLOW_PS[id].setCount(VIEW_STATE.flowCount);
+  flowSliderLabel(el, String(VIEW_STATE.flowCount));
+}
+function flowAnimToggleSync(){
+  var g = document.getElementById('flowAnimToggle');
+  if (!g) return;
+  g.classList.toggle('show', VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView === 'particles');
+  var b = g.querySelector('.flow-play');
+  if (b && typeof FLOW_ICON_PLAY !== 'undefined'){ b.innerHTML = VIEW_STATE.flowPlay ? FLOW_ICON_PAUSE : FLOW_ICON_PLAY; b.title = VIEW_STATE.flowPlay ? 'Pause' : 'Play'; }
+}
 function onViewModeClick(mode){
   if (mode === 'deform') mode = 'stress';   /* v0.25.0 — Deformed is part of the Stress tab */
   VIEW_STATE.mode = mode;
+  if (mode === 'flow' && !VIEW_STATE._flowSeen){ VIEW_STATE._flowSeen = true; if (VIEW_STATE.flowView !== 'surface') flowEnsureClip(); }   /* v0.29.0 */
 
   // Update tab visual state
   var tabs = document.querySelectorAll('.view-tab');
@@ -80,12 +140,13 @@ function onViewModeClick(mode){
       if (mode === 'stiff')      labelEl.textContent = 'E surface scale';
       else if (mode === 'stress') labelEl.textContent = 'σ_VM scale';
       else if (mode === 'thermal') labelEl.textContent = 'Map scale';
-      else if (mode === 'flow')    labelEl.textContent = 'K surface scale';   /* v0.28.0 */
+      else if (mode === 'flow')    labelEl.textContent = (VIEW_STATE.flowView === 'surface') ? 'K surface scale' : 'Speed scale';   /* v0.28.0 / v0.29.0 */
     }
   }
 
   var fillGroup = document.getElementById('thermalFillerToggle');   /* v0.20.0 */
   if (fillGroup) fillGroup.classList.toggle('show', mode === 'thermal');
+  flowAnimToggleSync();   /* v0.29.1 */
 
   // Re-render
   if (typeof renderDesignGrid === 'function') renderDesignGrid();

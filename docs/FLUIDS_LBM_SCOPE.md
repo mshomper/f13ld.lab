@@ -577,3 +577,22 @@ Float64 CPU reference (`19f-flow-cpu-ref.js`) on geometry built through `14e bui
 **For Matt to check on his GPU:** a Flow run on his own designs, including foam and STL imports. Then `runFlowGPUCheck(0)`, `runFlowGPUCheck(1)` and so on in the console; each should print `pass: true`.
 
 **Later (Matt, 2026-10-14):** flow is cheap enough at 32³ and 64³ to go into F13LD.sweep and then F13LD.vault as a comparison metric, like the Sweep stiffness, not a final solve. That needs `14e`, `17c`'s flow job and `19g` copied into Sweep the way it copies 14a and 16b, plus Vault columns.
+
+---
+
+## 14. Flow view (2026-10-14, v0.29.0)
+
+**Decisions (Matt, 2026-10-14):** speed in the pores first (before wall shear), and something like a CFD flow-trajectory animation. Turbo colour scale (rainbow engineers read at a glance; smoother and kinder to colour-blind viewers than the classic jet). Streaks with a bright head, not arrows. Section-plane cut-away rather than see-through solid (lighter on the GPU with three tiles side by side). 128³ fields averaged down to 64³.
+
+**Built**
+- `19g`: a velocity kernel after each axis converges, ((Σ f* c − F/2) / ρ from the post-collision populations), read back and stored by `flowVizAddAxis` at M = min(N, 64), half precision, as velocity per unit force ÷ N² (scale-free). Open-pore mask at M. `FLOW_GPU_VERSION` `fg-2`.
+- `23-flow-viz.js` (new): `flowVizField(fr, dir)` combines the axes for a mean flow along d (force ∝ K⁻¹ d; closed axes dropped) and normalizes to mean speed 1; `FlowParticles` — CPU tracers, RK2 with sub-steps (≤ 0.7 cell), periodic wrap (trail restarts), respawn in solid / after their life / when still; trails of 10 points; `flowTurbo`.
+- `21-raymarcher.js`: view mode 4 (flow). Every pixel writes its depth (ray distance ÷ 64). Speed map: fluid crossed by the section plane painted turbo(speed / top). Streak pass in the same GL context: camera-facing ribbons (4 vertices per segment, own VAO), the camera model of the march (ro = R·(pan, zoom), rd = R·(uv, −1.6)), depth-tested against the march, alpha-blended, head brightened and wider.
+- `40-design-grid.js` / `30-view-tabs.js`: Flow tab view switch (flow, speed, K(n)), direction X / Y / Z / XYZ, play / pause (drawn icons), speed and count sliders, colour bar, section-plane pills at the top-left; Speed scale per / shared; the first visit turns the section plane on (Z, middle) if none is set.
+
+**Checks:** GPU velocity field vs the solver's mean flow, 16³ (software WebGPU): 1e-7, solid cells zero. Block averaging vs a hand sum: exact. Rendered headless on all three demo designs with fields from the CPU reference (screenshots in the session); controls fit a 360 px tile.
+
+**v0.29.1 (Matt's click-test):** streak length was tied to animation speed. Trails now keep a point every `length` units of flow time (12 points, length 0.25–2×, 1 unit = one 60 Hz frame at speed 1), with the tail sliding between its last two points, so speed and frame rate do not change streak length and faster fluid still draws longer streaks. Size scales the ribbon width. Play / speed / length / size / count moved to one shared group in the view strip (`#flowAnimToggle`).
+
+**Next:** Phase 2 wall shear stress; then flow-rate units (mm/s) on the colour bar and the WSS map on the strut surface.
+
