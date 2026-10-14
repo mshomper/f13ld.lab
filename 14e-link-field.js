@@ -354,6 +354,7 @@ function buildLinkFieldFromFn(fn, N, kept, raw, mCorner, opts) {
    6 bisection steps (1/512 of a link), as buildLinkField.  Ends the island
    trim removed count as pore: a link touching one is open, or halfway
    (q = ½) when its other end is kept solid. */
+var FLOW_LINKS_VERSION = 'fl-2';   /* v0.28.1 — slab output (iRange); 17c checks workers carry the same copy */
 var FLOW_DIRS = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, -1, 0], [1, 0, 1], [1, 0, -1], [0, 1, 1], [0, 1, -1]];
 var FLOW_Q_MIN = 1e-4;     /* a wall right on a node still counts as a wall */
 
@@ -479,5 +480,5 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { buildVoxelTensors: buildVoxelTensors, voxelTensorsFromMargin: voxelTensorsFromMargin, buildLinkField: buildLinkField,
     buildLinkFieldFromFn: buildLinkFieldFromFn, planeCubeSolidFraction: planeCubeSolidFraction,
     marginSurfaceArea: marginSurfaceArea, voidOpenAxes: voidOpenAxes, designGeometryMetrics: designGeometryMetrics,
-    buildFlowLinks: buildFlowLinks, buildFlowLinksFromFn: buildFlowLinksFromFn, FLOW_DIRS: FLOW_DIRS };
+    buildFlowLinks: buildFlowLinks, buildFlowLinksFromFn: buildFlowLinksFromFn, FLOW_DIRS: FLOW_DIRS, FLOW_LINKS_VERSION: FLOW_LINKS_VERSION };
 }

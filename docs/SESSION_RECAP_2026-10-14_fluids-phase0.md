@@ -26,7 +26,11 @@ Decisions (Matt): flow grid 64³ default; Standard tolerance with High as an opt
 - Checks F8 (linearity 7e-6, superposition 1.5e-6), F9 (mass), F10 (TPMS demo, software GPU: 1e-6), F11 (grid convergence) — scope §13. Headless Run All exercised end to end (status, cards, flags, settings).
 - Found, not fixed: on a 390 px phone screen the page is about 840 px wide because the header buttons overflow. Main does the same, so it predates Flow.
 
+## v0.28.1 — merged to main (Matt approved)
+- Click-test passed after a reload; one transient foam failure ("offset is out of bounds") traced to mixed file versions in the workers right after the push. Added the worker version check (`FLOW_LINKS_VERSION`, `_tvResetPool`, `tv-6`), slab size check and step-tagged errors.
+
 ## Next up
-- **Matt:** click-test the branch (`https://raw.githack.com/mshomper/f13ld.lab/fluids-phase0/index.html`): turn on Flow, Run, open the Flow tab; then `runFlowGPUCheck(0)`, `(1)`, `(2)` in the console — each should print `pass: true`. Try foam and an STL import too. Approve before merging to main.
+- Flow view: speed in the pores on the section plane (needs the converged velocity field read back) — see the scope §5 Phase 3; Phase 2 wall shear stress is the planned order.
+- ~~**Matt:** click-test the branch~~ done. Was: click-test the branch (`https://raw.githack.com/mshomper/f13ld.lab/fluids-phase0/index.html`): turn on Flow, Run, open the Flow tab; then `runFlowGPUCheck(0)`, `(1)`, `(2)` in the console — each should print `pass: true`. Try foam and an STL import too. Approve before merging to main.
 - Phase 2 (v0.29.0): wall shear stress — triangle list from 14e's marching tetrahedra, probes and extrapolation (velocity-gradient fallback near sharp corners, check F5), unit tractions per axis, live flow-rate / direction rescaling, window presets by material, best flow, force-balance residual (F9 proper).
 - Later (Matt): flow at 32³ / 64³ in F13LD.sweep and then F13LD.vault as a comparison metric.

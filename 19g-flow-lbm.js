@@ -305,11 +305,22 @@ function flowFluidDomain(solid, N) {
 }
 
 /* ---------- one design ---------- */
+/* v0.28.1 — a failure names the step it happened in ("wall links: …"),
+   keeping the original error (with its stack) as the cause. */
 async function homogenizeFlowGPU(recipe, N, opts) {
-  opts = opts || {};
+  var st = { step: 'wall links' };
+  try { return await _homogenizeFlowGPU(recipe, N, opts || {}, st); }
+  catch (err) {
+    var e = new Error(st.step + ': ' + ((err && err.message) || err));
+    e.cause = err; if (err && err.stack) e.stack = st.step + ' · ' + err.stack;
+    throw e;
+  }
+}
+async function _homogenizeFlowGPU(recipe, N, opts, st) {
   var t0 = performance.now(), N3 = N * N * N, tol = opts.tol || 1e-6, tauP = opts.tauPlus || FLOW_TAU_PLUS;
   var links = await buildFlowLinksParallel(recipe, N, { connectivity: opts.connectivity, pruneLargest: opts.pruneLargest }, opts.onVoxelProgress);
   if (opts.isStale && opts.isStale()) return null;
+  st.step = 'pore check';
   var dom = flowFluidDomain(links.solid, N);
   var out = { N: N, porosity: dom.nFluid / N3, openPorosity: dom.nOpen / N3, sealedPorosity: (dom.nFluid - dom.nOpen) / N3,
               openBits: dom.openBits, axialBits: dom.axialBits, nWall: 0, nThin: links.nThin, t_links_ms: links.t_ms,
@@ -325,9 +336,11 @@ async function homogenizeFlowGPU(recipe, N, opts) {
     for (var a0 = 0; a0 < 3; a0++) out.perAxis.push({ open: false });
     out.t_solve_ms = 0; out.t_ms = performance.now() - t0; return out;
   }
+  st.step = 'GPU tables';
   var T = flowGPUTables(links, dom.mask);
   links = null;
   out.nWall = T.nWall; out.nFallback = T.nFallback;
+  st.step = 'GPU setup';
   var S = flowGPUSolver(N);
   S.upload(T);
   out.gpuBytes = S.bytes;
@@ -337,6 +350,7 @@ async function homogenizeFlowGPU(recipe, N, opts) {
   for (var ax = 0; ax < 3; ax++) {
     if (!(dom.openBits & (1 << ax))) { out.perAxis.push({ open: false }); continue; }
     if (opts.onProgress) opts.onProgress({ axis: 'xyz'[ax], index: idx, total: nOpenAxes, step: 0, rel: 1 });
+    st.step = 'GPU solve along ' + 'XYZ'[ax];
     var F = [0, 0, 0]; F[ax] = g;
     var r = await S.solve(F, { tol: tol, tauPlus: tauP, maxSteps: opts.maxSteps, isStale: opts.isStale,
       onStep: function (st) { if (opts.onProgress) opts.onProgress({ axis: 'xyz'[ax], index: idx, total: nOpenAxes, step: st.step, rel: st.rel }); } });

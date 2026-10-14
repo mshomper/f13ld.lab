@@ -35,7 +35,7 @@ var THERMAL_VOXEL_FILES = [
   '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
   '13c-import-kernel.js', '13d-foam-kernel.js', '14e-link-field.js'
 ];
-var THERMAL_VOXEL_VERSION = 'tv-5';   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
+var THERMAL_VOXEL_VERSION = 'tv-6';   /* v0.28.1 */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
 
 /* ── Stash: the elastic solves of this Run All ───────────────────────
    Entries { recipe, N, conn, raw, kept, m }, newest last, matched by the
@@ -106,7 +106,8 @@ var THERMAL_VOXEL_ONMESSAGE =
   '    if (job.type === "flowlinks"){\n' +
   '      var fw = buildFlowLinksFromFn(fn, N, job.kept, job.raw, job.m, { iRange: [job.i0, job.i1] });\n' +
   '      var tq = []; for (var dq = 0; dq < fw.qa.length; dq++) tq.push(fw.qa[dq].buffer, fw.qb[dq].buffer);\n' +
-  '      postMessage({ id: job.id, ok: true, qa: fw.qa, qb: fw.qb, nWall: fw.nWall, nThin: fw.nThin, nExamined: fw.nExamined }, tq); return;\n' +
+  '      postMessage({ id: job.id, ok: true, qa: fw.qa, qb: fw.qb, nWall: fw.nWall, nThin: fw.nThin, nExamined: fw.nExamined,\n' +
+  '        ver: (typeof FLOW_LINKS_VERSION !== "undefined") ? FLOW_LINKS_VERSION : "none" }, tq); return;\n' +
   '    }\n' +
   /* v0.24.0 — partial-volume solid fractions of a slab (voxelFractionsFromMargin) */
   '    if (job.type === "pv"){\n' +
@@ -141,10 +142,11 @@ function _tvPoolSize() {
 function _tvCanUseWorkers() {
   return typeof Worker !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof document !== 'undefined';
 }
+var _TV_BUST = '';   /* v0.28.1 — set when workers must refetch their scripts (mixed file versions) */
 function _tvMakeWorker() {
   var base = (document && document.baseURI) ? document.baseURI : location.href, urls = [];
   for (var i = 0; i < THERMAL_VOXEL_FILES.length; i++) {
-    var u = new URL(THERMAL_VOXEL_FILES[i], base); u.search = '?v=' + THERMAL_VOXEL_VERSION; urls.push(JSON.stringify(u.href));
+    var u = new URL(THERMAL_VOXEL_FILES[i], base); u.search = '?v=' + THERMAL_VOXEL_VERSION + _TV_BUST; urls.push(JSON.stringify(u.href));
   }
   var body = 'importScripts(' + urls.join(',') + ');\n' + THERMAL_VOXEL_ONMESSAGE;
   var w = new Worker(URL.createObjectURL(new Blob([body], { type: 'application/javascript' })));
@@ -187,6 +189,15 @@ function _tvRun(msg, transfer) {
     _TV_POOL.queue.push({ msg: msg, transfer: transfer, resolve: resolve, reject: reject });
     _tvDispatch();
   });
+}
+/* v0.28.1 — drop every idle worker and make new ones fetch their scripts
+   again (a fresh query string, so neither the browser nor a CDN can hand
+   back an older copy).  Only called between jobs. */
+function _tvResetPool() {
+  var P = _TV_POOL;
+  for (var i = 0; i < P.workers.length; i++) { try { P.workers[i].terminate(); } catch (e) {} }
+  P.workers = []; P.idle = [];
+  _TV_BUST = '&r=' + Date.now();
 }
 function thermalVoxelPoolInfo() { return { size: _TV_POOL.size || _tvPoolSize(), spawned: _TV_POOL.workers.length }; }
 
@@ -379,12 +390,33 @@ async function buildFlowLinksParallel(recipe, N, opts, onProgress) {
   }
   var nD = FLOW_DIRS.length, qa = [], qb = [], nWall = 0, nThin = 0, nEx = 0;
   for (var d = 0; d < nD; d++) { qa.push(new Float32Array(N3)); qb.push(new Float32Array(N3)); }
-  await Promise.all(slabs.map(function (sl) {
-    return _tvRun({ type: 'flowlinks', recipe: recipe, N: N, key: key, i0: sl[0], i1: sl[1], m: m, kept: kept, raw: raw, importGrid: importGrid }).then(function (r) {
-      for (var d2 = 0; d2 < nD; d2++) { qa[d2].set(r.qa[d2], sl[0] * NN); qb[d2].set(r.qb[d2], sl[0] * NN); }
-      nWall += r.nWall; nThin += r.nThin; nEx += r.nExamined; tick('links');
-    });
-  }));
+  /* v0.28.1 — every slab must come from a worker with this page's 14e and
+     have the slab's size; otherwise (a worker that loaded an older copy
+     right after a deploy) restart the pool once with fresh scripts. */
+  var want = (typeof FLOW_LINKS_VERSION !== 'undefined') ? FLOW_LINKS_VERSION : 'none';
+  async function runLinks() {
+    var bad = null;
+    nWall = 0; nThin = 0; nEx = 0;
+    await Promise.all(slabs.map(function (sl) {
+      return _tvRun({ type: 'flowlinks', recipe: recipe, N: N, key: key, i0: sl[0], i1: sl[1], m: m, kept: kept, raw: raw, importGrid: importGrid }).then(function (r) {
+        var len = (sl[1] - sl[0]) * NN;
+        if (r.ver !== want) { bad = bad || ('worker link builder ' + r.ver + ', page ' + want); return; }
+        for (var d2 = 0; d2 < nD; d2++) if (!r.qa[d2] || r.qa[d2].length !== len || r.qb[d2].length !== len) {
+          bad = bad || ('slab x ' + sl[0] + '–' + sl[1] + ' came back with ' + (r.qa[d2] ? r.qa[d2].length : 0) + ' values, expected ' + len); return;
+        }
+        for (var d3 = 0; d3 < nD; d3++) { qa[d3].set(r.qa[d3], sl[0] * NN); qb[d3].set(r.qb[d3], sl[0] * NN); }
+        nWall += r.nWall; nThin += r.nThin; nEx += r.nExamined; tick('links');
+      });
+    }));
+    return bad;
+  }
+  var bad = await runLinks();
+  if (bad) {
+    console.warn('[flow] ' + bad + ' — restarting the geometry workers with fresh scripts');
+    _tvResetPool();
+    bad = await runLinks();
+    if (bad) throw new Error('the page loaded mixed file versions (' + bad + ') · reload the page');
+  }
   var solid = new Uint8Array(N3);
   for (var p = 0; p < N3; p++) solid[p] = kept[p] > 0.5 ? 1 : 0;
   return { N: N, dims: [N, N, N], base: 0, kept: kept, raw: raw, solid: solid, dirs: FLOW_DIRS, qa: qa, qb: qb,

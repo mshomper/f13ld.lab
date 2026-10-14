@@ -572,6 +572,8 @@ Float64 CPU reference (`19f-flow-cpu-ref.js`) on geometry built through `14e bui
 | F10 | `runFlowGPUCheck` on the TPMS demo design, 16³ (software WebGPU in the VM): velocity 3e-7, populations 1e-6, wall links identical |
 | F11 | Sheet gyroid k / L² 1.994e-3 → 2.001e-3 → 2.010e-3 → 2.021e-3 at 16 / 24 / 32 / 48 (CPU), 2.022e-3 / 2.027e-3 at 64 / 128 (Matt's GPU). Schwarz P skeletal 9.10e-3 → 9.03e-3 → 9.03e-3 → 9.04e-3. Within 0.6 % per step from 24³ up |
 
+**v0.28.1 (2026-10-14):** Matt's first click-test failed once on a wet C15 foam ("offset is out of bounds") and never again after a reload; his file runs cleanly here at every step. Most likely a worker loaded the previous 14e (whole-grid output) right after the push. Now: `FLOW_LINKS_VERSION` in 14e, reported by every `flowlinks` reply and checked with each slab's size; a mismatch restarts the pool once with a fresh query string (`_tvResetPool`), then fails with "the page loaded mixed file versions · reload the page". Errors name their step. Matt's own timings at 64³: links 0.7–1.7 s, solve 0.35–0.41 s per design.
+
 **For Matt to check on his GPU:** a Flow run on his own designs, including foam and STL imports. Then `runFlowGPUCheck(0)`, `runFlowGPUCheck(1)` and so on in the console; each should print `pass: true`.
 
 **Later (Matt, 2026-10-14):** flow is cheap enough at 32³ and 64³ to go into F13LD.sweep and then F13LD.vault as a comparison metric, like the Sweep stiffness, not a final solve. That needs `14e`, `17c`'s flow job and `19g` copied into Sweep the way it copies 14a and 16b, plus Vault columns.
