@@ -100,14 +100,25 @@ function flowTurboCss() {
    speed crosses the cell in about 1.5 s × 1/speed.  A particle that wraps
    through a face restarts its trail; one that ends up in solid, outlives
    its life or sits still re-spawns at a random open-pore cell.
-   vertices() → { data, nSeg }: 4 vertices per trail segment, 11 floats
-   each (pos 3, other end 3, side, end, along, speed, head), world coords. */
-var FLOW_TRAIL = 10;
+   v0.29.1 — the trail is a pathline over a fixed span of flow time, not a
+   fixed number of frames: a point is kept every `length` units of flow
+   time (1 unit = one 60 Hz frame at speed 1), so faster fluid draws longer
+   streaks but the animation speed no longer changes how long they are.
+   The tail slides between its last two points so streaks keep a steady
+   length.  vertices() → { data, nSeg }: 4 vertices per trail segment, 11
+   floats each (pos 3, other end 3, side, end, along, speed, head), world
+   coords. */
+var FLOW_TRAIL = 12;
 function FlowParticles() {
   this.n = 0; this.T = FLOW_TRAIL; this.field = null;
   this.playing = true; this.speed = 1; this.count = 2500;
+  this.length = 1; this.size = 1; this.acc = 0;
   this._data = null;
 }
+FlowParticles.prototype.setLength = function (L) {
+  this.length = Math.max(0.25, Math.min(2, +L || 1));
+  if (this.acc > this.length) this.acc = 0;
+};
 FlowParticles.prototype.ready = function () { return !!this.field && this.n > 0; };
 FlowParticles.prototype.setField = function (f) {
   if (this.field === f) return;
@@ -163,52 +174,71 @@ FlowParticles.prototype._speedAt = function (x, y, z) {
 };
 FlowParticles.prototype.advance = function (dtSec) {
   if (!this.ready() || !this.playing) return;
-  var f = this.field, M = f.M, MM = M * M, T = this.T, k = 2 * Math.PI / M;
+  var f = this.field, M = f.M, MM = M * M, T = this.T, k = 2 * Math.PI / M, L = this.length;
   var frames = Math.min(3, Math.max(0, dtSec * 60));
   if (!(frames > 0)) return;
-  var h = frames * this.speed * M / 90;   /* cells per unit speed this frame */
+  /* flow time this frame, cut at the moments a trail point is kept */
+  var tau = frames * this.speed, acc = this.acc, cuts = [], keeps = 0;
+  while (acc + tau >= L && keeps < 64) { cuts.push(L - acc, 1); tau -= L - acc; acc = 0; keeps++; }
+  if (acc + tau >= L) tau = 0.999 * (L - acc);
+  cuts.push(tau, 0); acc += tau;
+  this.acc = acc;
+  var hu = M / 90;   /* cells per unit speed per unit flow time */
   var v1 = new Float32Array(3), v2 = new Float32Array(3);
   for (var i = 0; i < this.n; i++) {
-    var b = 3 * i, x = this.pos[b], y = this.pos[b + 1], z = this.pos[b + 2];
-    this._vel(x, y, z, v1);
-    var s1 = Math.sqrt(v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2]);
-    var nSub = Math.min(8, Math.max(1, Math.ceil(h * s1 / 0.7))), hs = h / nSub, wrapped = false;
-    for (var q = 0; q < nSub; q++) {
-      if (q) this._vel(x, y, z, v1);
-      this._vel(x + 0.5 * hs * v1[0], y + 0.5 * hs * v1[1], z + 0.5 * hs * v1[2], v2);
-      x += hs * v2[0]; y += hs * v2[1]; z += hs * v2[2];
-      if (x < 0 || x >= M || y < 0 || y >= M || z < 0 || z >= M) {
-        wrapped = true;
-        x = ((x % M) + M) % M; y = ((y % M) + M) % M; z = ((z % M) + M) % M;
+    var b = 3 * i, x = this.pos[b], y = this.pos[b + 1], z = this.pos[b + 2], wrapped = false, gone = false;
+    var tb = b * T, sb = i * T, sp = 0;
+    for (var c = 0; c < cuts.length; c += 2) {
+      var h = cuts[c] * hu;
+      if (h > 0) {
+        this._vel(x, y, z, v1);
+        var s1 = Math.sqrt(v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2]);
+        var nSub = Math.min(8, Math.max(1, Math.ceil(h * s1 / 0.7))), hs = h / nSub;
+        for (var q = 0; q < nSub; q++) {
+          if (q) this._vel(x, y, z, v1);
+          this._vel(x + 0.5 * hs * v1[0], y + 0.5 * hs * v1[1], z + 0.5 * hs * v1[2], v2);
+          x += hs * v2[0]; y += hs * v2[1]; z += hs * v2[2];
+          if (x < 0 || x >= M || y < 0 || y >= M || z < 0 || z >= M) {
+            wrapped = true;
+            x = ((x % M) + M) % M; y = ((y % M) + M) % M; z = ((z % M) + M) % M;
+          }
+        }
+      }
+      var cell = Math.min(M - 1, x | 0) * MM + Math.min(M - 1, y | 0) * M + Math.min(M - 1, z | 0);
+      if (!f.mask[cell]) { gone = true; break; }
+      this.pos[b] = x; this.pos[b + 1] = y; this.pos[b + 2] = z;
+      if (wrapped) { this._resetTrail(i); wrapped = false; continue; }
+      sp = this._speedAt(x, y, z);
+      /* the live head is the last point; keeping it shifts the trail */
+      this.trail[tb + 3 * (T - 1)] = -Math.PI + x * k; this.trail[tb + 3 * (T - 1) + 1] = -Math.PI + y * k; this.trail[tb + 3 * (T - 1) + 2] = -Math.PI + z * k;
+      this.tspd[sb + T - 1] = sp;
+      if (cuts[c + 1]) {
+        this.trail.copyWithin(tb, tb + 3, tb + 3 * T);
+        this.tspd.copyWithin(sb, sb + 1, sb + T);
       }
     }
-    this.pos[b] = x; this.pos[b + 1] = y; this.pos[b + 2] = z;
+    if (gone) { this._spawn(i); continue; }
     this.age[i] += frames;
-    var cell = Math.min(M - 1, x | 0) * MM + Math.min(M - 1, y | 0) * M + Math.min(M - 1, z | 0);
-    var sp = this._speedAt(x, y, z);
+    if (!sp) sp = this._speedAt(x, y, z);
     this.still[i] = sp < 0.02 ? this.still[i] + frames : 0;
-    if (!f.mask[cell] || this.age[i] > this.life[i] || this.still[i] > 60) { this._spawn(i); continue; }
-    if (wrapped) { this._resetTrail(i); continue; }
-    /* shift the trail one step and put the new head at the end */
-    var tb = b * T;
-    this.trail.copyWithin(tb, tb + 3, tb + 3 * T);
-    this.tspd.copyWithin(i * T, i * T + 1, i * T + T);
-    this.trail[tb + 3 * (T - 1)] = -Math.PI + x * k; this.trail[tb + 3 * (T - 1) + 1] = -Math.PI + y * k; this.trail[tb + 3 * (T - 1) + 2] = -Math.PI + z * k;
-    this.tspd[i * T + T - 1] = sp;
+    if (this.age[i] > this.life[i] || this.still[i] > 60) this._spawn(i);
   }
 };
 FlowParticles.prototype.vertices = function () {
   var T = this.T, nSeg = this.n * (T - 1), F = 11, need = nSeg * 4 * F;
   if (!this._data || this._data.length !== need) this._data = new Float32Array(need);
-  var D = this._data, o = 0;
+  var D = this._data, o = 0, P = this.trail, ft = Math.min(1, this.acc / this.length);
+  var t0 = this._t0 || (this._t0 = new Float32Array(3));
   for (var i = 0; i < this.n; i++) {
     var tb = 3 * i * T;
+    /* tail point slid toward the next one by the flow time since the last keep */
+    t0[0] = P[tb] + ft * (P[tb + 3] - P[tb]); t0[1] = P[tb + 1] + ft * (P[tb + 4] - P[tb + 1]); t0[2] = P[tb + 2] + ft * (P[tb + 5] - P[tb + 2]);
     for (var s = 0; s < T - 1; s++) {
       var a = tb + 3 * s, bq = a + 3, along = (s + 1) / (T - 1), head = (s === T - 2) ? 1 : 0, sp = this.tspd[i * T + s + 1];
       for (var v = 0; v < 4; v++) {
         var atB = v >= 2, side = (v & 1) ? 1 : -1, p = atB ? bq : a, q = atB ? a : bq;
-        D[o++] = this.trail[p]; D[o++] = this.trail[p + 1]; D[o++] = this.trail[p + 2];
-        D[o++] = this.trail[q]; D[o++] = this.trail[q + 1]; D[o++] = this.trail[q + 2];
+        if (p === tb) { D[o++] = t0[0]; D[o++] = t0[1]; D[o++] = t0[2]; } else { D[o++] = P[p]; D[o++] = P[p + 1]; D[o++] = P[p + 2]; }
+        if (q === tb) { D[o++] = t0[0]; D[o++] = t0[1]; D[o++] = t0[2]; } else { D[o++] = P[q]; D[o++] = P[q + 1]; D[o++] = P[q + 2]; }
         D[o++] = side; D[o++] = atB ? 1 : 0; D[o++] = atB ? along : along - 1 / (T - 1); D[o++] = sp; D[o++] = head;
       }
     }

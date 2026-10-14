@@ -5,6 +5,7 @@
 - `Co-Authored-By: Claude …` trailers are fine.
 
 ## Notes
+- 2026-10-14 v0.29.1 (branch `flow-viz`): particle trails sampled in flow time (`FlowParticles.setLength`, 0.25–2), so animation speed no longer sets streak length; size scales `uWidth`; play/speed/length/size/count shared in the view strip (`#flowAnimToggle`).
 - 2026-10-14 v0.29.0 (branch `flow-viz`): Flow view — `23-flow-viz.js` (field combine, FlowParticles), raymarcher view mode 4 + depth output + streak pass, 19g keeps velocity fields (`flowVizAddAxis`, ≤ 64³). Scope §14.
 - 2026-10-14 v0.28.1 (merged to main): Flow guards — 14e `FLOW_LINKS_VERSION` checked on every worker slab (bump it whenever buildFlowLinksFromFn's output changes, with `THERMAL_VOXEL_VERSION` in 17c); errors name their step.
 - 2026-10-14 v0.28.0: fluids Phase 1 — `19g-flow-lbm.js` GPU solver, Flow mode (`PHYS_STATE.flow`, `FLOW_STATE`, `FLOW_BY_DESIGN`, Run All Phase 5), Flow cards and tab; console `runFlowGPUCheck()`. Scope §13.

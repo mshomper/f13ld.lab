@@ -24,6 +24,8 @@ var VIEW_STATE = {
   flowDir: 'x',                             // v0.29.0 — mean flow along 'x' | 'y' | 'z' | 'xyz'
   flowSpeed: 1,                             // v0.29.0 — particle animation speed
   flowCount: 2500,                          // v0.29.0 — particles per tile
+  flowLength: 1,                            // v0.29.1 — streak length multiplier (0.25–2), flow time
+  flowSize: 1,                              // v0.29.1 — streak width multiplier
   flowPlay: true                            // v0.29.0 — particles moving
 };
 
@@ -72,17 +74,37 @@ function onFlowPlayToggle(btn){
   var bs = document.querySelectorAll('.flow-play');
   for (var i = 0; i < bs.length; i++){ bs[i].innerHTML = VIEW_STATE.flowPlay ? FLOW_ICON_PAUSE : FLOW_ICON_PLAY; bs[i].title = VIEW_STATE.flowPlay ? 'Pause' : 'Play'; }
 }
+/* v0.29.1 — the sliders live once, in the view strip (#flowAnimToggle) */
+function flowSliderLabel(el, txt){
+  var o = el && el.parentNode ? el.parentNode.querySelector('output') : null;
+  if (o) o.textContent = txt;
+}
 function onFlowSpeed(el){
   VIEW_STATE.flowSpeed = +el.value;
   for (var id in FLOW_PS) FLOW_PS[id].speed = VIEW_STATE.flowSpeed;
-  var ss = document.querySelectorAll('.vp-flow-control input[oninput^="onFlowSpeed"]');
-  for (var i = 0; i < ss.length; i++) if (ss[i] !== el) ss[i].value = el.value;
+  flowSliderLabel(el, VIEW_STATE.flowSpeed.toFixed(2) + '\u00d7');
+}
+function onFlowLength(el){
+  VIEW_STATE.flowLength = +el.value;
+  for (var id in FLOW_PS) FLOW_PS[id].setLength(VIEW_STATE.flowLength);
+  flowSliderLabel(el, VIEW_STATE.flowLength.toFixed(2) + '\u00d7');
+}
+function onFlowSize(el){
+  VIEW_STATE.flowSize = +el.value;
+  for (var id in FLOW_PS) FLOW_PS[id].size = VIEW_STATE.flowSize;
+  flowSliderLabel(el, VIEW_STATE.flowSize.toFixed(1) + '\u00d7');
 }
 function onFlowCount(el){
   VIEW_STATE.flowCount = +el.value;
   for (var id in FLOW_PS) FLOW_PS[id].setCount(VIEW_STATE.flowCount);
-  var ss = document.querySelectorAll('.vp-flow-control input[oninput^="onFlowCount"]');
-  for (var i = 0; i < ss.length; i++) if (ss[i] !== el) ss[i].value = el.value;
+  flowSliderLabel(el, String(VIEW_STATE.flowCount));
+}
+function flowAnimToggleSync(){
+  var g = document.getElementById('flowAnimToggle');
+  if (!g) return;
+  g.classList.toggle('show', VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView === 'particles');
+  var b = g.querySelector('.flow-play');
+  if (b && typeof FLOW_ICON_PLAY !== 'undefined'){ b.innerHTML = VIEW_STATE.flowPlay ? FLOW_ICON_PAUSE : FLOW_ICON_PLAY; b.title = VIEW_STATE.flowPlay ? 'Pause' : 'Play'; }
 }
 function onViewModeClick(mode){
   if (mode === 'deform') mode = 'stress';   /* v0.25.0 — Deformed is part of the Stress tab */
@@ -124,6 +146,7 @@ function onViewModeClick(mode){
 
   var fillGroup = document.getElementById('thermalFillerToggle');   /* v0.20.0 */
   if (fillGroup) fillGroup.classList.toggle('show', mode === 'thermal');
+  flowAnimToggleSync();   /* v0.29.1 */
 
   // Re-render
   if (typeof renderDesignGrid === 'function') renderDesignGrid();

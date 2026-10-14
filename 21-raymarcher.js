@@ -1658,7 +1658,7 @@ LabRaymarcher.prototype._drawFlowStreaks = function(rot, S, w, h, dpr, dt) {
   gl.uniform1f(FL.U.zoom, S.zoom);
   gl.uniform2f(FL.U.uPan, S.panX || 0, S.panY || 0);
   gl.uniform2f(FL.U.res, w, h);
-  gl.uniform1f(FL.U.uWidth, 1.6 * dpr);
+  gl.uniform1f(FL.U.uWidth, 1.6 * dpr * (ps.size || 1));   /* v0.29.1 — size slider */
   gl.uniform1f(FL.U.uHi, S.flowHi || 1);
   gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.depthFunc(gl.LEQUAL); gl.depthMask(false);

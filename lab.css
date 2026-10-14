@@ -623,6 +623,15 @@ html, body {
   padding:3px 9px; cursor:pointer; letter-spacing:0.05em; line-height:1;
 }
 .stress-norm-btn.active { background:var(--neon); border-color:var(--neon); color:#0a0a0a }
+/* v0.29.1 — shared tracer particle controls in the view strip; wraps, never scrolls */
+.view-strip { flex-wrap:wrap; row-gap:8px }
+.flow-anim-group.show { display:inline-flex; flex-wrap:wrap; row-gap:6px; column-gap:12px; min-width:0; max-width:100% }
+.flow-anim-group .stress-norm-label { margin-right:0 }
+.flow-anim-group .flow-play { display:inline-flex; align-items:center; justify-content:center; padding:3px 7px; color:rgba(255,255,255,0.8) }
+.flow-anim-group .flow-play svg { display:block }
+.fa-sl { display:inline-flex; align-items:center; gap:6px; font:10px 'JetBrains Mono', ui-monospace, monospace; color:rgba(255,255,255,0.55); letter-spacing:0.06em }
+.fa-sl input[type=range] { width:84px; accent-color:var(--neon) }
+.fa-sl output { min-width:38px; color:rgba(255,255,255,0.8) }
 
 /* ============ RESPONSIVE ============ */
 @media (max-width: 1280px) {

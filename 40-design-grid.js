@@ -442,11 +442,8 @@ function buildFlowControl(){
       vb('surface', 'K(n)', 'Directional permeability surface') +
     '</div>';
   if (v !== 'surface') h += '<div class="th-toggle">' + db('x', 'X') + db('y', 'Y') + db('z', 'Z') + db('xyz', 'XYZ') + '</div>';
-  if (v === 'particles') {
-    h += '<button class="th-btn flow-play" title="' + (VIEW_STATE.flowPlay ? 'Pause' : 'Play') + '" onclick="onFlowPlayToggle(this)">' + (VIEW_STATE.flowPlay ? FLOW_ICON_PAUSE : FLOW_ICON_PLAY) + '</button>' +
-      '<span class="vp-sl"><label>speed</label><input type="range" min="0.25" max="3" step="0.05" value="' + VIEW_STATE.flowSpeed + '" oninput="onFlowSpeed(this)"></span>' +
-      '<span class="vp-sl"><label>count</label><input type="range" min="500" max="6000" step="250" value="' + VIEW_STATE.flowCount + '" oninput="onFlowCount(this)"></span>';
-  }
+  /* v0.29.1 — play, speed, length, size and count are shared by every
+     tile and live in the view strip (#flowAnimToggle) */
   return h + '</div>';
 }
 
@@ -1058,6 +1055,7 @@ function renderDesignGrid(){
         if (VIEW_STATE.flowView === 'particles') {
           var fps = flowParticlesFor(rdesign.id);
           fps.speed = VIEW_STATE.flowSpeed; fps.playing = VIEW_STATE.flowPlay; fps.count = VIEW_STATE.flowCount;
+          fps.size = VIEW_STATE.flowSize; fps.setLength(VIEW_STATE.flowLength);   /* v0.29.1 */
           fps.setField(ffv); fps.setCount(VIEW_STATE.flowCount);
           rkrm.setFlowParticles(fps);
         } else rkrm.setFlowParticles(null);
