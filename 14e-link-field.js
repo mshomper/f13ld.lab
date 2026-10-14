@@ -56,6 +56,10 @@
      marginSurfaceArea(m, N, kept, raw, iRange)   (v0.23.0) wall area ÷ cell edge²
      voidOpenAxes(kept, N)                        (v0.23.0) pores run through x / y / z
      designGeometryMetrics(recipe, N, opts)       (v0.23.0) both, built from the recipe
+     buildFlowLinks(recipe, N, opts)              (v0.27.1) all 18 D3Q19 links, §4 below
+       → { N, kept, raw, solid (Uint8 N³), dirs, qa: [9 × Float32 N³], qb: [9 × Float32 N³],
+           nSurf, nExamined, nWall, nThin, nMulti }
+     buildFlowLinksFromFn(fn, N, kept, raw, mCorner, opts)
 
    3. Surface area (v0.23.0, thermal Phase 3 — THERMAL_SCOPE.md §3.9, §14).
       Marching tetrahedra on the corner margin grid: each voxel cube is
@@ -332,6 +336,129 @@ function buildLinkFieldFromFn(fn, N, kept, raw, mCorner, opts) {
   return { N: N, kept: kept, raw: raw, s: S, rho: solidSum / N3, rhoLink: linkSum / (3 * N3), nExamined: nEx, nMulti: nMulti };
 }
 
+/* ------------------------------------------------------------
+   4. Flow links (v0.27.1 — fluids Phase 0, FLUIDS_LBM_SCOPE.md §3.2).
+   The D3Q19 lattice streams along 18 links: 6 axis and 12 face diagonals.
+   They pair up as 9 positive directions FLOW_DIRS; the link from voxel id
+   along +c and the link from id + c along −c are the same segment, so one
+   walk serves both ends.  For every link with a wall on it:
+     qa[d][id]  fraction of the link from id to the first wall   (id fluid)
+     qb[d][id]  fraction from id + c back to the first wall      (id + c fluid)
+   0 means open (no solid on the link).  A link whose two ends are both
+   fluid but which passes through a wall thinner than a voxel gets a q at
+   each end, so the solver walls it off from both sides (the thin-link case).
+   Links are examined when either end is a surface voxel — one whose centre
+   disagrees with any of its 8 corners or its 6 face neighbours — which also
+   catches walls that pass between two centres of the same phase.  The
+   margin is sampled at 9 points per link and every sign change refined by
+   6 bisection steps (1/512 of a link), as buildLinkField.  Ends the island
+   trim removed count as pore: a link touching one is open, or halfway
+   (q = ½) when its other end is kept solid. */
+var FLOW_LINKS_VERSION = 'fl-2';   /* v0.28.1 — slab output (iRange); 17c checks workers carry the same copy */
+var FLOW_DIRS = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, -1, 0], [1, 0, 1], [1, 0, -1], [0, 1, 1], [0, 1, -1]];
+var FLOW_Q_MIN = 1e-4;     /* a wall right on a node still counts as a wall */
+
+function buildFlowLinks(recipe, N, opts) {
+  opts = opts || {};
+  var t0 = linkNowMs(), d = designMarginSetup(recipe, N, opts);
+  var out = buildFlowLinksFromFn(d.mg.fn, N, d.kept, d.raw, d.mg.m, opts);
+  out.t_ms = linkNowMs() - t0;
+  return out;
+}
+
+function buildFlowLinksFromFn(fn, N, kept, raw, mCorner, opts) {
+  opts = opts || {};
+  /* opts.dims = [NX, NY, NZ]: a box of whole voxels at spacing 2π/N
+     (x from −π, index i·NY·NZ + j·NZ + k); default the N³ cube */
+  var dims = opts.dims || [N, N, N], NX = dims[0], NY = dims[1], NZ = dims[2];
+  var L = Math.PI, h = 2 * L / N, SI = NY * NZ, N3 = NX * NY * NZ, nD = FLOW_DIRS.length;
+  /* opts.iRange = [i0, i1): only links starting in that x-slab, stored
+     slab-sized (out.base = i0·NY·NZ is the offset of its first voxel) —
+     one worker job of 17c buildFlowLinksParallel */
+  var I0 = opts.iRange ? opts.iRange[0] : 0, I1 = opts.iRange ? opts.iRange[1] : NX;
+  var base = I0 * SI, len = (I1 - I0) * SI;
+  var qa = [], qb = [];
+  for (var d0 = 0; d0 < nD; d0++) { qa.push(new Float32Array(len)); qb.push(new Float32Array(len)); }
+  var solid = new Uint8Array(N3), trim = new Uint8Array(N3), surf = new Uint8Array(N3);
+  for (var p0 = 0; p0 < N3; p0++) {
+    solid[p0] = kept[p0] > 0.5 ? 1 : 0;
+    trim[p0] = raw && raw[p0] > 0.5 && !solid[p0] ? 1 : 0;
+  }
+  /* surface voxels: centre (kept) disagrees with a corner or a face neighbour */
+  /* a link from the slab ends at most one voxel further along x */
+  var nSurf = 0, sEnd = opts.iRange ? Math.min(I1 + 1, I0 + NX) : NX;
+  for (var ii = I0; ii < sEnd; ii++) for (var j = 0; j < NY; j++) for (var k = 0; k < NZ; k++) {
+    var i = ii % NX, id = i * SI + j * NZ + k, s = solid[id], hit = 0;
+    if (mCorner && !trim[id]) {
+      for (var c = 0; c < 8 && !hit; c++) {
+        var ci = (i + (c & 1)) % NX, cj = (j + ((c >> 1) & 1)) % NY, ck = (k + (c >> 2)) % NZ;
+        if ((mCorner[ci * SI + cj * NZ + ck] > 0 ? 1 : 0) !== s) hit = 1;
+      }
+    }
+    if (!hit) {
+      var ip = (i + 1) % NX, im = (i + NX - 1) % NX, jp = (j + 1) % NY, jm = (j + NY - 1) % NY, kp = (k + 1) % NZ, km = (k + NZ - 1) % NZ;
+      if (solid[ip * SI + j * NZ + k] !== s || solid[im * SI + j * NZ + k] !== s || solid[i * SI + jp * NZ + k] !== s ||
+          solid[i * SI + jm * NZ + k] !== s || solid[i * SI + j * NZ + kp] !== s || solid[i * SI + j * NZ + km] !== s) hit = 1;
+    }
+    if (hit) { surf[id] = 1; nSurf++; }
+  }
+  var tS = new Float64Array(LINK_SAMPLES + 1), mS = new Float64Array(LINK_SAMPLES + 1);
+  for (var q = 0; q <= LINK_SAMPLES; q++) tS[q] = q / LINK_SAMPLES;
+  var nEx = 0, nWall = 0, nThin = 0, nMulti = 0;
+  for (var i2 = I0; i2 < I1; i2++) for (var j2 = 0; j2 < NY; j2++) for (var k2 = 0; k2 < NZ; k2++) {
+    var a = i2 * SI + j2 * NZ + k2, as = a - base;
+    var x = -L + (i2 + 0.5) * h, y = -L + (j2 + 0.5) * h, z = -L + (k2 + 0.5) * h;
+    for (var dd = 0; dd < nD; dd++) {
+      var cv = FLOW_DIRS[dd];
+      var b = ((i2 + cv[0] + NX) % NX) * SI + ((j2 + cv[1] + NY) % NY) * NZ + ((k2 + cv[2] + NZ) % NZ);
+      var sa = solid[a], sb = solid[b];
+      if (sa && sb) continue;
+      if (trim[a] || trim[b]) {
+        /* trimmed islands are pore; no sub-voxel wall on them */
+        if (sa) qb[dd][as] = 0.5; else if (sb) qa[dd][as] = 0.5;
+        if (sa || sb) nWall++;
+        continue;
+      }
+      if (!opts.staircase && !surf[a] && !surf[b] && sa === sb) continue;
+      if (opts.staircase) {
+        if (sa !== sb) { if (sa) qb[dd][as] = 0.5; else qa[dd][as] = 0.5; nWall++; }
+        continue;
+      }
+      nEx++;
+      var dx = cv[0] * h, dy = cv[1] * h, dz = cv[2] * h;
+      for (var p = 0; p <= LINK_SAMPLES; p++) {
+        if (p === 0) { mS[p] = sa ? 1 : -1; continue; }
+        if (p === LINK_SAMPLES) { mS[p] = sb ? 1 : -1; continue; }
+        mS[p] = fn(x + tS[p] * dx, y + tS[p] * dy, z + tS[p] * dz);
+      }
+      var tFirst = -1, tLast = -1, sPrev = mS[0] > 0, nCross = 0;
+      for (var p2 = 1; p2 <= LINK_SAMPLES; p2++) {
+        var sNow = mS[p2] > 0;
+        if (sNow !== sPrev) {
+          nCross++;
+          var lo = tS[p2 - 1], hi = tS[p2];
+          for (var bs = 0; bs < LINK_BISECT; bs++) {
+            var mid = 0.5 * (lo + hi), mm = fn(x + mid * dx, y + mid * dy, z + mid * dz);
+            if ((mm > 0) === sPrev) lo = mid; else hi = mid;
+          }
+          var tc = 0.5 * (lo + hi);
+          if (tFirst < 0) tFirst = tc;
+          tLast = tc;
+          sPrev = sNow;
+        }
+      }
+      if (nCross === 0) continue;               /* open fluid link (or a sign blip the samples missed) */
+      nWall++;
+      if (nCross > 1) nMulti++;
+      if (!sa) qa[dd][as] = Math.max(FLOW_Q_MIN, tFirst);
+      if (!sb) qb[dd][as] = Math.max(FLOW_Q_MIN, 1 - tLast);
+      if (!sa && !sb) nThin++;
+    }
+  }
+  return { N: N, dims: [NX, NY, NZ], base: base, kept: kept, raw: raw, solid: solid, dirs: FLOW_DIRS, qa: qa, qb: qb,
+           nSurf: nSurf, nExamined: nEx, nWall: nWall, nThin: nThin, nMulti: nMulti };
+}
+
 /* Solid fraction of the unit cube u ∈ [−½, ½]³ where m0 + g·u > 0
    (g in margin units per voxel).  Exact plane–cube volume (Scardovelli &
    Zaleski 2000, J. Comput. Phys. 164): with n = |g| and w = u + ½, the
@@ -352,5 +479,6 @@ function planeCubeSolidFraction(m0, gx, gy, gz) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { buildVoxelTensors: buildVoxelTensors, voxelTensorsFromMargin: voxelTensorsFromMargin, buildLinkField: buildLinkField,
     buildLinkFieldFromFn: buildLinkFieldFromFn, planeCubeSolidFraction: planeCubeSolidFraction,
-    marginSurfaceArea: marginSurfaceArea, voidOpenAxes: voidOpenAxes, designGeometryMetrics: designGeometryMetrics };
+    marginSurfaceArea: marginSurfaceArea, voidOpenAxes: voidOpenAxes, designGeometryMetrics: designGeometryMetrics,
+    buildFlowLinks: buildFlowLinks, buildFlowLinksFromFn: buildFlowLinksFromFn, FLOW_DIRS: FLOW_DIRS, FLOW_LINKS_VERSION: FLOW_LINKS_VERSION };
 }

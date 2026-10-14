@@ -69,7 +69,7 @@ function onViewModeClick(mode){
   var normGroup = document.getElementById('stressNormToggle');
   if (normGroup) {
     var tv = VIEW_STATE.thermalView;
-    normGroup.classList.toggle('show', (mode === 'stress' || mode === 'stiff' ||
+    normGroup.classList.toggle('show', (mode === 'stress' || mode === 'stiff' || mode === 'flow' ||
                                         (mode === 'thermal' && (tv === 'dev' || tv === 'flux' || tv === 'kappa'))));
     updateStressNormToggleVisual();
     /* Push 5 — swap the label text so the user knows what the toggle
@@ -80,6 +80,7 @@ function onViewModeClick(mode){
       if (mode === 'stiff')      labelEl.textContent = 'E surface scale';
       else if (mode === 'stress') labelEl.textContent = 'σ_VM scale';
       else if (mode === 'thermal') labelEl.textContent = 'Map scale';
+      else if (mode === 'flow')    labelEl.textContent = 'K surface scale';   /* v0.28.0 */
     }
   }
 

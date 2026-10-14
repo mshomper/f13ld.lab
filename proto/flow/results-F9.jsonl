@@ -1,0 +1,2 @@
+{"test":"F9 mass drift","geometry":"gyroid-sheet","N":32,"steps":1000,"max_mass_correction_per_node":"7.75e-11","relative_to_mean_speed":"2.33e-7","pass":true,"ms":4891}
+{"test":"F9 mass drift","geometry":"schwarzp-skel","N":32,"steps":2500,"max_mass_correction_per_node":"5.76e-11","relative_to_mean_speed":"3.48e-8","pass":true,"ms":13751}

@@ -84,6 +84,7 @@ function densityText(d){
 function preRunStats(d, mode){
   var p = ['run to compute', 'neut'];
   if (mode === 'thermal') return thermalStats(d);
+  if (mode === 'flow') return flowStats(d);   /* v0.28.0 */
   if (mode === 'buckle'){
     return [
       { lbl:'Buckling Strength',       val:'\u2014', delta:p },
@@ -143,6 +144,7 @@ function elasticNotConvergedText(r){
 function statsForDesign(d, mode){
   var r = d.results;
   if (mode === 'thermal') return thermalStats(d);   /* v0.20.0 — reads THERMAL_BY_DESIGN, not d.results */
+  if (mode === 'flow') return flowStats(d);         /* v0.28.0 — reads FLOW_BY_DESIGN */
   if (!r){
     /* Sprint A — was [] (no drawer).  With no elastic results but buckling /
        nonlinear data present (elastic toggled off), fall through with an
@@ -323,6 +325,90 @@ function thermalStats(d){
     dens
   ];
 }
+/* ── v0.28.0 — Flow cards (19g, FLOW_BY_DESIGN; docs/FLUIDS_LBM_SCOPE.md) ──
+   Permeability per axis in m² for the design's cell size (k / L² in the
+   note, independent of cell size), anisotropy, hydraulic tortuosity, open
+   and sealed porosity, and the narrowest pore against the grid rule
+   (≥ 8 voxels for permeability, ≥ 15 for wall shear in Phase 2). */
+function flowData(d){ return (typeof FLOW_BY_DESIGN !== 'undefined') ? FLOW_BY_DESIGN[d.id] : null; }
+function fmtSci(v, digits){
+  if (!(v > 0) || !isFinite(v)) return '0';
+  var e = Math.floor(Math.log10(v)), m = v / Math.pow(10, e);
+  if (m >= 9.995) { m /= 10; e++; }
+  var sup = String(e).replace(/-/g, '\u207b').replace(/[0-9]/g, function (c) { return '\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079'[+c]; });
+  return m.toFixed(digits == null ? 2 : digits) + '\u00d710' + sup;
+}
+function flowAxisRow(d, fr, ax){
+  var idx = 'xyz'.indexOf(ax), lbl = 'Permeability ' + ax.toUpperCase(), pa = fr.perAxis && fr.perAxis[idx];
+  if (!pa || !pa.open) return { lbl:lbl, val:'0', delta:['no open pore path along ' + ax.toUpperCase(), 'warn'] };
+  var kl = fr.kL2[idx], cell = (typeof labCellMm === 'function') ? labCellMm(d) : null;
+  var val = cell > 0 ? fmtSci(kl * (cell / 1000) * (cell / 1000)) + ' m\u00b2' : 'k/L\u00b2 ' + fmtSci(kl);
+  if (!pa.converged) return { lbl:lbl, val:val, delta:['not converged \u00b7 ' + pa.steps.toLocaleString('en-US') + ' steps', 'warn'] };
+  return { lbl:lbl, val:val, delta:['k/L\u00b2 ' + fmtSci(kl), 'neut'] };
+}
+function flowStats(d){
+  var fr = flowData(d), dash = ['\u2014', 'neut'];
+  if (!fr || fr.error){
+    var note = fr && fr.error ? [fr.error, 'warn']
+      : [(typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'run to compute' : 'enable Flow + Run', 'neut'];
+    return [
+      { lbl:'Permeability X', val:'\u2014', delta:note },
+      { lbl:'Permeability Y', val:'\u2014', delta:dash },
+      { lbl:'Permeability Z', val:'\u2014', delta:dash },
+      { lbl:'Anisotropy', val:'\u2014', delta:dash },
+      { lbl:'Tortuosity', val:'\u2014', delta:dash },
+      { lbl:'Open Porosity', val:'\u2014', delta:dash },
+      { lbl:'Narrowest Pore', val:'\u2014', delta:dash },
+      { lbl:'Relative Density', val:densityText(d), delta:['solver voxel \u03c1', 'neut'] }
+    ];
+  }
+  var open = [0, 1, 2].filter(function (a) { return fr.perAxis[a] && fr.perAxis[a].open; });
+  var ks = open.map(function (a) { return fr.kL2[a]; });
+  var anis = open.length === 3 ? Math.max.apply(null, ks) / Math.min.apply(null, ks) : Infinity;
+  var tl = open.map(function (a) { return fr.tort[a]; }).filter(isFinite);
+  var tMean = tl.length ? tl.reduce(function (p, q) { return p + q; }, 0) / tl.length : NaN;
+  var tNote = open.map(function (a) { return 'XYZ'[a] + ' ' + (isFinite(fr.tort[a]) ? fr.tort[a].toFixed(2) : '\u2014'); }).join(' \u00b7 ');
+  var sealed = fr.sealedPorosity || 0;
+  var cell = (typeof labCellMm === 'function') ? labCellMm(d) : null, thr = fr.throatVox;
+  var thrRow = { lbl:'Narrowest Pore', val:'\u2014', delta:['no open pores', 'neut'] };
+  if (thr != null){
+    var um = cell > 0 ? Math.round(thr * cell / fr.N * 1000) : null;
+    var permMin = (typeof FLOW_THROAT_PERM !== 'undefined') ? FLOW_THROAT_PERM : 8, wssMin = (typeof FLOW_THROAT_WSS !== 'undefined') ? FLOW_THROAT_WSS : 15;
+    thrRow = { lbl:'Narrowest Pore', val:(um != null ? um.toLocaleString('en-US') + ' \u00b5m' : thr.toFixed(1) + ' voxels'),
+      delta: thr < permMin ? [thr.toFixed(1) + ' voxels \u00b7 coarse for permeability \u00b7 raise the flow grid', 'warn']
+           : [thr.toFixed(1) + ' voxels across at ' + fr.N + '\u00b3' + (thr < wssMin ? ' \u00b7 wall shear will want ' + wssMin + '+' : ''), 'neut'] };
+  }
+  return [
+    flowAxisRow(d, fr, 'x'), flowAxisRow(d, fr, 'y'), flowAxisRow(d, fr, 'z'),
+    { lbl:'Anisotropy', val:isFinite(anis) ? anis.toFixed(2) : '\u221e', delta:[open.length === 3 ? 'K max / K min' : 'closed along ' + [0, 1, 2].filter(function (a) { return open.indexOf(a) < 0; }).map(function (a) { return 'XYZ'[a]; }).join(', '), 'neut'] },
+    { lbl:'Tortuosity', val:isFinite(tMean) ? tMean.toFixed(2) : '\u2014', delta:[tNote ? 'mean speed \u00f7 mean flow \u00b7 ' + tNote : '\u2014', 'neut'] },
+    { lbl:'Open Porosity', val:(fr.openPorosity * 100).toFixed(1) + '%',
+      delta: sealed > 0.0005 ? ['sealed pores ' + (sealed * 100).toFixed(1) + '% \u00b7 no flow through them', 'warn'] : ['every pore joins the flow', 'neut'] },
+    thrRow,
+    { lbl:'Relative Density', val:(1 - fr.porosity).toFixed(2), delta:['flow grid ' + fr.N + '\u00b3, island-trimmed', 'neut'] }
+  ];
+}
+function flowEmptyMsg(d){
+  var fr = flowData(d);
+  if (!fr) return (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'Run to see the permeability surface' : 'Enable Flow \u00b7 Run';
+  if (fr.error) return fr.error;
+  return 'Closed along at least one axis \u00b7 no permeability surface';
+}
+/* the K(n) surface uses k/L² so designs at different grids compare */
+function flowSurfaceK(fr){
+  if (!fr || fr.error || !fr.Ksym || !fr.perAxis) return null;
+  for (var a = 0; a < 3; a++) if (!fr.perAxis[a] || !fr.perAxis[a].open || !(fr.Ksym[4 * a] > 0)) return null;
+  var s = 1 / (fr.N * fr.N), K = [];
+  for (var i = 0; i < 9; i++) K.push(fr.Ksym[i] * s);
+  return K;
+}
+function flowReadout(d){
+  var fr = flowData(d);
+  if (!fr) return 'k/L\u00b2 = \u2014 \u00b7 enable Flow + Run';
+  if (fr.error) return 'k/L\u00b2 \u2014 ' + fr.error;
+  return 'k/L\u00b2 ' + fr.kL2.map(function (v) { return v > 0 ? v.toExponential(2) : '0'; }).join(' / ') + ' \u00b7 N=' + fr.N;
+}
+
 /* ── v0.21.0 — thermal map (Phase 2) ──────────────────────────────────
    The map shows one filler and one gradient axis on every tile.  Fields
    come from THERMAL_BY_DESIGN[id].byFiller[f].fields[axis] = { N, Tc, q }
@@ -683,10 +769,19 @@ function renderDesignGrid(){
      elastic Run All populates this). */
   var svDesigns = [];   /* [{i, id}, …] */
   var kappaMode = (VIEW_STATE.mode === 'thermal' && VIEW_STATE.thermalView === 'kappa');   /* v0.21.0 — κ(n) surface */
-  var svMode = (VIEW_STATE.mode === 'stiff') || kappaMode;
+  var flowMode = (VIEW_STATE.mode === 'flow');   /* v0.28.0 — K(n) permeability surface */
+  var svMode = (VIEW_STATE.mode === 'stiff') || kappaMode || flowMode;
   if (svMode) {
     for (var si = 0; si < LAB_STATE.designs.length && si < 3; si++) {
       var sd_g = LAB_STATE.designs[si];
+      if (flowMode) {
+        var fKf = flowSurfaceK(flowData(sd_g));
+        if (!fKf) continue;
+        var svF = (typeof getOrCreateStiffnessViz === 'function') ? getOrCreateStiffnessViz(sd_g.id) : null;
+        if (svF) svF.uploadDesign(kappaAsCompliance(fKf));
+        svDesigns.push({ i: si, id: sd_g.id });
+        continue;
+      }
       if (kappaMode) {
         var thK = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[sd_g.id] : null;
         var fK = (thK && !thK.error && thK.byFiller) ? thK.byFiller[thermalFillerView(thK)] : null;
@@ -749,6 +844,10 @@ function renderDesignGrid(){
     else if (VIEW_STATE.mode === 'thermal'){
       /* v0.21.0 — map (raymarcher) or κ(n) surface when there is data; else say why */
       if (!useRM && !useSV) svgInner = svgEmptyViewport(thermalEmptyMsg(d));
+    }
+    else if (VIEW_STATE.mode === 'flow'){
+      /* v0.28.0 — K(n) permeability surface when all three axes are open */
+      if (!useSV) svgInner = svgEmptyViewport(flowEmptyMsg(d));
     }
     else if (VIEW_STATE.mode === 'buckle'){
       if (!useRM) {
@@ -1333,6 +1432,7 @@ function readoutForDesign(d, mode){
     return 'E_max = — (not computed)';
   }
   if (mode === 'thermal') return thermalReadout(d);   /* v0.20.0 */
+  if (mode === 'flow') return flowReadout(d);         /* v0.28.0 */
   if (mode === 'buckle' && LAB_STATE.runHasCompleted){
     return r.lambda_cr === 0 ? 'λ_cr = — (not computed)'
                               : 'λ_cr = ' + r.lambda_cr.toFixed(2);
@@ -1364,6 +1464,7 @@ function removeDesign(designId){
   if (typeof BUCKLE_BY_DESIGN !== 'undefined') delete BUCKLE_BY_DESIGN[designId];
   if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[designId];
   if (typeof NONLIN_AXES !== 'undefined') delete NONLIN_AXES[designId];
+  if (typeof FLOW_BY_DESIGN !== 'undefined') delete FLOW_BY_DESIGN[designId];   /* v0.28.0 */
 
   LAB_STATE.designs = LAB_STATE.designs.filter(function(d){ return d.id !== designId; });
   if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();   /* freed slot returns to the pool; survivors keep theirs */

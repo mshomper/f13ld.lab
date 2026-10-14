@@ -12,7 +12,8 @@ var PHYS_STATE = {
   elastic: true,
   buckle:  false,
   nonlin:  false,
-  thermal: true
+  thermal: true,
+  flow:    false   /* v0.28.0 — lattice Boltzmann permeability (19g); off by default (Matt, 2026-10-14) */
 };
 
 /* v0.24.0 — fixed grid (32³ / 64³ / 128³); the hardware-tier Auto pick is gone */
@@ -66,6 +67,18 @@ var NONLIN_BY_DESIGN = {};
 var THERMAL_STATE = { fillers: { air: false, water: true, tissue: false },   /* v0.24.0 default: water only */ tol: 1e-5, maxiter: 3000, captureMaxN: 128 };
 var THERMAL_BY_DESIGN = {};
 var THERMAL_FRAG_FLAG = 0.05;   /* > 5 % of the solid in sub-3³-voxel fragments the island trim drops → under-resolved (Matt, 2026-10-07: trim stays on, flag it) */
+
+/* v0.28.0 — flow (19g GPU lattice Boltzmann, docs/FLUIDS_LBM_SCOPE.md).
+   Own grid, default 64³ (Matt, 2026-10-14: 64 default; tolerance Standard
+   1e-6 with High 1e-7 as the option).  FLOW_BY_DESIGN[id] = { base, N, K,
+   Ksym, kL2, tort, perAxis, porosity, openPorosity, sealedPorosity,
+   openBits, throatVox, … } | { error }, kept out of d.results like thermal.
+   Permeability needs about 8 cells across the narrowest pore (scope §3.8,
+   checks F6/F7); fewer flags the design as coarse for permeability. */
+var FLOW_STATE = { N: 64, tol: 1e-6 };
+var FLOW_BY_DESIGN = {};
+var FLOW_THROAT_PERM = 8;   /* cells across the narrowest pore for permeability within ~2 % */
+var FLOW_THROAT_WSS = 15;   /* … and for wall shear stress (Phase 2) */
 function thermalFillersOn(){
   if (typeof THERMAL_FILLERS === 'undefined') return [];
   return THERMAL_FILLERS.filter(function(f){ return !!THERMAL_STATE.fillers[f.id]; });
@@ -232,7 +245,7 @@ var RUN_STATE = {
 
 /* Phase-6 tie-up #4 — last run's measured per-mode wall-times (ms), surfaced
    to the console and folded into the next estimate via RUN_CALIB. */
-var RUN_TIMING = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0 };
+var RUN_TIMING = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0, flow: 0 };
 
 /* ============================================================
    PHYSICS TOGGLES
@@ -355,7 +368,8 @@ var RUN_REF = {
   buckling:  { sec: 25.0, refN: 32 },   /* v0.8.0 voxel FE, 3-axis pool @ N=32: Schwarz P (dense) 34 s / axis in a
                                            slow single-thread sandbox, axes in parallel; sheets ~12 s */
   nonlinear: { sec: 90.0, refN: 16, refCap: 0.05 }, /* sync-bound crush @ N=16, 5% cap */
-  thermal:   { sec: 2.0,  refN: 64 }   /* v0.20.0 — per filler, incl. its share of the wall-voxel build (uncalibrated guess) */
+  thermal:   { sec: 2.0,  refN: 64 },   /* v0.20.0 — per filler, incl. its share of the wall-voxel build (uncalibrated guess) */
+  flow:      { sec: 1.0,  refN: 64 }   /* v0.28.0 — wall links + three axes at 64³ on Matt's RTX ≈ 0.8 s; steps grow ~N², so cost ~N⁴ */
 };
 
 /* Calibration: measured seconds-per-design keyed by mode → { sec, N, cap }.
@@ -396,6 +410,10 @@ function modePerDesignSec(mode){
     var tN = GRID_STATE.N, nF = Math.max(1, thermalFillersOn().length);
     return nF * (cal ? cal.sec * gridScale(tN, cal.N) : ref.sec * gridScale(tN, ref.refN));
   }
+  if (mode === 'flow'){   /* v0.28.0 */
+    var fN = FLOW_STATE.N, fr = cal ? fN / cal.N : fN / ref.refN;
+    return (cal ? cal.sec : ref.sec) * fr * fr * fr * fr;
+  }
   return 0;
 }
 
@@ -408,6 +426,7 @@ function estimateSeconds(){
   if (PHYS_STATE.nonlin)  total += modePerDesignSec('nonlinear') * n * nlAxesToRun().length;   /* per crush; All = 3 */
   if (PHYS_STATE.buckle)  total += modePerDesignSec('buckling')  * n;
   if (PHYS_STATE.thermal) total += modePerDesignSec('thermal')   * n;
+  if (PHYS_STATE.flow)    total += modePerDesignSec('flow')      * n;
   return total;
 }
 
@@ -557,20 +576,21 @@ async function runRealSweep(N, runToken){
      shared RUN_STATE.cancelled flag (which a new run used to reset to false,
      letting a cancelled sweep resume alongside it). */
   function stale(){ return runToken !== RUN_STATE.token; }
-  var nFresh = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0 };   /* Sprint A — calibrate on fresh solves only (thermal: per filler) */
+  var nFresh = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0, flow: 0 };   /* Sprint A — calibrate on fresh solves only (thermal: per filler) */
 
   var doElastic = !!PHYS_STATE.elastic;
   var doBuckle  = !!PHYS_STATE.buckle;
   var doNonlin  = !!PHYS_STATE.nonlin && typeof NonlinearSolverFull === 'function';
   var thFill    = thermalFillersOn();
   var doThermal = !!PHYS_STATE.thermal && typeof homogenizeThermalGPU === 'function' && thFill.length > 0;   /* v0.20.0 */
+  var doFlow    = !!PHYS_STATE.flow && typeof homogenizeFlowGPU === 'function';   /* v0.28.0 */
 
   /* WebGPU is required only for the elastic / GPU path. */
-  if ((doElastic || doNonlin || doThermal) && typeof ensureDevice === 'function'){   /* Sprint A — nonlinear builds an FFTPlan too */
+  if ((doElastic || doNonlin || doThermal || doFlow) && typeof ensureDevice === 'function'){   /* Sprint A — nonlinear builds an FFTPlan too */
     var ok = false;
     try { ok = await ensureDevice(); } catch (e) { ok = false; }
     if (stale()) return;
-    if (!ok && !doElastic){ doNonlin = false; doThermal = false; ok = true; console.warn('[run] WebGPU unavailable — skipping nonlinear and thermal'); }
+    if (!ok && !doElastic){ doNonlin = false; doThermal = false; doFlow = false; ok = true; console.warn('[run] WebGPU unavailable — skipping nonlinear and thermal'); }
     if (!ok){
       paintRunStatus('WebGPU unavailable — cannot run real elastic solver');
       paintSolverPill('webgpu unavailable', 'bad');
@@ -596,9 +616,11 @@ async function runRealSweep(N, runToken){
   var nlRunAxes = nlAxesToRun();
   var nThermalDesigns = 0;
   if (doThermal){ for (var tpi = 0; tpi < nDesigns; tpi++){ if (recipes[tpi]) nThermalDesigns++; } }
+  var nFlowDesigns = 0;
+  if (doFlow){ for (var fpi = 0; fpi < nDesigns; fpi++){ if (recipes[fpi]) nFlowDesigns++; } }
 
   /* Progress in work-units: 1 per elastic design + 3 per buckled design. */
-  var totalUnits = (doElastic ? nDesigns : 0) + (doNonlin ? nNonlinDesigns * 4 * nlRunAxes.length : 0) + (doBuckle ? nBuckleDesigns * 3 : 0) + (doThermal ? nThermalDesigns * thFill.length : 0);
+  var totalUnits = (doElastic ? nDesigns : 0) + (doNonlin ? nNonlinDesigns * 4 * nlRunAxes.length : 0) + (doBuckle ? nBuckleDesigns * 3 : 0) + (doThermal ? nThermalDesigns * thFill.length : 0) + (doFlow ? nFlowDesigns * 3 : 0);
   if (totalUnits < 1) totalUnits = 1;
   var doneUnits = 0;
   function bumpProgress(){ RUN_STATE.progress = doneUnits / totalUnits; paintRunProgress(RUN_STATE.progress); }
@@ -954,6 +976,59 @@ async function runRealSweep(N, runToken){
   }
   RUN_TIMING.thermal = performance.now() - tTh0;
 
+  var tFl0 = performance.now();
+  /* ---------- Phase 5 · Flow (GPU lattice Boltzmann, 19g) — v0.28.0 ----------
+     Own grid (FLOW_STATE.N).  Wall links are built on the CPU worker pool
+     (17c, reusing the elastic run's voxels and margin when the grids match),
+     then one GPU solve per open axis.  Progress: 3 units per design. */
+  if (doFlow && nFlowDesigns > 0){
+    var fN = FLOW_STATE.N;
+    for (var fi = 0; fi < nDesigns; fi++){
+      if (stale()) return;
+      var df = designs[fi], rf = recipes[fi];
+      if (!rf) continue;
+      RUN_STATE.currentIndex = fi;
+      var flBase = 'N' + fN + '|p' + GEOM_STATE.connectivity + '|tol' + FLOW_STATE.tol + '|' + FLOW_GPU_VERSION + '|r' + recipeFp[fi];
+      var flEx = FLOW_BY_DESIGN[df.id];
+      if (flEx && !flEx.error && flEx.base === flBase){
+        doneUnits += 3; bumpProgress();
+        paintRunStatus('<span class="v">Flow</span> · Design ' + dletter(df, fi) + ' · cached');
+        continue;
+      }
+      paintRunStatus('<span class="v">Flow</span> · Design ' + dletter(df, fi) + ' · N=' + fN + ' · building wall links…');
+      renderDesignGrid();
+      var flDone = 0;
+      try {
+        var FR = await homogenizeFlowGPU(rf, fN, Object.assign({}, connOpts(), {
+          tol: FLOW_STATE.tol, isStale: stale,
+          onVoxelProgress: (function(dd, ii){ return function(p){
+            if (!stale()) paintRunStatus('<span class="v">Flow</span> · Design ' + dletter(dd, ii) + ' · N=' + fN + ' · wall links ' + p.done + '/' + p.total);
+          }; })(df, fi),
+          onProgress: (function(dd, ii){ return function(p){
+            if (stale()) return;
+            if (p.step === 0 && p.index > flDone){ doneUnits += p.index - flDone; flDone = p.index; bumpProgress(); }
+            paintRunStatus('<span class="v">Flow</span> · Design ' + dletter(dd, ii) + ' · N=' + fN + ' · flow along ' + p.axis.toUpperCase() + ' (' + (p.index + 1) + '/' + p.total + ')' +
+                           (p.step ? ' · step ' + p.step.toLocaleString('en-US') : '') + '…');
+          }; })(df, fi)
+        }));
+        if (stale() || !FR) return;
+        FR.base = flBase;
+        FLOW_BY_DESIGN[df.id] = FR;
+        nFresh.flow++;
+        console.log('[flow] ' + (df.label || df.id) + ' · N=' + fN + ' · links ' + (FR.t_links_ms / 1000).toFixed(2) + ' s (' + FR.reused + ' reused, ' + FR.workers + ' workers) · solve ' +
+                    ((FR.t_solve_ms || 0) / 1000).toFixed(2) + ' s · steps ' + FR.perAxis.map(function(q){ return q.open ? q.steps + (q.converged ? '' : '!') : '—'; }).join('/') +
+                    ' · k/L² ' + FR.kL2.map(function(v){ return v.toExponential(3); }).join(' / '));
+      } catch (err){
+        if (stale()) return;
+        console.error('[run] design ' + df.id + ' flow solve failed:', err);
+        FLOW_BY_DESIGN[df.id] = { error: 'flow solve failed: ' + ((err && err.message) || err), N: fN };
+      }
+      doneUnits += 3 - flDone; bumpProgress();
+      renderDesignGrid();
+    }
+  }
+  RUN_TIMING.flow = performance.now() - tFl0;
+
   /* ---------- Unimplemented modes: honest status, no fake numbers ---------- */
   var notWired = [];
 
@@ -966,11 +1041,13 @@ async function runRealSweep(N, runToken){
     if (doNonlin && nFresh.nonlinear > 0)  RUN_CALIB.nonlinear = { sec: (RUN_TIMING.nonlinear / 1000) / nFresh.nonlinear, N: NONLIN_STATE.N, cap: NONLIN_STATE.cap };
     if (doBuckle && nFresh.buckling > 0)   RUN_CALIB.buckling  = { sec: (RUN_TIMING.buckling  / 1000) / nFresh.buckling,  N: BUCKLE_STATE.N };
     if (doThermal && nFresh.thermal > 0)   RUN_CALIB.thermal   = { sec: (RUN_TIMING.thermal   / 1000) / nFresh.thermal,   N: N };   /* per filler solve */
+    if (doFlow && nFresh.flow > 0)         RUN_CALIB.flow      = { sec: (RUN_TIMING.flow      / 1000) / nFresh.flow,      N: FLOW_STATE.N };
     saveRunCalib();
     console.log('[run] per-mode wall-time (s) — elastic ' + (RUN_TIMING.elastic/1000).toFixed(1) +
                 ' · nonlinear ' + (RUN_TIMING.nonlinear/1000).toFixed(1) +
                 ' · buckling ' + (RUN_TIMING.buckling/1000).toFixed(1) +
-                ' · thermal ' + (RUN_TIMING.thermal/1000).toFixed(1));
+                ' · thermal ' + (RUN_TIMING.thermal/1000).toFixed(1) +
+                ' · flow ' + (RUN_TIMING.flow/1000).toFixed(1));
     recomputeEstimate();   /* refresh the headline Est. with the just-measured calibration */
   }
 
@@ -998,6 +1075,17 @@ async function runRealSweep(N, runToken){
     }
     if (thUnder.length) msg += ' · <span class="warn">Thermal under-resolved — raise grid: ' + thUnder.join(', ') + '</span>';
     if (thErr.length) msg += ' · <span class="warn">Thermal not computed: ' + thErr.join(', ') + '</span>';
+  }
+  if (doFlow && nFlowDesigns > 0){   /* v0.28.0 */
+    var flCoarse = [], flErr = [];
+    for (var fsk = 0; fsk < nDesigns; fsk++){
+      var frr = FLOW_BY_DESIGN[designs[fsk].id];
+      if (!recipes[fsk] || !frr) continue;
+      if (frr.error) flErr.push(designs[fsk].label || designs[fsk].id);
+      else if (frr.throatVox != null && frr.throatVox < FLOW_THROAT_PERM) flCoarse.push(designs[fsk].label || designs[fsk].id);
+    }
+    if (flCoarse.length) msg += ' · <span class="warn">Flow coarse — raise the flow grid: ' + flCoarse.join(', ') + '</span>';
+    if (flErr.length) msg += ' · <span class="warn">Flow not computed: ' + flErr.join(', ') + '</span>';
   }
   paintRunStatus(msg);
   finishRun(runToken);
