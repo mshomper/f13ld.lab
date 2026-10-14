@@ -35,7 +35,7 @@ var THERMAL_VOXEL_FILES = [
   '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
   '13c-import-kernel.js', '13d-foam-kernel.js', '14e-link-field.js'
 ];
-var THERMAL_VOXEL_VERSION = 'tv-6';   /* v0.28.1 */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
+var THERMAL_VOXEL_VERSION = 'tv-7';   /* v0.29.2 — HU kernel index, rawslab jobs, parse cache */   /* v0.28.1 */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
 
 /* ── Stash: the elastic solves of this Run All ───────────────────────
    Entries { recipe, N, conn, raw, kept, m }, newest last, matched by the
@@ -73,6 +73,16 @@ function thermalStashMargin(recipe, N, opts, m) {
 /* ── Worker pool ────────────────────────────────────────────────────── */
 var THERMAL_VOXEL_ONMESSAGE =
   'var _fnCache = { key: null, fn: null };\n' +
+  /* v0.29.2 — parsed recipe kept per worker: a slab job no longer re-parses
+     (hyperuniform builds its kernel index at parse time).  Not for STL
+     imports, whose grid arrives with each job. */
+  'var _prCache = { key: null, params: null };\n' +
+  'function parsedRecipe(recipe){\n' +
+  '  if (recipe.family === "import") return KERNELS[recipe.family].parseRecipe(recipe);\n' +
+  '  var key = JSON.stringify(recipe);\n' +
+  '  if (_prCache.key !== key) _prCache = { key: key, params: KERNELS[recipe.family].parseRecipe(recipe) };\n' +
+  '  return _prCache.params;\n' +
+  '}\n' +
   'function marginFn(recipe, N, key){\n' +
   '  if (_fnCache.key === key) return _fnCache.fn;\n' +
   '  var family = recipe.family, params = KERNELS[family].parseRecipe(recipe), a = resolveBuildArgs(recipe);\n' +
@@ -91,10 +101,21 @@ var THERMAL_VOXEL_ONMESSAGE =
   '    if (job.importGrid) registerImportGrid(job.importGrid);\n' +
   /* v0.24.0 — elastic prep: 0/1 voxels of a slab (bit-identical to buildVoxels) */
   '    if (job.type === "voxels"){\n' +
-  '      var fam = job.recipe.family, pv0 = KERNELS[fam].parseRecipe(job.recipe), av = resolveBuildArgs(job.recipe);\n' +
+  '      var fam = job.recipe.family, pv0 = parsedRecipe(job.recipe), av = resolveBuildArgs(job.recipe);\n' +
   '      var sv = buildVoxels(fam, pv0, av.offset, N, av.mode, av.wt, av.nWeights, av.pipeR, av.phaseShift, [job.i0, job.i1]);\n' +
   '      var vs = sv.slice(job.i0*NN, job.i1*NN);\n' +
   '      postMessage({ id: job.id, ok: true, v: vs }, [vs.buffer]); return;\n' +
+  '    }\n' +
+  /* v0.29.2 — viewer field bake split into z-slabs across the pool (same
+     values and storage order as buildRawField; min/max per slab) */
+  '    if (job.type === "rawslab"){\n' +
+  '      var famS = job.recipe.family, kS = KERNELS[famS], prS = parsedRecipe(job.recipe), Ls = Math.PI, ss = 2*Ls/N;\n' +
+  '      var outS = new Float32Array((job.i1 - job.i0)*NN), mnS = Infinity, mxS = -Infinity;\n' +
+  '      for (var zs = job.i0; zs < job.i1; zs++){ var zz = -Ls + (zs + 0.5)*ss, os = (zs - job.i0)*NN;\n' +
+  '        for (var ys = 0; ys < N; ys++){ var yy = -Ls + (ys + 0.5)*ss;\n' +
+  '          for (var xs = 0; xs < N; xs++){ var vS = kS.evaluate(prS, -Ls + (xs + 0.5)*ss, yy, zz);\n' +
+  '            outS[os + ys*N + xs] = vS; if (vS < mnS) mnS = vS; if (vS > mxS) mxS = vS; } } }\n' +
+  '      postMessage({ id: job.id, ok: true, data: outS, fieldMin: mnS, fieldMax: mxS }, [outS.buffer]); return;\n' +
   '    }\n' +
   /* v0.24.0 — viewer field bake (buildRawField, whole grid; one job per design) */
   '    if (job.type === "rawfield"){\n' +
@@ -346,11 +367,21 @@ async function _labPrepElasticParallel(recipe, N, opts, onProgress) {
   }
   return { raw: raw, kept: kept, m: m, pv: pv };
 }
+/* v0.29.2 — the viewer bake is split into z-slabs over the whole pool (it
+   was one job on one worker, so a slow field held a tile blank for tens of
+   seconds while the other workers sat idle). */
 async function labBakeFieldAsync(recipe, N) {
   if (!_tvCanUseWorkers()) return null;
   var importGrid = (recipe.family === 'import' && typeof importGridMessage === 'function') ? importGridMessage(recipe) : null;
-  var r = await _tvRun({ type: 'rawfield', recipe: recipe, N: N, importGrid: importGrid });
-  return { data: r.data, fieldMin: r.fieldMin, fieldMax: r.fieldMax };
+  var NN = N * N, data = new Float32Array(NN * N), mn = Infinity, mx = -Infinity;
+  await Promise.all(_tvSlabs(N, _tvPoolSize()).map(function (sl) {
+    return _tvRun({ type: 'rawslab', recipe: recipe, N: N, i0: sl[0], i1: sl[1], importGrid: importGrid }).then(function (r) {
+      data.set(r.data, sl[0] * NN);
+      if (r.fieldMin < mn) mn = r.fieldMin;
+      if (r.fieldMax > mx) mx = r.fieldMax;
+    });
+  }));
+  return { data: data, fieldMin: mn, fieldMax: mx };
 }
 
 /* ── v0.28.0 — fluids: lattice Boltzmann wall links on the pool ──────────

@@ -110,6 +110,9 @@ function preRunStats(d, mode){
    ≥ 1 → yields first (yield-limited), < 1 → buckles first.  When the crush
    never reached yield the ratio is an upper bound, so ≥ 1 is undetermined.
    Without a crush result the yield is the solid material's (marked est.). */
+/* v0.29.2 — design titles come from imported JSON; escape before markup */
+function _dcEsc(t){ return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
 function governingLimitPill(d){
   var bk = (typeof BUCKLE_BY_DESIGN !== 'undefined') ? BUCKLE_BY_DESIGN[d.id] : null;
   if (!bk || bk.error || bk.skip_reason || !isFinite(bk.pcr_py)) return '';
@@ -987,7 +990,7 @@ function renderDesignGrid(){
       '<div class="dc-head">' +
         '<div class="dc-name">' +
           '<span class="label">'+d.label+'</span>' +
-          '<span class="title">'+d.title+'</span>' +
+          '<span class="title" title="'+_dcEsc(d.title)+'">'+_dcEsc(d.title)+'</span>' +
           '<span class="source">'+sourceText+'</span>' +
           limitPill +
         '</div>' +

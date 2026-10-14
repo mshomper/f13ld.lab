@@ -631,6 +631,21 @@ function normalizeDesignJson(json, filename){
             (_fN ? ' \u00b7 ' + _fN + ' cells' : '');
   }
 
+  /* v0.29.2 — F13LD.vault names a design "Vault <64-hex candidate id> ·
+     lidinoid"; the card shows "Lidinoid · Vault".  The id and the original
+     name stay on the design entry (vault_id, source_name) for pushing results
+     back to Vault.  Any other long hex run in a title is dropped too. */
+  var vaultId = null, sourceName = json.title || json.name || null;
+  var _vm = /^\s*vault\s+([0-9a-f]{16,})\s*(?:[\u00b7\u2022|:\-\u2013\u2014]\s*)?(.*)$/i.exec(title || '');
+  if (_vm) {
+    vaultId = _vm[1];
+    var _vr = _vm[2].replace(/\s+$/, '');
+    title = (_vr ? _vr.charAt(0).toUpperCase() + _vr.slice(1) : 'Design') + ' \u00b7 Vault';
+  } else if (/[0-9a-f]{24,}/i.test(title || '')) {
+    title = title.replace(/[0-9a-f]{24,}/ig, ' ').replace(/\s{2,}/g, ' ')
+                 .replace(/^[\s\u00b7|:\-]+|[\s\u00b7|:\-]+$/g, '') || 'Custom design';
+  }
+
   /* ── 6. Build a renderable lab recipe (labRecipeFromJson) ── */
   var built = labRecipeFromJson(json, title, info);
   var recipe = built.recipe, recipeNote = built.recipeNote;
@@ -646,6 +661,8 @@ function normalizeDesignJson(json, filename){
     label: 'DESIGN · ?',
     slot: -1,
     title: title,
+    vault_id: vaultId,
+    source_name: sourceName,
     source: 'imported · ' + filename,
     family: (family === 'unknown' ? 'tpms' : family),   /* fallback for SVG */
     variant: variant,

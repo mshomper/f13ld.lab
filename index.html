@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="lab.css?v=0.29.1">
+<link rel="stylesheet" href="lab.css?v=0.29.2">
 </head>
 <body>
 <!-- v0.24.0 — startup splash: the wordmark resolves from scrambled glyphs
@@ -71,7 +71,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.29.1</span>
+      <span class="fh-version">v0.29.2</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -238,7 +238,7 @@
 <script src="11-webgpu-device.js"></script>
 <script src="12-fft-plan.js"></script>
 <script src="12b-fft-cpu.js"></script>
-<script src="13-kernels.js"></script>
+<script src="13-kernels.js?v=0.29.2"></script>
 <script src="13b-kernels-new.js"></script>
 <script src="13c-import-kernel.js"></script>
 <script src="13d-foam-kernel.js"></script>
@@ -255,14 +255,14 @@
 <script src="16b-elastic-solver-full.js"></script>
 <script src="16c-buckling-cpu-ref.js"></script>
 <script src="16d-buckling-solver.js"></script>
-<script src="16e-buckling-cpu-worker.js"></script>
+<script src="16e-buckling-cpu-worker.js?v=0.29.2"></script>
 <script src="16h-buckling-fe.js"></script>
 <script src="16f-nonlinear-cpu-ref.js"></script>
 <script src="16g-nonlinear-solver.js"></script>
 <script src="16i-elastic-fast.js"></script>
 <script src="17a-thermal-cpu-ref.js"></script>
 <script src="17b-thermal-solver.js"></script>
-<script src="17c-thermal-voxel-pool.js"></script>
+<script src="17c-thermal-voxel-pool.js?v=0.29.2"></script>
 <script src="19g-flow-lbm.js"></script>
 <script src="20-svg-mocks.js"></script>
 <script src="20b-curve-plotly.js"></script>
@@ -271,11 +271,11 @@
 <script src="22-stiffness-viz.js"></script>
 <script src="23-flow-viz.js?v=0.29.1"></script>
 <script src="30-view-tabs.js?v=0.29.1"></script>
-<script src="40-design-grid.js?v=0.29.1"></script>
+<script src="40-design-grid.js?v=0.29.2"></script>
 <script src="50-controls.js"></script>
 <script src="51-dock.js"></script>
 <script src="52-status.js"></script>
-<script src="60-add-design.js"></script>
+<script src="60-add-design.js?v=0.29.2"></script>
 <script src="61-import-stl.js"></script>
 <script src="62-sweep.js"></script>
 <script src="63-sweep-atlas.js"></script>

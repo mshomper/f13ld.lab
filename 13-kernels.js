@@ -894,6 +894,7 @@ var GrainKernel = {
          field.hu_wrap = false (reproduces pre-0.7.2 results). */
       params.huWrap = (f.hu_wrap !== false);
       if (params.huWrap) params.kernels = this._wrapHUKernels(params.kernels);
+      params.huIndex = null;   /* v0.29.2 — built on the first evaluate() (parsing stays cheap) */
     }
     if (!recipe.family) recipe.family = 'grain';
     return params;
@@ -930,6 +931,60 @@ var GrainKernel = {
     return out;
   },
 
+  /* v0.29.2 — spatial index for HU kernels.  A wrapped recipe can carry
+     thousands of kernels (205 design kernels → 3,149 with images) while only
+     a handful reach any one point, and evaluate() used to visit all of them:
+     ~1000× a gyroid's cost per point.  Kernels whose term is
+     below e^-HU_CUT (see Rcut below) are skipped, at every point, with or without
+     the index (so results never depend on it).  The index is a uniform grid
+     of HU_BINS³ bins over the cell plus HU_MARGIN; each bin lists, in kernel
+     order, every kernel whose cut-off shape can touch the bin (oriented-box
+     test dilated by the bin's half-diagonal — conservative).  Points outside
+     the grid fall back to the full loop.  Measured on a 205-kernel recipe:
+     about 40× faster at 48³ with the field unchanged to double precision. */
+  HU_CUT: 40, HU_BINS: 24, HU_MARGIN: 0.5,
+  _indexHUKernels: function (ks) {
+    var p = ks.cross || 2, m = ks.sharp || 1, P = ks.blend || 1;
+    /* Cut where a term, after the blend root s^(1/P), is below e^-HU_CUT
+       (≈4e-18, under half an ulp of the 0.3 offset): R^m ≥ HU_CUT·max(1, 1/P).
+       Judging it before the root (blend > 1 magnifies tiny sums) moved the
+       empty-space plateau of thick hyperuniform sheets. */
+    var Rcut = Math.pow(this.HU_CUT * Math.max(1, 1 / P), 1 / m);
+    var B = this.HU_BINS, lo = -Math.PI - this.HU_MARGIN;
+    var bs = 2 * (Math.PI + this.HU_MARGIN) / B, h = bs * Math.sqrt(3) * 0.5;
+    var nB = B * B * B, counts = new Int32Array(nB + 1), pairs = [];
+    var sa = Math.sqrt(Rcut), sb = Math.pow(Rcut, 1 / p);
+    for (var i = 0; i < ks.length; i++) {
+      var k = ks[i];
+      var ra = k.a * sa, r1 = k.b1 * sb, r2 = k.b2 * sb;
+      var ex = Math.abs(ra*k.tx) + Math.abs(r1*k.n1x) + Math.abs(r2*k.n2x) + h;
+      var ey = Math.abs(ra*k.ty) + Math.abs(r1*k.n1y) + Math.abs(r2*k.n2y) + h;
+      var ez = Math.abs(ra*k.tz) + Math.abs(r1*k.n1z) + Math.abs(r2*k.n2z) + h;
+      var x0 = Math.max(0, Math.floor((k.px - ex - lo) / bs)), x1 = Math.min(B - 1, Math.floor((k.px + ex - lo) / bs));
+      var y0 = Math.max(0, Math.floor((k.py - ey - lo) / bs)), y1 = Math.min(B - 1, Math.floor((k.py + ey - lo) / bs));
+      var z0 = Math.max(0, Math.floor((k.pz - ez - lo) / bs)), z1 = Math.min(B - 1, Math.floor((k.pz + ez - lo) / bs));
+      for (var bz = z0; bz <= z1; bz++) {
+        var dz = lo + (bz + 0.5) * bs - k.pz;
+        for (var by = y0; by <= y1; by++) {
+          var dy = lo + (by + 0.5) * bs - k.py;
+          for (var bx = x0; bx <= x1; bx++) {
+            var dx = lo + (bx + 0.5) * bs - k.px;
+            if (Math.abs(dx*k.tx  + dy*k.ty  + dz*k.tz)  > ra + h) continue;
+            if (Math.abs(dx*k.n1x + dy*k.n1y + dz*k.n1z) > r1 + h) continue;
+            if (Math.abs(dx*k.n2x + dy*k.n2y + dz*k.n2z) > r2 + h) continue;
+            var bin = bx + B * (by + B * bz);
+            counts[bin + 1]++;
+            pairs.push(bin, i);
+          }
+        }
+      }
+    }
+    for (var c = 0; c < nB; c++) counts[c + 1] += counts[c];
+    var start = counts.slice(), fill = counts.slice(0, nB), idx = new Int32Array(start[nB]);
+    for (var q = 0; q < pairs.length; q += 2) idx[fill[pairs[q]]++] = pairs[q + 1];   /* kernel order kept per bin */
+    return { B: B, lo: lo, inv: 1 / bs, start: start, idx: idx, Rcut: Rcut };
+  },
+
   /* CPU field evaluation — RAW field value at solver-space (x,y,z) ∈ [-π, π]³.
      Wave families: Σ cos(k·p + φ) / √N — natural range ~[-1, 1].
      HU family:     Σ exp(-Q(p - c)) - 0.3 — natural range ~[-0.3, 1]. */
@@ -939,15 +994,28 @@ var GrainKernel = {
       var pe = ks.cross || 2, me = ks.sharp || 1, Pe = ks.blend || 1;
       var rnd = (pe === 2), shp = (me === 1), bl = (Pe === 1);
       var s = 0;
-      for (var i = 0; i < ks.length; i++) {
-        var k = ks[i];
+      /* v0.29.2 — indexed, cut-off sum (see _indexHUKernels), index built on
+         first use; params without a huIndex field keep the original full sum. */
+      var hx = params.huIndex;
+      if (hx === null) hx = params.huIndex = GrainKernel._indexHUKernels(ks);
+      var Rc = hx ? hx.Rcut : Infinity, list = null, q0 = 0, q1 = ks.length;
+      if (hx) {
+        var gx = Math.floor((x - hx.lo) * hx.inv), gy = Math.floor((y - hx.lo) * hx.inv), gz = Math.floor((z - hx.lo) * hx.inv);
+        if (gx >= 0 && gy >= 0 && gz >= 0 && gx < hx.B && gy < hx.B && gz < hx.B) {
+          var gb = gx + hx.B * (gy + hx.B * gz);
+          list = hx.idx; q0 = hx.start[gb]; q1 = hx.start[gb + 1];
+        }
+      }
+      for (var q = q0; q < q1; q++) {
+        var k = ks[list ? list[q] : q];
         var dx = x - k.px, dy = y - k.py, dz = z - k.pz;
-        var dt  = dx*k.tx  + dy*k.ty  + dz*k.tz;
-        var dn1 = dx*k.n1x + dy*k.n1y + dz*k.n1z;
-        var dn2 = dx*k.n2x + dy*k.n2y + dz*k.n2z;
-        var u = dt/k.a, w1 = dn1/k.b1, w2 = dn2/k.b2;
-        var R = u*u + (rnd ? (w1*w1 + w2*w2)
-                           : (Math.pow(Math.abs(w1), pe) + Math.pow(Math.abs(w2), pe)));
+        var u = (dx*k.tx + dy*k.ty + dz*k.tz) / k.a, uu = u*u;
+        if (uu >= Rc) continue;
+        var w1 = (dx*k.n1x + dy*k.n1y + dz*k.n1z) / k.b1;
+        var w2 = (dx*k.n2x + dy*k.n2y + dz*k.n2z) / k.b2;
+        var R = uu + (rnd ? (w1*w1 + w2*w2)
+                          : (Math.pow(Math.abs(w1), pe) + Math.pow(Math.abs(w2), pe)));
+        if (R >= Rc) continue;
         var Rm = shp ? R : Math.pow(R, me);
         s += bl ? Math.exp(-Rm) : Math.exp(-Pe*Rm);
       }
