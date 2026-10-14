@@ -592,5 +592,7 @@ Float64 CPU reference (`19f-flow-cpu-ref.js`) on geometry built through `14e bui
 
 **Checks:** GPU velocity field vs the solver's mean flow, 16³ (software WebGPU): 1e-7, solid cells zero. Block averaging vs a hand sum: exact. Rendered headless on all three demo designs with fields from the CPU reference (screenshots in the session); controls fit a 360 px tile.
 
+**v0.29.1 (Matt's click-test):** streak length was tied to animation speed. Trails now keep a point every `length` units of flow time (12 points, length 0.25–2×, 1 unit = one 60 Hz frame at speed 1), with the tail sliding between its last two points, so speed and frame rate do not change streak length and faster fluid still draws longer streaks. Size scales the ribbon width. Play / speed / length / size / count moved to one shared group in the view strip (`#flowAnimToggle`).
+
 **Next:** Phase 2 wall shear stress; then flow-rate units (mm/s) on the colour bar and the WSS map on the strut surface.
 
