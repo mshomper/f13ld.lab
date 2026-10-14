@@ -341,13 +341,26 @@ function fmtSci(v, digits){
   var sup = String(e).replace(/-/g, '\u207b').replace(/[0-9]/g, function (c) { return '\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079'[+c]; });
   return m.toFixed(digits == null ? 2 : digits) + '\u00d710' + sup;
 }
+/* v0.29.3 \u2014 fixed-scale permeability (Matt, 2026-10-14): every card in
+   units of 10\u207b\u2079 m\u00b2 (the bone-scaffold convention) and k/L\u00b2 in units of
+   10\u207b\u00b3, three significant figures, so designs compare at a glance instead
+   of each card picking its own exponent. */
+var FLOW_K_UNIT = '\u00d710\u207b\u2079 m\u00b2', FLOW_KL2_UNIT = '\u00d710\u207b\u00b3';
+function fmtFixedScale(v, scale){
+  if (!(v > 0) || !isFinite(v)) return '0';
+  var s = v / scale;
+  if (s < 0.01) return '< 0.01';
+  return s >= 100 ? Math.round(s).toLocaleString('en-US') : s.toPrecision(3);
+}
+function fmtPermM2(k){ return fmtFixedScale(k, 1e-9) + ' ' + FLOW_K_UNIT; }
+function fmtKL2(v){ return fmtFixedScale(v, 1e-3) + ' ' + FLOW_KL2_UNIT; }
 function flowAxisRow(d, fr, ax){
   var idx = 'xyz'.indexOf(ax), lbl = 'Permeability ' + ax.toUpperCase(), pa = fr.perAxis && fr.perAxis[idx];
   if (!pa || !pa.open) return { lbl:lbl, val:'0', delta:['no open pore path along ' + ax.toUpperCase(), 'warn'] };
   var kl = fr.kL2[idx], cell = (typeof labCellMm === 'function') ? labCellMm(d) : null;
-  var val = cell > 0 ? fmtSci(kl * (cell / 1000) * (cell / 1000)) + ' m\u00b2' : 'k/L\u00b2 ' + fmtSci(kl);
+  var val = cell > 0 ? fmtPermM2(kl * (cell / 1000) * (cell / 1000)) : 'k/L\u00b2 ' + fmtKL2(kl);
   if (!pa.converged) return { lbl:lbl, val:val, delta:['not converged \u00b7 ' + pa.steps.toLocaleString('en-US') + ' steps', 'warn'] };
-  return { lbl:lbl, val:val, delta:['k/L\u00b2 ' + fmtSci(kl), 'neut'] };
+  return { lbl:lbl, val:val, delta:['k/L\u00b2 ' + fmtKL2(kl), 'neut'] };
 }
 function flowStats(d){
   var fr = flowData(d), dash = ['\u2014', 'neut'];
@@ -454,7 +467,7 @@ function flowReadout(d){
   var fr = flowData(d);
   if (!fr) return 'k/L\u00b2 = \u2014 \u00b7 enable Flow + Run';
   if (fr.error) return 'k/L\u00b2 \u2014 ' + fr.error;
-  return 'k/L\u00b2 ' + fr.kL2.map(function (v) { return v > 0 ? v.toExponential(2) : '0'; }).join(' / ') + ' \u00b7 N=' + fr.N;
+  return 'k/L\u00b2 ' + FLOW_KL2_UNIT + ' ' + fr.kL2.map(function (v) { return fmtFixedScale(v, 1e-3); }).join(' / ') + ' \u00b7 N=' + fr.N;
 }
 
 /* ── v0.21.0 — thermal map (Phase 2) ──────────────────────────────────
