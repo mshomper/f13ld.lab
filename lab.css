@@ -1257,3 +1257,11 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
 .vp-stress-control .vp-sl { display:inline-flex; align-items:center; gap:8px }
 .vp-stress-control .vp-sl.dis { opacity:0.4 }
 .vp-stress-control .vp-sl.dis input { cursor:not-allowed }
+
+/* v0.29.0 — flow view controls: wrap inside the tile (never wider than it) */
+.vp-flow-control { flex-wrap:wrap; justify-content:flex-end; row-gap:6px; max-width:calc(100% - 20px); }
+.vp-flow-control .vp-sl { display:inline-flex; align-items:center; gap:6px }
+.vp-flow-control input[type=range] { width:72px }
+.vp-flow-control .flow-play { display:inline-flex; align-items:center; justify-content:center; padding:3px 7px; color:rgba(255,255,255,0.8) }
+.vp-flow-control .flow-play svg { display:block }
+.lab-clip.lab-clip-top { bottom:auto; top:10px }

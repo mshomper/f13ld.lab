@@ -5,6 +5,7 @@
 - `Co-Authored-By: Claude …` trailers are fine.
 
 ## Notes
+- 2026-10-14 v0.29.0 (branch `flow-viz`): Flow view — `23-flow-viz.js` (field combine, FlowParticles), raymarcher view mode 4 + depth output + streak pass, 19g keeps velocity fields (`flowVizAddAxis`, ≤ 64³). Scope §14.
 - 2026-10-14 v0.28.1 (merged to main): Flow guards — 14e `FLOW_LINKS_VERSION` checked on every worker slab (bump it whenever buildFlowLinksFromFn's output changes, with `THERMAL_VOXEL_VERSION` in 17c); errors name their step.
 - 2026-10-14 v0.28.0: fluids Phase 1 — `19g-flow-lbm.js` GPU solver, Flow mode (`PHYS_STATE.flow`, `FLOW_STATE`, `FLOW_BY_DESIGN`, Run All Phase 5), Flow cards and tab; console `runFlowGPUCheck()`. Scope §13.
 - 2026-10-14 v0.27.1 (branch `fluids-phase0`): fluids Phase 0 — `buildFlowLinks` in 14e, CPU reference `19f-flow-cpu-ref.js`, checks `node proto/flow/run_checks.js`, GPU bench `proto/lbm-bench/index.html`. Walls are CLI, not Bouzidi (scope §3.2, §12). Recap: `docs/SESSION_RECAP_2026-10-14_fluids-phase0.md`.

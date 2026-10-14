@@ -1,5 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
+> **2026-10-14 · v0.29.0** — branch `flow-viz`: Flow view — animated tracer particles (turbo, bright heads, depth-tested against the struts) and a speed map on the section plane; runs keep their velocity fields (≤ 64³). Scope §14. Waiting on Matt's click-test. Next: Phase 2 wall shear stress.
+
 > **2026-10-14 · v0.28.1** — merged to main: Flow worker version check, slab size check, step-tagged errors (one transient foam failure right after the push).
 >
 > **2026-10-14 · v0.28.0** — fluids Phase 1: Flow mode (off by default, own grid 64³, Standard / High tolerance) — GPU lattice Boltzmann permeability tensor, tortuosity, open and sealed porosity, narrowest pore, K(n) surface on the Flow tab. Waiting on Matt's click-test and `runFlowGPUCheck()` on his GPU. Results: [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md) §13. **Queued (Matt):** flow at 32³ / 64³ in F13LD.sweep, then F13LD.vault, as a comparison metric.

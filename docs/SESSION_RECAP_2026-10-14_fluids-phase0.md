@@ -34,3 +34,6 @@ Decisions (Matt): flow grid 64³ default; Standard tolerance with High as an opt
 - ~~**Matt:** click-test the branch~~ done. Was: click-test the branch (`https://raw.githack.com/mshomper/f13ld.lab/fluids-phase0/index.html`): turn on Flow, Run, open the Flow tab; then `runFlowGPUCheck(0)`, `(1)`, `(2)` in the console — each should print `pass: true`. Try foam and an STL import too. Approve before merging to main.
 - Phase 2 (v0.29.0): wall shear stress — triangle list from 14e's marching tetrahedra, probes and extrapolation (velocity-gradient fallback near sharp corners, check F5), unit tractions per axis, live flow-rate / direction rescaling, window presets by material, best flow, force-balance residual (F9 proper).
 - Later (Matt): flow at 32³ / 64³ in F13LD.sweep and then F13LD.vault as a comparison metric.
+
+## v0.29.0 — Flow view (branch `flow-viz`)
+Matt asked for something like a CFD flow-trajectory GIF. Built: velocity fields kept per axis (≤ 64³, half precision), `23-flow-viz.js` (direction combine, CPU tracer particles), raymarcher flow mode with depth output, speed on the section plane and a ribbon streak pass; Flow tab switch (flow / speed / K(n)), direction, play / pause, speed, count. Decisions: turbo, streaks with bright heads, section-plane cut-away, 128³ averaged to 64³. Scope §14.

@@ -389,10 +389,12 @@ function flowStats(d){
   ];
 }
 function flowEmptyMsg(d){
-  var fr = flowData(d);
-  if (!fr) return (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'Run to see the permeability surface' : 'Enable Flow \u00b7 Run';
+  var fr = flowData(d), surf = (typeof VIEW_STATE === 'undefined' || VIEW_STATE.flowView === 'surface');
+  if (!fr) return (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? (surf ? 'Run to see the permeability surface' : 'Run to see the flow') : 'Enable Flow \u00b7 Run';
   if (fr.error) return fr.error;
-  return 'Closed along at least one axis \u00b7 no permeability surface';
+  if (surf) return 'Closed along at least one axis \u00b7 no permeability surface';
+  if (!fr.viz) return 'Re-run Flow to see the flow field';
+  return 'No open pore path along ' + (VIEW_STATE.flowDir === 'xyz' ? 'any axis' : VIEW_STATE.flowDir.toUpperCase());
 }
 /* the K(n) surface uses k/L² so designs at different grids compare */
 function flowSurfaceK(fr){
@@ -402,6 +404,52 @@ function flowSurfaceK(fr){
   for (var i = 0; i < 9; i++) K.push(fr.Ksym[i] * s);
   return K;
 }
+/* ── v0.29.0 — flow view: particles and the speed map ──────────────
+   Fields from FLOW_BY_DESIGN[id].viz (19g), combined for VIEW_STATE.flowDir
+   by flowVizField (23-flow-viz.js).  One FlowParticles per design (kept
+   across re-renders so the animation does not restart).  Colour top: the
+   design's 98th-percentile speed ÷ mean, or the largest across designs
+   with the shared scale. */
+var FLOW_PS = {};
+function flowParticlesFor(id){ return FLOW_PS[id] || (FLOW_PS[id] = new FlowParticles()); }
+function flowScaleTop(ff){
+  var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
+  if (mode !== 'shared') return ff.hi;
+  var top = ff.hi, ds = LAB_STATE.designs;
+  for (var i = 0; i < ds.length && i < 3; i++){ var f2 = flowVizField(flowData(ds[i]), VIEW_STATE.flowDir); if (f2) top = Math.max(top, f2.hi); }
+  return top;
+}
+function buildFlowColorbar(d){
+  var ff = flowVizField(flowData(d), VIEW_STATE.flowDir);
+  if (!ff) return '';
+  var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per', top = flowScaleTop(ff);
+  var dir = VIEW_STATE.flowDir === 'xyz' ? 'diagonal' : VIEW_STATE.flowDir.toUpperCase();
+  return '<div class="stress-colorbar-header">speed</div>' +
+         '<div class="stress-colorbar" style="background:' + flowTurboCss() + '"></div>' +
+         '<div class="stress-colorbar-label-top">' + top.toFixed(1) + '\u00d7<span class="stress-colorbar-suffix">\u00d7 mean \u00b7 along ' + dir + (mode === 'shared' ? ' \u00b7 shared' : '') + '</span></div>' +
+         '<div class="stress-colorbar-label-bot">0</div>';
+}
+var FLOW_ICON_PLAY  = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1 L9 5 L2 9 Z" fill="currentColor"/></svg>';
+var FLOW_ICON_PAUSE = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1" width="2.6" height="8" rx="0.6" fill="currentColor"/><rect x="5.9" y="1" width="2.6" height="8" rx="0.6" fill="currentColor"/></svg>';
+function buildFlowControl(){
+  var v = VIEW_STATE.flowView, dr = VIEW_STATE.flowDir;
+  function vb(id, txt, tip){ return '<button class="th-btn' + (v === id ? ' active' : '') + '" title="' + tip + '" onclick="onFlowViewPick(\'' + id + '\')">' + txt + '</button>'; }
+  function db(id, txt){ return '<button class="th-btn' + (dr === id ? ' active' : '') + '" title="Mean flow along ' + txt + '" onclick="onFlowDirPick(\'' + id + '\')">' + txt + '</button>'; }
+  var h = '<div class="vp-deform-control vp-flow-control show">' +
+    '<div class="th-toggle">' +
+      vb('particles', 'flow', 'Tracer particles carried by the flow, coloured by speed') +
+      vb('speed', 'speed', 'Speed through the pores on the section plane') +
+      vb('surface', 'K(n)', 'Directional permeability surface') +
+    '</div>';
+  if (v !== 'surface') h += '<div class="th-toggle">' + db('x', 'X') + db('y', 'Y') + db('z', 'Z') + db('xyz', 'XYZ') + '</div>';
+  if (v === 'particles') {
+    h += '<button class="th-btn flow-play" title="' + (VIEW_STATE.flowPlay ? 'Pause' : 'Play') + '" onclick="onFlowPlayToggle(this)">' + (VIEW_STATE.flowPlay ? FLOW_ICON_PAUSE : FLOW_ICON_PLAY) + '</button>' +
+      '<span class="vp-sl"><label>speed</label><input type="range" min="0.25" max="3" step="0.05" value="' + VIEW_STATE.flowSpeed + '" oninput="onFlowSpeed(this)"></span>' +
+      '<span class="vp-sl"><label>count</label><input type="range" min="500" max="6000" step="250" value="' + VIEW_STATE.flowCount + '" oninput="onFlowCount(this)"></span>';
+  }
+  return h + '</div>';
+}
+
 function flowReadout(d){
   var fr = flowData(d);
   if (!fr) return 'k/L\u00b2 = \u2014 \u00b7 enable Flow + Run';
@@ -741,7 +789,8 @@ function renderDesignGrid(){
      A.2.2 — gating now considers the active load axis from VIEW_STATE. */
   var rmDesigns = [];   /* [{i, id}, …] */
   var thermMap = (VIEW_STATE.mode === 'thermal' && VIEW_STATE.thermalView !== 'kappa');   /* v0.21.0 */
-  var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle' || thermMap);
+  var flowRM = (VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView !== 'surface');   /* v0.29.0 — particles / speed map */
+  var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle' || thermMap || flowRM);
   var needsFields = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle');
   if (rmModes) {
     for (var ri = 0; ri < LAB_STATE.designs.length && ri < 3; ri++) {
@@ -749,6 +798,7 @@ function renderDesignGrid(){
       var rcp = (typeof recipeForDesign === 'function') ? recipeForDesign(rd) : null;
       if (!rcp) continue;
       if (thermMap && !thermalMapData(rd)) continue;   /* v0.21.0 — map fields for the shown filler + axis */
+      if (flowRM && !flowVizField(flowData(rd), VIEW_STATE.flowDir)) continue;   /* v0.29.0 */
       if (needsFields) {
         if (!hasActiveFields(rd, VIEW_STATE.mode)) continue;
         var rdAxis = activeAxisFor(rd, VIEW_STATE.mode);
@@ -769,7 +819,7 @@ function renderDesignGrid(){
      elastic Run All populates this). */
   var svDesigns = [];   /* [{i, id}, …] */
   var kappaMode = (VIEW_STATE.mode === 'thermal' && VIEW_STATE.thermalView === 'kappa');   /* v0.21.0 — κ(n) surface */
-  var flowMode = (VIEW_STATE.mode === 'flow');   /* v0.28.0 — K(n) permeability surface */
+  var flowMode = (VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView === 'surface');   /* v0.28.0 — K(n) permeability surface */
   var svMode = (VIEW_STATE.mode === 'stiff') || kappaMode || flowMode;
   if (svMode) {
     for (var si = 0; si < LAB_STATE.designs.length && si < 3; si++) {
@@ -846,8 +896,8 @@ function renderDesignGrid(){
       if (!useRM && !useSV) svgInner = svgEmptyViewport(thermalEmptyMsg(d));
     }
     else if (VIEW_STATE.mode === 'flow'){
-      /* v0.28.0 — K(n) permeability surface when all three axes are open */
-      if (!useSV) svgInner = svgEmptyViewport(flowEmptyMsg(d));
+      /* v0.28.0 — K(n) surface; v0.29.0 — particles / speed map on the raymarcher */
+      if (!useSV && !useRM) svgInner = svgEmptyViewport(flowEmptyMsg(d));
     }
     else if (VIEW_STATE.mode === 'buckle'){
       if (!useRM) {
@@ -959,6 +1009,8 @@ function renderDesignGrid(){
         (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +
         (showBuckleBar ? buildBuckleColorbar() : '') +
         ((VIEW_STATE.mode === 'thermal' && useRM) ? buildThermalColorbar(d) + buildClipPills() : '') +
+        ((VIEW_STATE.mode === 'flow' && useRM) ? buildFlowColorbar(d) + buildClipPills().replace('class="lab-clip"', 'class="lab-clip lab-clip-top"') : '') +
+        ((VIEW_STATE.mode === 'flow' && flowData(d) && !flowData(d).error) ? buildFlowControl() : '') +
         ((VIEW_STATE.mode === 'thermal' && (useRM || useSV || thermalMapData(d) || kappaMode)) ? buildThermalControl() : '') +
         (showControls
           ? (VIEW_STATE.mode === 'stress'
@@ -998,6 +1050,24 @@ function renderDesignGrid(){
     var rkrm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[rkid] : null;
     if (!rkrm || rkrm.failed) continue;
     var rdesign = LAB_STATE.designs[rmDesigns[rk].i];
+    if (VIEW_STATE.mode === 'flow') {   /* v0.29.0 — speed map / particles */
+      var ffv = flowVizField(flowData(rdesign), VIEW_STATE.flowDir);
+      if (ffv && rkrm.uploadFlowSpeed) {
+        if (rkrm._flowSrc !== ffv) { rkrm.uploadFlowSpeed(ffv.spd, ffv.M); rkrm._flowSrc = ffv; }
+        rkrm.setFlowParams({ plane: VIEW_STATE.flowView === 'speed', hi: flowScaleTop(ffv) });
+        if (VIEW_STATE.flowView === 'particles') {
+          var fps = flowParticlesFor(rdesign.id);
+          fps.speed = VIEW_STATE.flowSpeed; fps.playing = VIEW_STATE.flowPlay; fps.count = VIEW_STATE.flowCount;
+          fps.setField(ffv); fps.setCount(VIEW_STATE.flowCount);
+          rkrm.setFlowParticles(fps);
+        } else rkrm.setFlowParticles(null);
+      }
+      if (rkrm.setBuckleMap)  rkrm.setBuckleMap(false);
+      if (rkrm.setPulse)      rkrm.setPulse(false);
+      if (rkrm.setWarpExpand) rkrm.setWarpExpand(0);
+      if (rkrm.setViewMode)   rkrm.setViewMode('flow');
+      continue;
+    }
     if (VIEW_STATE.mode === 'thermal') {   /* v0.21.0 — temperature / deviation / flux map */
       var tx = thermalTexFor(rdesign);
       if (tx && rkrm.uploadThermal) {
@@ -1465,6 +1535,7 @@ function removeDesign(designId){
   if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[designId];
   if (typeof NONLIN_AXES !== 'undefined') delete NONLIN_AXES[designId];
   if (typeof FLOW_BY_DESIGN !== 'undefined') delete FLOW_BY_DESIGN[designId];   /* v0.28.0 */
+  if (typeof FLOW_PS !== 'undefined') delete FLOW_PS[designId];                 /* v0.29.0 */
 
   LAB_STATE.designs = LAB_STATE.designs.filter(function(d){ return d.id !== designId; });
   if (typeof reconcileDesignSlots === 'function') reconcileDesignSlots();   /* freed slot returns to the pool; survivors keep theirs */

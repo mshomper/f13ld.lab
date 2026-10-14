@@ -19,7 +19,12 @@ var VIEW_STATE = {
   thermalFiller: 'water',                   /* v0.24.0 — matches the default filler */                     // v0.20.0 — which solved pore filler the thermal cards show
   thermalView: 'temp',                      // v0.21.0 — 'temp' | 'dev' | 'flux' | 'kappa' (all thermal tiles)
   thermalAxis: 'x',                         // v0.21.0 — gradient axis of the map (all thermal tiles)
-  thermalDT: 10                             // v0.21.0 — ΔT across one cell, K (Matt: per cell, fixed default)
+  thermalDT: 10,                            // v0.21.0 — ΔT across one cell, K (Matt: per cell, fixed default)
+  flowView: 'particles',                    // v0.29.0 — 'particles' | 'speed' | 'surface' (all flow tiles)
+  flowDir: 'x',                             // v0.29.0 — mean flow along 'x' | 'y' | 'z' | 'xyz'
+  flowSpeed: 1,                             // v0.29.0 — particle animation speed
+  flowCount: 2500,                          // v0.29.0 — particles per tile
+  flowPlay: true                            // v0.29.0 — particles moving
 };
 
 /* v0.21.0 — thermal map controls (shared by every thermal tile, so the
@@ -47,9 +52,42 @@ function onThermalFillerView(id){
    Click handler for view tabs. Updates global mode and
    triggers re-render of the comparison area.
    ---------------------------------------------------------- */
+/* v0.29.0 — flow view controls (shared by every flow tile).  The speed map
+   needs a section plane, so picking it with none set turns on Z at the
+   middle; the particle view is also opened with that cut the first time,
+   as in a CFD cut-away.  Speed, count and play act on the particles
+   directly — no re-render while a slider is dragged. */
+function flowEnsureClip(){
+  if (typeof LAB_CLIP !== 'undefined' && LAB_CLIP.axis === 0){ LAB_CLIP.axis = 3; LAB_CLIP.pos = 0.0; LAB_CLIP.side = 1; }
+}
+function onFlowViewPick(v){
+  VIEW_STATE.flowView = v;
+  if (v === 'speed') flowEnsureClip();
+  onViewModeClick('flow');
+}
+function onFlowDirPick(d){ VIEW_STATE.flowDir = d; if (typeof renderDesignGrid === 'function') renderDesignGrid(); }
+function onFlowPlayToggle(btn){
+  VIEW_STATE.flowPlay = !VIEW_STATE.flowPlay;
+  for (var id in FLOW_PS) FLOW_PS[id].playing = VIEW_STATE.flowPlay;
+  var bs = document.querySelectorAll('.flow-play');
+  for (var i = 0; i < bs.length; i++){ bs[i].innerHTML = VIEW_STATE.flowPlay ? FLOW_ICON_PAUSE : FLOW_ICON_PLAY; bs[i].title = VIEW_STATE.flowPlay ? 'Pause' : 'Play'; }
+}
+function onFlowSpeed(el){
+  VIEW_STATE.flowSpeed = +el.value;
+  for (var id in FLOW_PS) FLOW_PS[id].speed = VIEW_STATE.flowSpeed;
+  var ss = document.querySelectorAll('.vp-flow-control input[oninput^="onFlowSpeed"]');
+  for (var i = 0; i < ss.length; i++) if (ss[i] !== el) ss[i].value = el.value;
+}
+function onFlowCount(el){
+  VIEW_STATE.flowCount = +el.value;
+  for (var id in FLOW_PS) FLOW_PS[id].setCount(VIEW_STATE.flowCount);
+  var ss = document.querySelectorAll('.vp-flow-control input[oninput^="onFlowCount"]');
+  for (var i = 0; i < ss.length; i++) if (ss[i] !== el) ss[i].value = el.value;
+}
 function onViewModeClick(mode){
   if (mode === 'deform') mode = 'stress';   /* v0.25.0 — Deformed is part of the Stress tab */
   VIEW_STATE.mode = mode;
+  if (mode === 'flow' && !VIEW_STATE._flowSeen){ VIEW_STATE._flowSeen = true; if (VIEW_STATE.flowView !== 'surface') flowEnsureClip(); }   /* v0.29.0 */
 
   // Update tab visual state
   var tabs = document.querySelectorAll('.view-tab');
@@ -80,7 +118,7 @@ function onViewModeClick(mode){
       if (mode === 'stiff')      labelEl.textContent = 'E surface scale';
       else if (mode === 'stress') labelEl.textContent = 'σ_VM scale';
       else if (mode === 'thermal') labelEl.textContent = 'Map scale';
-      else if (mode === 'flow')    labelEl.textContent = 'K surface scale';   /* v0.28.0 */
+      else if (mode === 'flow')    labelEl.textContent = (VIEW_STATE.flowView === 'surface') ? 'K surface scale' : 'Speed scale';   /* v0.28.0 / v0.29.0 */
     }
   }
 
