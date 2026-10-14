@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F13LD.lab flow bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* F13LD.lab · fluids Phase 0 GPU benchmark (docs/FLUIDS_LBM_SCOPE.md §3.9, §5 Phase 0).
+   Lab palette: tile #F6E7E7, stroke #8C2A2E, on-dark accent #E06A6F, ground #06080c. */
+:root {
+  --ground:#06080c; --panel:#0d1117; --panel-2:#121821; --line:rgba(255,255,255,0.08); --line-2:rgba(255,255,255,0.14);
+  --ink:#e8ecf1; --ink-2:#a3adba; --ink-3:#6c7684;
+  --lab:#E06A6F; --lab-deep:#8C2A2E; --lab-tile:#F6E7E7; --lab-soft:rgba(140,42,46,0.26); --lab-ring:rgba(224,106,111,0.45);
+  --ok:#1D9E75; --warn:#E0A84A; --bad:#E06A6F;
+  --mono:'JetBrains Mono', ui-monospace, monospace;
+}
+* { box-sizing:border-box }
+html, body { margin:0; background:var(--ground); color:var(--ink); font-family:'Exo 2', system-ui, sans-serif; font-weight:400 }
+body { overflow-x:hidden }
+.wrap { max-width:1080px; margin:0 auto; padding:20px 16px 48px }
+header { display:flex; align-items:center; gap:12px; margin-bottom:18px }
+.tile { width:38px; height:38px; border-radius:9px; background:var(--lab-tile); border:1px solid var(--lab-deep); display:grid; place-items:center; flex:none }
+.brand { font-weight:700; letter-spacing:0.14em; text-transform:uppercase; font-size:15px; line-height:1.1 }
+.brand b { color:var(--lab); font-weight:700 }
+.sub { color:var(--ink-3); font-size:12px; letter-spacing:0.04em; margin-top:3px }
+.ver { margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--ink-3) }
+.grid2 { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1.4fr); gap:14px }
+@media (max-width:820px) { .grid2 { grid-template-columns:minmax(0, 1fr) } }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 14px 12px; min-width:0 }
+.card h2 { margin:0 0 10px; font-size:11px; font-weight:600; letter-spacing:0.16em; text-transform:uppercase; color:var(--lab) }
+.row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:8px 0 }
+.row label.k { width:118px; flex:none; color:var(--ink-2); font-size:13px }
+.seg { display:inline-flex; border:1px solid var(--line-2); border-radius:8px; overflow:hidden; flex-wrap:wrap }
+.seg button { background:transparent; border:0; color:var(--ink-2); font:500 12px var(--mono); padding:6px 10px; cursor:pointer }
+.seg button + button { border-left:1px solid var(--line-2) }
+.seg button.on { background:var(--lab-deep); color:var(--lab-tile) }
+.seg button:hover:not(.on) { color:var(--lab) }
+select { background:var(--panel-2); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 8px; font:500 12px var(--mono); max-width:100% }
+.btn { display:inline-flex; align-items:center; gap:8px; border-radius:8px; border:1px solid var(--lab-ring); background:var(--lab-deep); color:var(--lab-tile);
+  font:600 13px 'Exo 2', sans-serif; letter-spacing:0.06em; padding:8px 14px; cursor:pointer }
+.btn:disabled { opacity:0.45; cursor:default }
+.btn.ghost { background:transparent; color:var(--ink-2); border-color:var(--line-2) }
+.btn.ghost:hover:not(:disabled) { color:var(--lab); border-color:var(--lab) }
+.btn svg { flex:none }
+.note { color:var(--ink-3); font-size:12px; line-height:1.55; margin:6px 0 0 }
+.kv { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:4px 12px; font-size:12px }
+.kv span:nth-child(odd) { color:var(--ink-2) }
+.kv span:nth-child(even) { font-family:var(--mono); color:var(--ink); text-align:right; overflow-wrap:anywhere }
+.status { display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:12px; color:var(--ink-2); min-height:20px }
+.dot { width:8px; height:8px; border-radius:50%; background:var(--ink-3); flex:none }
+.dot.run { background:var(--lab); box-shadow:0 0 6px var(--lab) }
+.dot.ok { background:var(--ok) } .dot.bad { background:var(--bad) }
+.results { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:12px; margin-top:14px }
+.res { background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:12px }
+.res h3 { margin:0 0 8px; font:600 13px var(--mono); color:var(--lab-tile); display:flex; justify-content:space-between; gap:8px }
+.res h3 em { font-style:normal; color:var(--ink-3); font-weight:500 }
+.pill { font:500 10px var(--mono); padding:2px 6px; border-radius:6px; border:1px solid var(--line-2); color:var(--ink-2) }
+.pill.ok { color:var(--ok); border-color:rgba(29,158,117,0.5) } .pill.bad { color:var(--bad); border-color:var(--lab-ring) }
+canvas { width:100%; height:180px; display:block; background:var(--panel-2); border:1px solid var(--line); border-radius:10px }
+pre { margin:0; font:11px/1.5 var(--mono); color:var(--ink-2); white-space:pre-wrap; overflow-wrap:anywhere; max-height:220px; overflow-y:auto }
+.legend { display:flex; gap:14px; flex-wrap:wrap; font:11px var(--mono); color:var(--ink-3); margin-top:6px }
+.legend i { display:inline-block; width:14px; height:2px; vertical-align:middle; margin-right:5px }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="tile" aria-hidden="true">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8C2A2E" stroke-width="1.8" stroke-linecap="round">
+        <path d="M3 7c3-3 6 3 9 0s6 3 9 0"/><path d="M3 12c3-3 6 3 9 0s6 3 9 0"/><path d="M3 17c3-3 6 3 9 0s6 3 9 0"/>
+      </svg>
+    </div>
+    <div>
+      <div class="brand">F13LD<b>.lab</b> flow bench</div>
+      <div class="sub">Lattice Boltzmann throughput and convergence on this GPU</div>
+    </div>
+    <div class="ver">fluids phase 0 · v0.27.1</div>
+  </header>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Setup</h2>
+      <div class="row"><label class="k">Geometry</label>
+        <select id="geom">
+          <option value="gyroid-sheet">Gyroid sheet (t 0.4)</option>
+          <option value="gyroid-skel">Gyroid skeletal (t 0.4)</option>
+          <option value="schwarzp-skel">Schwarz P skeletal (t 0.6)</option>
+        </select></div>
+      <div class="row"><label class="k">Grids</label>
+        <div class="seg" id="grids"><button data-n="32" class="on">32³</button><button data-n="64" class="on">64³</button><button data-n="128" class="on">128³</button></div></div>
+      <div class="row"><label class="k">Relaxation τ⁺</label>
+        <div class="seg" id="taus"><button data-t="1.0">1.0</button><button data-t="1.5" class="on">1.5</button><button data-t="2.0">2.0</button></div></div>
+      <div class="row"><label class="k">Tolerance</label>
+        <div class="seg" id="tols"><button data-v="1e-6" class="on">Standard 1e-6</button><button data-v="1e-7">High 1e-7</button></div></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn" id="run">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M7 4l12 8-12 8z"/></svg>
+          Run benchmark</button>
+        <button class="btn ghost" id="parity">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M4 17h16M18 4v6M8 14v6"/></svg>
+          GPU vs CPU check</button>
+        <button class="btn ghost" id="copy" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>
+          Copy results</button>
+      </div>
+      <div class="status" style="margin-top:8px"><span class="dot" id="dot"></span><span id="stat">Idle</span></div>
+      <p class="note">One flow direction per grid, from rest, until the mean velocity changes by less than the tolerance over 500 steps. A full design is three directions. The check compares the GPU state with the Float64 CPU reference after 600 identical steps at 32³ and should read about 1e-6 or better.</p>
+    </div>
+
+    <div class="card">
+      <h2>This GPU</h2>
+      <div class="kv" id="gpu"><span>Status</span><span>Not started</span></div>
+      <h2 style="margin-top:14px">Convergence</h2>
+      <canvas id="chart" width="900" height="300"></canvas>
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
+
+  <div class="results" id="results"></div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>Log</h2>
+    <pre id="log"></pre>
+  </div>
+</div>
+
+<script src="../../14e-link-field.js"></script>
+<script src="../../19f-flow-cpu-ref.js"></script>
+<script>
+'use strict';
+/* ------------------------------------------------------------------ */
+/*  UI helpers                                                         */
+/* ------------------------------------------------------------------ */
+var $ = function (id) { return document.getElementById(id); };
+var LOG = [];
+function log(s) { LOG.push(s); $('log').textContent = LOG.join('\n'); $('log').scrollTop = 1e9; console.log('[flow-bench] ' + s); }
+function status(s, kind) { $('stat').textContent = s; $('dot').className = 'dot' + (kind ? ' ' + kind : ''); }
+function segValues(id, attr, multi) {
+  var b = Array.prototype.slice.call($(id).querySelectorAll('button'));
+  b.forEach(function (x) { x.addEventListener('click', function () {
+    if (multi) x.classList.toggle('on'); else { b.forEach(function (y) { y.classList.remove('on'); }); x.classList.add('on'); }
+  }); });
+  return function () { return b.filter(function (x) { return x.classList.contains('on'); }).map(function (x) { return x.getAttribute(attr); }); };
+}
+var getGrids = segValues('grids', 'data-n', true), getTau = segValues('taus', 'data-t', false), getTol = segValues('tols', 'data-v', false);
+function kv(el, pairs) { el.innerHTML = pairs.map(function (p) { return '<span>' + p[0] + '</span><span>' + p[1] + '</span>'; }).join(''); }
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+function fmtMB(b) { return (b / 1048576).toFixed(b < 1048576 * 10 ? 1 : 0) + ' MB'; }
+
+/* ------------------------------------------------------------------ */
+/*  Geometry: solid ⟺ m(x) > 0 on the lab cube [−π, π]³               */
+/* ------------------------------------------------------------------ */
+var GEOMS = {
+  'gyroid-sheet': function (x, y, z) { var g = Math.sin(x) * Math.cos(y) + Math.sin(y) * Math.cos(z) + Math.sin(z) * Math.cos(x); return 0.4 - Math.abs(g); },
+  'gyroid-skel': function (x, y, z) { return Math.sin(x) * Math.cos(y) + Math.sin(y) * Math.cos(z) + Math.sin(z) * Math.cos(x) - 0.4; },
+  'schwarzp-skel': function (x, y, z) { return Math.cos(x) + Math.cos(y) + Math.cos(z) - 0.6; }
+};
+function buildLinks(name, N) {
+  var fn = GEOMS[name], L = Math.PI, h = 2 * L / N, NN = N * N, N3 = NN * N;
+  var kept = new Float32Array(N3), mC = new Float32Array(N3);
+  for (var i = 0; i < N; i++) for (var j = 0; j < N; j++) for (var k = 0; k < N; k++) {
+    var id = i * NN + j * N + k;
+    kept[id] = fn(-L + (i + 0.5) * h, -L + (j + 0.5) * h, -L + (k + 0.5) * h) > 0 ? 1 : 0;
+    mC[id] = fn(-L + i * h, -L + j * h, -L + k * h);
+  }
+  return buildFlowLinksFromFn(fn, N, kept, kept, mC, {});
+}
+
+/* GPU wall tables, the same rules as 19f prepareFlowDomain with CLI walls:
+   flags bit 0 solid, bit i (1..18) incoming direction i walled; wslot →
+   18 floats of q (0.5 = halfway, used where no node behind is free). */
+var LAT = flowLattice();
+function gpuTables(links) {
+  var N = links.N, NN = N * N, N3 = NN * N, solid = links.solid, Q = 19;
+  var flags = new Uint32Array(N3), wslot = new Uint32Array(N3), qList = [], nWall = 0, nFallback = 0, nFluid = 0;
+  function nbr(p, cx, cy, cz) {
+    var i = (p / NN) | 0, j = ((p / N) | 0) % N, k = p % N;
+    return ((i + cx + N) % N) * NN + ((j + cy + N) % N) * N + ((k + cz + N) % N);
+  }
+  function qOut(p, dir) {
+    var d = (dir - 1) >> 1, v = LAT.dirs[d];
+    return (dir & 1) ? links.qa[d][p] : links.qb[d][nbr(p, -v[0], -v[1], -v[2])];
+  }
+  var qrow = new Float32Array(18);
+  for (var x = 0; x < N3; x++) {
+    if (solid[x]) { flags[x] = 1; continue; }
+    nFluid++;
+    var f = 0;
+    for (var i = 1; i < Q; i++) {
+      var ci = LAT.c[i], j = LAT.opp[i], q = qOut(x, j), src = nbr(x, -ci[0], -ci[1], -ci[2]);
+      qrow[i - 1] = 0;
+      if (!(q > 0) && !solid[src]) continue;
+      if (!(q > 0)) q = 0.5;
+      var behind = nbr(x, ci[0], ci[1], ci[2]);
+      if (q !== 0.5 && (solid[behind] || qOut(x, i) > 0)) { q = 0.5; nFallback++; }
+      f |= (1 << i); qrow[i - 1] = q; nWall++;
+    }
+    if (f) { flags[x] = f >>> 0; wslot[x] = qList.length / 18; for (var m = 0; m < 18; m++) qList.push(qrow[m]); }
+  }
+  return { N: N, N3: N3, flags: flags, wslot: wslot, qtab: new Float32Array(qList.length ? qList : [0]), nWall: nWall, nFallback: nFallback, nFluid: nFluid };
+}
+
+/* ------------------------------------------------------------------ */
+/*  WGSL — fused pull · CLI walls · TRT · Guo force · mass correction  */
+/* ------------------------------------------------------------------ */
+var CX = [0, 1, -1, 0, 0, 0, 0, 1, -1, 1, -1, 1, -1, 1, -1, 0, 0, 0, 0];
+var CY = [0, 0, 0, 1, -1, 0, 0, 1, -1, -1, 1, 0, 0, 0, 0, 1, -1, 1, -1];
+var CZ = [0, 0, 0, 0, 0, 1, -1, 0, 0, 0, 0, 1, -1, -1, 1, 1, -1, -1, 1];
+(function () { for (var i = 0; i < 19; i++) if (LAT.c[i][0] !== CX[i] || LAT.c[i][1] !== CY[i] || LAT.c[i][2] !== CZ[i]) throw new Error('lattice order differs from 19f'); })();
+function stepWGSL() {
+  var ax = ['xm', 'x0', 'xp'], ay = ['ym', 'y0', 'yp'], az = ['zm', 'z0', 'zp'], L = [];
+  function at(dx, dy, dz) { return '((' + ax[dx + 1] + ' * P.N + ' + ay[dy + 1] + ') * P.N + ' + az[dz + 1] + ')'; }
+  L.push('struct Params { N: u32, N3: u32, invFluid: f32, invN3: f32, Fx: f32, Fy: f32, Fz: f32, wP: f32, wM: f32, p0: f32, p1: f32, p2: f32 };');
+  L.push('@group(0) @binding(0) var<storage, read> fin: array<f32>;');
+  L.push('@group(0) @binding(1) var<storage, read_write> fout: array<f32>;');
+  L.push('@group(0) @binding(2) var<storage, read> flags: array<u32>;');
+  L.push('@group(0) @binding(3) var<storage, read> wslot: array<u32>;');
+  L.push('@group(0) @binding(4) var<storage, read> qtab: array<f32>;');
+  L.push('@group(0) @binding(5) var<storage, read_write> partial: array<vec4<f32>>;');
+  L.push('@group(0) @binding(6) var<storage, read> red: array<f32>;');
+  L.push('@group(0) @binding(7) var<uniform> P: Params;');
+  L.push('var<workgroup> sh: array<vec4<f32>, 256>;');
+  L.push('@compute @workgroup_size(256)');
+  L.push('fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {');
+  L.push('  let c = gid.x; var acc = vec4<f32>(0.0);');
+  L.push('  if (c < P.N3) { let fl = flags[c]; if ((fl & 1u) == 0u) {');
+  L.push('    let N = P.N; let N3 = P.N3; let z0 = c % N; let y0 = (c / N) % N; let x0 = c / (N * N);');
+  L.push('    let xm = select(x0 - 1u, N - 1u, x0 == 0u); let xp = select(x0 + 1u, 0u, x0 + 1u == N);');
+  L.push('    let ym = select(y0 - 1u, N - 1u, y0 == 0u); let yp = select(y0 + 1u, 0u, y0 + 1u == N);');
+  L.push('    let zm = select(z0 - 1u, N - 1u, z0 == 0u); let zp = select(z0 + 1u, 0u, z0 + 1u == N);');
+  L.push('    var f0 = fin[c] - red[0];');
+  for (var i = 1; i < 19; i++) L.push('    var f' + i + ' = fin[' + i + 'u * N3 + ' + at(-CX[i], -CY[i], -CZ[i]) + '];');
+  L.push('    if (fl > 1u) { let ws = wslot[c] * 18u;');
+  for (var i2 = 1; i2 < 19; i2++) {
+    var j = (i2 & 1) ? i2 + 1 : i2 - 1;
+    L.push('      if ((fl & ' + (1 << i2) + 'u) != 0u) { let q = qtab[ws + ' + (i2 - 1) + 'u]; let kap = (1.0 - 2.0 * q) / (1.0 + 2.0 * q);');
+    L.push('        f' + i2 + ' = fin[' + j + 'u * N3 + c] + kap * (fin[' + j + 'u * N3 + ' + at(CX[i2], CY[i2], CZ[i2]) + '] - fin[' + i2 + 'u * N3 + c]); }');
+  }
+  L.push('    }');
+  L.push('    let dr = f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14 + f15 + f16 + f17 + f18;');
+  L.push('    let jx = f1 - f2 + f7 - f8 + f9 - f10 + f11 - f12 + f13 - f14;');
+  L.push('    let jy = f3 - f4 + f7 - f8 - f9 + f10 + f15 - f16 + f17 - f18;');
+  L.push('    let jz = f5 - f6 + f11 - f12 - f13 + f14 + f15 - f16 - f17 + f18;');
+  L.push('    let rho = 1.0 + dr; let ir = 1.0 / rho;');
+  L.push('    let Fx = P.Fx; let Fy = P.Fy; let Fz = P.Fz; let wP = P.wP; let wM = P.wM; let hP = 1.0 - 0.5 * wP; let hM = 1.0 - 0.5 * wM;');
+  L.push('    let ux = (jx + 0.5 * Fx) * ir; let uy = (jy + 0.5 * Fy) * ir; let uz = (jz + 0.5 * Fz) * ir;');
+  L.push('    let u2 = ux * ux + uy * uy + uz * uz; let uFd = ux * Fx + uy * Fy + uz * Fz;');
+  L.push('    let b15 = dr - 1.5 * rho * u2; let s3 = -3.0 * uFd;');
+  L.push('    let W0 = 1.0 / 3.0; let WA = 1.0 / 18.0; let WD = 1.0 / 36.0;');
+  L.push('    fout[c] = f0 - wP * (f0 - W0 * b15) + hP * W0 * s3;');
+  L.push('    var cu: f32; var cf: f32; var fp: f32; var fm: f32; var ev: f32; var od: f32;');
+  var cu = ['ux', 'uy', 'uz', 'ux + uy', 'ux - uy', 'ux + uz', 'ux - uz', 'uy + uz', 'uy - uz'];
+  var cf = ['Fx', 'Fy', 'Fz', 'Fx + Fy', 'Fx - Fy', 'Fx + Fz', 'Fx - Fz', 'Fy + Fz', 'Fy - Fz'];
+  for (var d = 0; d < 9; d++) {
+    var ip = 1 + 2 * d, im = ip + 1, W = d < 3 ? 'WA' : 'WD';
+    L.push('    cu = ' + cu[d] + '; cf = ' + cf[d] + '; fp = 0.5 * (f' + ip + ' + f' + im + '); fm = 0.5 * (f' + ip + ' - f' + im + ');');
+    L.push('    ev = -wP * (fp - ' + W + ' * (b15 + 4.5 * rho * cu * cu)) + hP * ' + W + ' * (9.0 * cu * cf + s3);');
+    L.push('    od = -wM * (fm - ' + W + ' * 3.0 * rho * cu) + hM * ' + W + ' * 3.0 * cf;');
+    L.push('    fout[' + ip + 'u * N3 + c] = f' + ip + ' + ev + od; fout[' + im + 'u * N3 + c] = f' + im + ' + ev - od;');
+  }
+  L.push('    acc = vec4<f32>(dr, ux, uy, uz);');
+  L.push('  } }');
+  L.push('  sh[li] = acc; workgroupBarrier();');
+  L.push('  for (var s = 128u; s > 0u; s = s >> 1u) { if (li < s) { sh[li] = sh[li] + sh[li + s]; } workgroupBarrier(); }');
+  L.push('  if (li == 0u) { partial[wg.x] = sh[0]; }');
+  L.push('}');
+  return L.join('\n');
+}
+var REDUCE_WGSL = [
+  'struct R { nPart: u32, invFluid: f32, invN3: f32, pad: f32 };',
+  '@group(0) @binding(0) var<storage, read> partial: array<vec4<f32>>;',
+  '@group(0) @binding(1) var<storage, read_write> red: array<f32>;',
+  '@group(0) @binding(2) var<uniform> Rp: R;',
+  'var<workgroup> sh: array<vec4<f32>, 256>;',
+  '@compute @workgroup_size(256)',
+  'fn main(@builtin(local_invocation_index) li: u32) {',
+  '  var a = vec4<f32>(0.0); var p = li;',
+  '  loop { if (p >= Rp.nPart) { break; } a = a + partial[p]; p = p + 256u; }',
+  '  sh[li] = a; workgroupBarrier();',
+  '  for (var s = 128u; s > 0u; s = s >> 1u) { if (li < s) { sh[li] = sh[li] + sh[li + s]; } workgroupBarrier(); }',
+  '  if (li == 0u) { red[0] = sh[0].x * Rp.invFluid; red[1] = sh[0].y * Rp.invN3; red[2] = sh[0].z * Rp.invN3; red[3] = sh[0].w * Rp.invN3; }',
+  '}'].join('\n');
+
+/* ------------------------------------------------------------------ */
+/*  Device                                                             */
+/* ------------------------------------------------------------------ */
+var GPU = null;
+async function initGPU() {
+  if (GPU) return GPU;
+  if (!navigator.gpu) throw new Error('WebGPU is not available in this browser');
+  var adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) throw new Error('No WebGPU adapter');
+  var lim = adapter.limits, info = adapter.info || (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : {});
+  var device = await adapter.requestDevice({ requiredLimits: {
+    maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize, maxBufferSize: lim.maxBufferSize,
+    maxStorageBuffersPerShaderStage: Math.min(lim.maxStorageBuffersPerShaderStage, 10),
+    maxComputeWorkgroupsPerDimension: lim.maxComputeWorkgroupsPerDimension } });
+  device.lost.then(function (e) { log('device lost: ' + e.reason + ' ' + e.message); GPU = null; });
+  device.addEventListener('uncapturederror', function (ev) { log('GPU error: ' + (ev.error && ev.error.message)); });
+  var t0 = performance.now();
+  var mStep = device.createShaderModule({ code: stepWGSL() }), mRed = device.createShaderModule({ code: REDUCE_WGSL });
+  var ci = await mStep.getCompilationInfo(); ci.messages.forEach(function (m) { if (m.type === 'error') log('WGSL: ' + m.message + ' line ' + m.lineNum); });
+  var pStep = await device.createComputePipelineAsync({ layout: 'auto', compute: { module: mStep, entryPoint: 'main' } });
+  var pRed = await device.createComputePipelineAsync({ layout: 'auto', compute: { module: mRed, entryPoint: 'main' } });
+  GPU = { adapter: adapter, device: device, info: info, pStep: pStep, pRed: pRed, compileMs: performance.now() - t0,
+    limits: { maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize, maxBufferSize: lim.maxBufferSize,
+      maxStorageBuffersPerShaderStage: lim.maxStorageBuffersPerShaderStage, maxComputeWorkgroupsPerDimension: lim.maxComputeWorkgroupsPerDimension } };
+  kv($('gpu'), [['Adapter', (info.vendor || '?') + ' · ' + (info.architecture || info.device || info.description || '—')],
+    ['Max storage binding', fmtMB(lim.maxStorageBufferBindingSize)], ['Max buffer', fmtMB(lim.maxBufferSize)],
+    ['Storage buffers / stage', lim.maxStorageBuffersPerShaderStage], ['Kernel compile', GPU.compileMs.toFixed(0) + ' ms']]);
+  log('adapter ' + JSON.stringify(info) + ' limits ' + JSON.stringify(GPU.limits));
+  return GPU;
+}
+
+/* One solver instance on the GPU for a given set of tables */
+function makeSolver(T, tauP, force) {
+  var g = GPU, dev = g.device, N3 = T.N3, popBytes = 19 * N3 * 4;
+  if (popBytes > g.limits.maxStorageBufferBindingSize || popBytes > g.limits.maxBufferSize)
+    throw new Error('population buffer ' + fmtMB(popBytes) + ' exceeds this GPU’s binding limit ' + fmtMB(g.limits.maxStorageBufferBindingSize) + ' (needs the 3-buffer split, Phase 1)');
+  var S = GPUBufferUsage.STORAGE, CD = GPUBufferUsage.COPY_DST, CS = GPUBufferUsage.COPY_SRC;
+  function buf(size, usage) { return dev.createBuffer({ size: Math.max(16, Math.ceil(size / 16) * 16), usage: usage }); }
+  var A = buf(popBytes, S | CD | CS), B = buf(popBytes, S | CD | CS);
+  var fl = buf(N3 * 4, S | CD), ws = buf(N3 * 4, S | CD), qt = buf(T.qtab.length * 4, S | CD);
+  dev.queue.writeBuffer(fl, 0, T.flags); dev.queue.writeBuffer(ws, 0, T.wslot); dev.queue.writeBuffer(qt, 0, T.qtab);
+  var nWG = Math.ceil(N3 / 256), part = buf(nWG * 16, S), red = buf(16, S | CD | CS), stage = dev.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | CD });
+  dev.queue.writeBuffer(red, 0, new Float32Array(4));
+  var tauM = 0.5 + (3 / 16) / (tauP - 0.5), wP = 1 / tauP, wM = 1 / tauM;
+  var u = new ArrayBuffer(48), uu = new Uint32Array(u), uf = new Float32Array(u);
+  uu[0] = T.N; uu[1] = N3; uf[2] = 1 / T.nFluid; uf[3] = 1 / N3; uf[4] = force[0]; uf[5] = force[1]; uf[6] = force[2]; uf[7] = wP; uf[8] = wM;
+  var ub = buf(48, GPUBufferUsage.UNIFORM | CD); dev.queue.writeBuffer(ub, 0, u);
+  var ru = new ArrayBuffer(16), ruu = new Uint32Array(ru), ruf = new Float32Array(ru);
+  ruu[0] = nWG; ruf[1] = 1 / T.nFluid; ruf[2] = 1 / N3;
+  var rb = buf(16, GPUBufferUsage.UNIFORM | CD); dev.queue.writeBuffer(rb, 0, ru);
+  function bg(a, b) {
+    return dev.createBindGroup({ layout: g.pStep.getBindGroupLayout(0), entries: [
+      { binding: 0, resource: { buffer: a } }, { binding: 1, resource: { buffer: b } }, { binding: 2, resource: { buffer: fl } },
+      { binding: 3, resource: { buffer: ws } }, { binding: 4, resource: { buffer: qt } }, { binding: 5, resource: { buffer: part } },
+      { binding: 6, resource: { buffer: red } }, { binding: 7, resource: { buffer: ub } }] });
+  }
+  var bgAB = bg(A, B), bgBA = bg(B, A);
+  var bgR = dev.createBindGroup({ layout: g.pRed.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: part } }, { binding: 1, resource: { buffer: red } }, { binding: 2, resource: { buffer: rb } }] });
+  var parity = 0, steps = 0;
+  var bytes = 2 * popBytes + 2 * N3 * 4 + T.qtab.length * 4 + nWG * 16;
+  return {
+    bytes: bytes, nu: (tauP - 0.5) / 3,
+    run: function (n) {
+      var enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+      for (var s = 0; s < n; s++) {
+        pass.setPipeline(g.pStep); pass.setBindGroup(0, parity ? bgBA : bgAB); pass.dispatchWorkgroups(nWG);
+        pass.setPipeline(g.pRed); pass.setBindGroup(0, bgR); pass.dispatchWorkgroups(1);
+        parity ^= 1;
+      }
+      pass.end(); dev.queue.submit([enc.finish()]); steps += n;
+    },
+    readU: async function () {
+      var enc = dev.createCommandEncoder(); enc.copyBufferToBuffer(red, 0, stage, 0, 16); dev.queue.submit([enc.finish()]);
+      await stage.mapAsync(GPUMapMode.READ); var v = new Float32Array(stage.getMappedRange().slice(0)); stage.unmap(); return v;
+    },
+    readState: async function () {
+      var src = parity ? B : A, rd = dev.createBuffer({ size: popBytes, usage: GPUBufferUsage.MAP_READ | CD });
+      var enc = dev.createCommandEncoder(); enc.copyBufferToBuffer(src, 0, rd, 0, popBytes); dev.queue.submit([enc.finish()]);
+      await rd.mapAsync(GPUMapMode.READ); var v = new Float32Array(rd.getMappedRange().slice(0)); rd.unmap(); rd.destroy(); return v;
+    },
+    done: function () { return dev.queue.onSubmittedWorkDone(); },
+    steps: function () { return steps; },
+    destroy: function () { [A, B, fl, ws, qt, part, red, stage, ub, rb].forEach(function (b) { b.destroy(); }); }
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Convergence chart                                                  */
+/* ------------------------------------------------------------------ */
+var SERIES = [], COLORS = ['#E06A6F', '#F6E7E7', '#1D9E75', '#E0A84A', '#7FA7E0'];
+function drawChart() {
+  var cv = $('chart'), ctx = cv.getContext('2d'), W = cv.width, Hh = cv.height, padL = 64, padB = 34, padT = 14, padR = 14;
+  ctx.clearRect(0, 0, W, Hh);
+  var maxS = 1000; SERIES.forEach(function (s) { s.pts.forEach(function (p) { maxS = Math.max(maxS, p[0]); }); });
+  var lo = -9, hi = 0;
+  function X(s) { return padL + (W - padL - padR) * s / maxS; }
+  function Y(r) { var l = Math.log10(Math.max(r, 1e-12)); l = Math.min(hi, Math.max(lo, l)); return padT + (Hh - padT - padB) * (hi - l) / (hi - lo); }
+  ctx.font = '20px JetBrains Mono, monospace'; ctx.fillStyle = '#6c7684'; ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1;
+  for (var e = lo; e <= hi; e += 3) { var y = Y(Math.pow(10, e)); ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke(); ctx.fillText('1e' + e, 6, y + 7); }
+  ctx.fillText('steps → ' + maxS.toLocaleString(), padL, Hh - 8);
+  SERIES.forEach(function (s, si) {
+    ctx.strokeStyle = COLORS[si % COLORS.length]; ctx.lineWidth = 3; ctx.beginPath();
+    s.pts.forEach(function (p, k) { if (k) ctx.lineTo(X(p[0]), Y(p[1])); else ctx.moveTo(X(p[0]), Y(p[1])); });
+    ctx.stroke();
+  });
+  $('legend').innerHTML = SERIES.map(function (s, si) { return '<span><i style="background:' + COLORS[si % COLORS.length] + '"></i>' + s.name + '</span>'; }).join('');
+}
+
+/* ------------------------------------------------------------------ */
+/*  Benchmark                                                          */
+/* ------------------------------------------------------------------ */
+var RESULTS = { when: null, geometry: null, tauPlus: null, tol: null, gpu: null, grids: [], parity: null };
+function resultCard(r) {
+  var el = document.createElement('div'); el.className = 'res';
+  var conv = r.converged ? '<span class="pill ok">converged</span>' : '<span class="pill bad">' + (r.error ? 'error' : 'not converged') + '</span>';
+  el.innerHTML = '<h3>' + r.N + '³ <em>' + conv + '</em></h3><div class="kv"></div>';
+  var rows = r.error ? [['Error', r.error]] : [
+    ['Fluid', (100 * r.porosity).toFixed(1) + ' %'], ['Wall links', r.wallLinks.toLocaleString()],
+    ['Geometry build', (r.buildMs / 1000).toFixed(2) + ' s'], ['GPU memory', fmtMB(r.bytes)],
+    ['Throughput', r.mlupsFluid.toFixed(0) + ' MLUPS fluid'], ['', r.mlupsCells.toFixed(0) + ' M cells/s'],
+    ['Est. bandwidth', r.gbps.toFixed(0) + ' GB/s'], ['Steps to converge', r.steps.toLocaleString()],
+    ['Time, one direction', r.solveS.toFixed(1) + ' s'], ['Est. per design (3 dirs)', (3 * r.solveS).toFixed(0) + ' s'],
+    ['Permeability', r.Kcells.toPrecision(5) + ' cells²'], ['k / L²', r.kL2.toExponential(4)]];
+  kv(el.querySelector('.kv'), rows); return el;
+}
+async function benchOne(N, geom, tauP, tol) {
+  var r = { N: N };
+  status('Building ' + N + '³ geometry…', 'run'); await sleep(20);
+  var t0 = performance.now(), links = buildLinks(geom, N), T = gpuTables(links);
+  r.buildMs = performance.now() - t0; r.porosity = T.nFluid / T.N3; r.wallLinks = T.nWall; r.fallback = T.nFallback;
+  log(N + '³: geometry + wall tables ' + r.buildMs.toFixed(0) + ' ms, fluid ' + (100 * r.porosity).toFixed(1) + ' %, wall links ' + T.nWall + ' (halfway fallback ' + T.nFallback + ')');
+  var g = 1e-5, sol = makeSolver(T, tauP, [g, 0, 0]); r.bytes = sol.bytes;
+  links = null;
+  /* throughput: warm up, then a timed block */
+  status(N + '³: timing…', 'run');
+  sol.run(50); await sol.done();
+  var nT = N <= 32 ? 2000 : (N <= 64 ? 1000 : 300), t1 = performance.now();
+  sol.run(nT); await sol.done();
+  var dt = (performance.now() - t1) / 1000;
+  r.mlupsFluid = T.nFluid * nT / dt / 1e6; r.mlupsCells = T.N3 * nT / dt / 1e6;
+  r.gbps = r.mlupsFluid * (19 * 4 * 2 + 4) / 1000;
+  log(N + '³: ' + nT + ' steps in ' + dt.toFixed(3) + ' s → ' + r.mlupsFluid.toFixed(0) + ' MLUPS (fluid), ' + r.gbps.toFixed(0) + ' GB/s est.');
+  sol.destroy();
+  /* convergence from rest */
+  var sol2 = makeSolver(T, tauP, [g, 0, 0]), every = 500, prev = null, series = { name: N + '³', pts: [] }, maxSteps = 400000;
+  SERIES.push(series);
+  var t2 = performance.now(), U = null, rel = 1;
+  while (sol2.steps() < maxSteps) {
+    sol2.run(every);
+    U = await sol2.readU();
+    var Um = Math.hypot(U[1], U[2], U[3]);
+    rel = prev ? Math.hypot(U[1] - prev[0], U[2] - prev[1], U[3] - prev[2]) / Math.max(Um, 1e-30) : 1;
+    prev = [U[1], U[2], U[3]];
+    series.pts.push([sol2.steps(), rel]);
+    if (series.pts.length % 4 === 0) { drawChart(); status(N + '³: step ' + sol2.steps().toLocaleString() + ' · change ' + rel.toExponential(2), 'run'); await sleep(0); }
+    if (sol2.steps() >= 1000 && rel < tol) break;
+    if (!isFinite(Um)) break;
+  }
+  drawChart();
+  r.solveS = (performance.now() - t2) / 1000; r.steps = sol2.steps(); r.converged = rel < tol;
+  r.U = [U[1], U[2], U[3]]; r.massCorr = U[0];
+  r.Kcells = sol2.nu * U[1] / g; r.kL2 = r.Kcells / (N * N);
+  log(N + '³: ' + r.steps + ' steps, ' + r.solveS.toFixed(2) + ' s, K = ' + r.Kcells.toPrecision(6) + ' cells², k/L² = ' + r.kL2.toExponential(4) + (r.converged ? '' : ' (not converged)'));
+  sol2.destroy();
+  return r;
+}
+async function runBench() {
+  $('run').disabled = true; $('parity').disabled = true;
+  try {
+    await initGPU();
+    var grids = getGrids().map(Number).sort(function (a, b) { return a - b; }), geom = $('geom').value, tauP = +getTau()[0], tol = +getTol()[0];
+    RESULTS = { when: new Date().toISOString(), geometry: geom, tauPlus: tauP, tol: tol, gpu: { info: GPU.info, limits: GPU.limits, compileMs: GPU.compileMs }, grids: [], parity: RESULTS.parity };
+    SERIES = []; $('results').innerHTML = '';
+    for (var i = 0; i < grids.length; i++) {
+      var r;
+      try { r = await benchOne(grids[i], geom, tauP, tol); }
+      catch (e) { r = { N: grids[i], error: e.message }; log(grids[i] + '³: ' + e.message); }
+      RESULTS.grids.push(r); $('results').appendChild(resultCard(r));
+    }
+    status('Done · copy the results and paste them into the chat', 'ok');
+    $('copy').disabled = false;
+  } catch (e) { status(e.message, 'bad'); log('error: ' + (e.stack || e.message)); }
+  $('run').disabled = false; $('parity').disabled = false;
+}
+
+/* GPU vs Float64 CPU reference after identical steps (F10 preview) */
+async function runParity() {
+  $('run').disabled = true; $('parity').disabled = true;
+  try {
+    await initGPU();
+    var N = 32, steps = 600, geom = $('geom').value, tauP = +getTau()[0], g = 1e-5;
+    status('Check: building 32³…', 'run'); await sleep(20);
+    var links = buildLinks(geom, N), T = gpuTables(links);
+    var dom = prepareFlowDomain(links, { wall: 'cli' });
+    status('Check: CPU reference, ' + steps + ' steps…', 'run'); await sleep(20);
+    var t0 = performance.now(), cpu = solveFlowCPU(dom, { force: [g, 0, 0], tauPlus: tauP, tol: 0, maxSteps: steps, checkEvery: steps });
+    var cpuMs = performance.now() - t0;
+    var sol = makeSolver(T, tauP, [g, 0, 0]); sol.run(steps);
+    var st = await sol.readState(), U = await sol.readU(); sol.destroy();
+    var maxAbs = 0, maxF = 0, N3 = T.N3;
+    for (var a = 0; a < dom.n; a++) { var x = dom.nodes[a]; for (var i = 0; i < 19; i++) {
+      var c = cpu.state[a * 19 + i], gv = st[i * N3 + x]; maxAbs = Math.max(maxAbs, Math.abs(c - gv)); maxF = Math.max(maxF, Math.abs(c)); } }
+    var relU = Math.abs(U[1] - cpu.U[0]) / Math.abs(cpu.U[0]), relF = maxAbs / maxF;
+    var ok = relU < 1e-4 && relF < 1e-4;
+    RESULTS.parity = { N: N, steps: steps, geometry: geom, tauPlus: tauP, Ux_cpu: cpu.U[0], Ux_gpu: U[1], relU: relU, relPop: relF, cpuMs: cpuMs, cpuWalls: dom.nWallLinks, gpuWalls: T.nWall };
+    log('check 32³ after ' + steps + ' steps: mean velocity rel. diff ' + relU.toExponential(2) + ', max population diff / max population ' + relF.toExponential(2) +
+        ' · wall links CPU ' + dom.nWallLinks + ' GPU ' + T.nWall + ' · CPU ' + (cpuMs / 1000).toFixed(1) + ' s');
+    status('Check ' + (ok ? 'passed' : 'differs') + ': velocity ' + relU.toExponential(1) + ', populations ' + relF.toExponential(1), ok ? 'ok' : 'bad');
+    $('copy').disabled = false;
+  } catch (e) { status(e.message, 'bad'); log('error: ' + (e.stack || e.message)); }
+  $('run').disabled = false; $('parity').disabled = false;
+}
+$('run').addEventListener('click', runBench);
+$('parity').addEventListener('click', runParity);
+$('copy').addEventListener('click', function () {
+  var txt = JSON.stringify(RESULTS, null, 1);
+  (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () { status('Results copied', 'ok'); }, function () { log(txt); status('Clipboard blocked · results printed in the log', 'bad'); });
+});
+if (!navigator.gpu) { status('WebGPU is not available in this browser', 'bad'); kv($('gpu'), [['Status', 'WebGPU unavailable']]); }
+drawChart();
+</script>
+</body>
+</html>

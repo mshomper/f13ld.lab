@@ -1,0 +1,14 @@
+{"test":"F7 square cylinder array","phi":0.05,"N":63,"radius":7.95,"gap_cells":47.1,"tauPlus":1.5,"steps":20500,"drag":15.516,"drag_SA":15.56,"err":"-0.283 %","pass":true,"ms":9869}
+{"test":"F7 square cylinder array","phi":0.1,"N":45,"radius":8.03,"gap_cells":28.94,"tauPlus":1.5,"steps":8000,"drag":24.838,"drag_SA":24.83,"err":"0.033 %","pass":true,"ms":1830}
+{"test":"F7 square cylinder array","phi":0.2,"N":32,"radius":8.07,"gap_cells":15.85,"tauPlus":1.5,"steps":3000,"drag":51.529,"drag_SA":51.53,"err":"-0.002 %","pass":true,"ms":304}
+{"test":"F7 square cylinder array","phi":0.3,"N":26,"radius":8.03,"gap_cells":9.93,"tauPlus":1.5,"steps":1500,"drag":103.281,"drag_SA":102.9,"err":"0.371 %","pass":true,"ms":83}
+{"test":"F7 square cylinder array","phi":0.4,"N":22,"radius":7.85,"gap_cells":6.3,"tauPlus":1.5,"steps":1000,"drag":221.71,"drag_SA":217.89,"err":"1.753 %","pass":true,"ms":36}
+{"test":"F7 square cylinder array","phi":0.5,"N":20,"radius":7.98,"gap_cells":4.04,"tauPlus":1.5,"steps":1000,"drag":549.54,"drag_SA":532.55,"err":"3.190 %","pass":false,"ms":26}
+{"test":"F7 square cylinder array","phi":0.6,"N":18,"radius":7.87,"gap_cells":2.27,"tauPlus":1.5,"steps":1000,"drag":1954.333,"drag_SA":1763,"err":"10.853 %","pass":null,"ms":20}
+{"test":"F7 square cylinder array","phi":0.05,"N":127,"radius":16.02,"gap_cells":94.96,"tauPlus":1.5,"steps":75000,"drag":15.568,"drag_SA":15.56,"err":"0.050 %","pass":true,"ms":150847}
+{"test":"F7 square cylinder array","phi":0.1,"N":90,"radius":16.06,"gap_cells":57.89,"tauPlus":1.5,"steps":29000,"drag":24.835,"drag_SA":24.83,"err":"0.022 %","pass":true,"ms":26841}
+{"test":"F7 square cylinder array","phi":0.2,"N":63,"radius":15.9,"gap_cells":31.21,"tauPlus":1.5,"steps":9500,"drag":51.462,"drag_SA":51.53,"err":"-0.132 %","pass":true,"ms":4078}
+{"test":"F7 square cylinder array","phi":0.3,"N":52,"radius":16.07,"gap_cells":19.86,"tauPlus":1.5,"steps":4500,"drag":102.911,"drag_SA":102.9,"err":"0.011 %","pass":true,"ms":1057}
+{"test":"F7 square cylinder array","phi":0.4,"N":45,"radius":16.06,"gap_cells":12.89,"tauPlus":1.5,"steps":2500,"drag":219.205,"drag_SA":217.89,"err":"0.603 %","pass":true,"ms":486}
+{"test":"F7 square cylinder array","phi":0.5,"N":40,"radius":15.96,"gap_cells":8.08,"tauPlus":1.5,"steps":1500,"drag":538.842,"drag_SA":532.55,"err":"1.181 %","pass":true,"ms":146}
+{"test":"F7 square cylinder array","phi":0.6,"N":37,"radius":16.17,"gap_cells":4.66,"tauPlus":1.5,"steps":1500,"drag":1886.965,"drag_SA":1763,"err":"7.031 %","pass":null,"ms":104}

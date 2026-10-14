@@ -1,6 +1,6 @@
 # F13LD.lab — Fluids: Lattice Boltzmann Wall Shear Stress and Permeability (Scope)
 
-**Status:** Approved for planning (Matt, 2026-10-07; decisions in §6). No code written yet.
+**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done 2026-10-14 (v0.27.1): CPU reference and checks F1–F7 in §12; GPU benchmark page waiting on Matt's run.**
 **Written against:** v0.18.0 (main `18ddbae`), 2026-10-07
 **Goal:** Tell a designer whether a lattice will give cells the right mechanical cue under perfusion. The module computes the wall shear stress (WSS) on every strut surface, how much of the surface falls inside an osteogenic target window, and the permeability tensor. It works for any lattice the lab can build, built from scratch inside F13LD.lab on a lattice Boltzmann (LBM) solver running on the GPU.
 **Out of scope (this pass):**
@@ -48,7 +48,7 @@ Most scaffold CFD studies mesh one geometry, run one flow rate in one direction,
                                                                             │
    fluid connectivity (open pores, dead ends, sealed voids) ◄── 1 − solid   │
                                                                             ▼
-     LBM  D3Q19 · TRT (Λ = 3/16) · body force · interpolated bounce-back
+     LBM  D3Q19 · TRT (Λ = 3/16) · body force · CLI interpolated bounce-back
        three steady solves: force along x, y, z      (GPU, FP32)
                 │                                   │
         stress tensor at fluid nodes        mean velocity → K (3×3)
@@ -104,19 +104,20 @@ Most scaffold CFD studies mesh one geometry, run one flow rate in one direction,
 
 ### 3.2 Walls: interpolated bounce-back from the signed field
 
-- **Wall fraction per link.** For a fluid node x_f whose link along c_i reaches a solid node:
+*Revised in Phase 0 (2026-10-14); the original plan is kept in the notes below.*
 
-      q = φ(x_f) / (φ(x_f) − φ(x_f + c_i))
+- **Wall fraction per link, precomputed.** `buildFlowLinks` in `14e-link-field.js` walks all 18 D3Q19 links (9 positive directions, one walk serving both ends) on the design's own margin, 9 samples plus 6 bisection steps per crossing (1/512 of a link), and stores the fraction from each fluid end to the first wall. The margin is not a distance, so interpolating q from the field values at the two ends (the original plan) would misplace walls on TPMS fields.
+- **Wall rule: central linear interpolation (CLI), Ginzburg (2008).** For incoming direction i at fluid node x, with the wall on the link x → x + c_j (j opposite i) at fraction q:
 
-  φ is the gradient-normalized signed field from `14e-link-field.js`, shared with thermal (`THERMAL_SCOPE.md` §3.3).
-- **Wall rule:** Bouzidi, Firdaouss & Lallemand (2001), linear.
-  - q < ½ uses the next fluid node behind; q ≥ ½ uses the node itself.
-  - Fallback to halfway bounce-back where the node behind is solid, which happens in very thin throats.
-  - **This fits the standard fused pull kernel.** All inputs are post-collision values already in the read buffer, so there is no extra pass.
-- **q computed in-kernel from a stored φ** (4 bytes per cell) instead of a per-link table. Every boundary link costs one subtraction and one divide, with no sparse indexing.
-- **Thin features.** A wall or strut thinner than one voxel, where both ends of a link are fluid but its midpoint is solid, gets a per-cell "thin link" bit computed once in 14e. Those links are treated as walls with q clamped.
-- **Mass correction.** Interpolated bounce-back leaks a tiny amount of mass each step. Every few hundred steps a reduction measures the total, and the deficit is returned to the rest populations (scheme of arXiv 1908.09235). Drift is reported.
-- **Halfway bounce-back stays as a switch,** for validation and comparison.
+      f_i(x) = f*_j(x) + (1 − 2q)/(1 + 2q) · [ f*_j(x + c_i) − f*_i(x) ]
+
+  - q = ½ reduces to halfway bounce-back.
+  - Every input is a post-collision value in the read buffer, so it fits the fused pull kernel.
+  - The node behind (x + c_i) must be fluid with an open link; where it is not (very thin throats), the link falls back to halfway.
+  - **Bouzidi linear was the original plan and failed check F3:** with TRT its permeability still moves with τ⁺ (−2.4 % at 0.6, +4.9 % at 2.0). CLI holds to 2 ppm. Bouzidi stays as a switch (`wall: 'bouzidi'`) for comparison, as does halfway.
+- **Thin features.** A wall thinner than a voxel that passes between two fluid centres gets a q at each end, so it is walled off from both sides. Links are examined whenever either end is a surface voxel (centre disagrees with a corner or a face neighbour).
+- **Mass correction every step.** The steady wall leak is summed as each step reads the nodes and taken off the rest populations in the next read. Correcting every few hundred steps (the original plan) left a sawtooth in ρ that showed in the mean velocity at 1e-7 and stalled convergence.
+- **GPU wall tables** (benchmark page, then 19g): a flag word per cell (bit 0 solid, bits 1–18 walled incoming directions) and, for wall cells only, a slot into a table of 18 float q values. Interior fluid cells read nothing extra. Fallback links store q = ½.
 
 ### 3.3 Fluid connectivity
 
@@ -159,9 +160,9 @@ Most scaffold CFD studies mesh one geometry, run one flow rate in one direction,
        σ'_αβ = −(1 − 1/(2τ+)) Σ_i (f_i − f_i^eq) c_iα c_iβ
 
    Krüger, Varnik & Raabe 2009, with the force correction included. Six values per fluid node.
-2. **Wall mesh:** surface nets on the signed field, so it is smooth and watertight. This is ported from F13LD.pullout, where it was verified to recover radii on analytic shapes.
+2. **Wall mesh:** the marching-tetrahedra surface `14e` already builds for the surface-area metric (Matt, 2026-10-14), so the WSS statistics, the force-balance check and the specific surface on the cards all use one surface.
    - Built on the CPU in a worker.
-   - Each vertex carries position, normal n = ∇φ/|∇φ| (exact from the field), and area (its share of adjacent triangles).
+   - Marching tetrahedra makes many small triangles, so probes sit at triangle centres, each with its area and the normal n = ∇m/|∇m| from the field.
 3. **Probe and extrapolate.** At each vertex, sample the stress at two points off the wall, about 1.25Δx and 2.25Δx along n.
    - Sampling is trilinear and uses only fluid nodes.
    - The values are extrapolated linearly to the wall. Wall stress is exactly linear in wall distance for Poiseuille flow, and nearly so in any smooth gap.
@@ -286,10 +287,9 @@ Permeability needs about **8–10 cells across the narrowest throats**. WSS with
 | File | Change |
 |---|---|
 | `14-rasterizer.js` | `buildVoxelField()` (shared with thermal) |
-| `14e-link-field.js` (new, shared) | Normalized signed field, link fractions, thin-link bits, normals |
-| `14f-surface-nets.js` (new) | Wall mesh with per-vertex normal and area (ported from F13LD.pullout); worker-capable |
+| `14e-link-field.js` (shared) | **Done (v0.27.1):** `buildFlowLinks` — all 18 links, both ends, thin walls. Phase 2: triangle list from the marching tetrahedra (centre, area, normal) |
 | `14a-connectivity.js` | Run components on the fluid phase (no change to the function, a new caller) |
-| `19f-flow-cpu-ref.js` (new) | Float64 D3Q19 TRT reference with identical boundary rules, for N ≤ 32 |
+| `19f-flow-cpu-ref.js` (new) | **Done (v0.27.1):** Float64 D3Q19 TRT reference, CLI / Bouzidi / halfway walls, permeability, stress and wall-shear probes; boxes of any NX × NY × NZ |
 | `19g-flow-lbm.js` (new) | GPU solver: kernels, force calibration, convergence, mass correction, coarse-to-fine start, stress and speed extraction |
 | `19h-flow-wss.js` (new) | Wall probes, extrapolation, unit tractions, live rescaling, statistics, orientation scan |
 | `15c-materials.js` | Fluid presets (μ, ρ at 37 °C) beside the existing `muFluid_PaS` field; family → default WSS window map |
@@ -299,7 +299,7 @@ Permeability needs about **8–10 cells across the narrowest throats**. WSS with
 | `22-stiffness-viz.js` | K(n) surface and the orientation-map sphere |
 | `62-sweep.js`, `63-sweep-atlas.js` | Permeability, best flow, in-window % at best flow, usable flow range, window used |
 | `index.html` | Flow toggle and view tab |
-| `18-stokes-cpu-ref.js`, `19-stokes-solver.js` | **Retired** after validation. The CPU FFT helpers the buckling worker loads from 18 (`fft3dCpu`) move to a small `12b-fft-cpu.js` first, and `BUCKLE_WORKER_FILES` is updated |
+| `18-stokes-cpu-ref.js`, `19-stokes-solver.js` | **Done:** removed in v0.21.0, CPU FFT in `12b-fft-cpu.js` |
 
 ---
 
@@ -330,15 +330,15 @@ Exact answers first, then published data, then self-consistency. The CPU referen
 
 | Phase | Contents | Rough size |
 |---|---|---|
-| **0 — Groundwork** | `buildVoxelField` + `14e` (shared with thermal); CPU reference D3Q19 TRT with both wall rules; F1–F7 on the CPU; **standalone WebGPU benchmark page** in `proto/lbm-bench/` that Matt runs on his RTX to measure updates per second and steps to converge at 64³ and 128³ | 1–2 sessions |
+| **0 — Groundwork** ✓ | `14e` flow links; CPU reference D3Q19 TRT with three wall rules; F1–F7 on the CPU (§12); **WebGPU benchmark page** in `proto/lbm-bench/` that Matt runs on his RTX to measure updates per second and steps to converge at 64³ and 128³ | done 2026-10-14 |
 | **1 — GPU solver** | `19g`: fused kernel, interpolated walls, force calibration, convergence, mass correction, coarse-to-fine start; fluid connectivity; permeability tensor; card rows and flags; F8–F11 | 1–2 sessions |
-| **2 — Wall shear** | `14f` surface nets, `19h` probes / extrapolation / unit tractions, live rescaling, statistics, window presets, best flow rate, force-balance check | 1 session |
+| **2 — Wall shear** | `14e` triangle list, `19h` probes / extrapolation / unit tractions, live rescaling, statistics, window presets, best flow rate, force-balance check | 1 session |
 | **3 — Viewer** | Window-band and continuous WSS maps, speed on the section plane, histogram and flow-rate curve, orientation sphere, K(n) surface | 1 session |
-| **4 — Sweep and cleanup** | Sweep and Atlas columns; F12–F14; retire the Stokes files (FFT helpers moved first) | ½ session |
+| **4 — Sweep and cleanup** | Sweep and Atlas columns; F12–F14 | ½ session |
 
 Thermal goes first (`THERMAL_SCOPE.md`). It builds the shared signed-field and section-plane pieces this module needs.
 
-Version targets: flow Phase 1 as **v0.20.0**.
+Version targets: Phase 0 is **v0.27.1** (nothing user-visible); flow Phase 1 as **v0.28.0**.
 
 ---
 
@@ -419,10 +419,11 @@ Answered (Matt, 2026-10-07):
 - LBM drag in sphere arrays vs Sangani–Acrivos — https://arxiv.org/abs/1401.2025
 - Cylinder arrays (Drummond–Tahir form) — https://arxiv.org/abs/2301.12774
 
-**To confirm before coding:**
-- the exact Zick–Homsy / Sangani–Acrivos table values for F6 and F7;
-- Ginzburg's CLI coefficients, if the linear interpolation option is added alongside Bouzidi;
-- the adapter's actual storage-binding limit on Matt's machine (reported by the Phase 0 benchmark page).
+**Confirmed in Phase 0 (2026-10-14):**
+- Zick–Homsy and Sangani–Acrivos table values: taken from the Basilisk test-case transcriptions and cross-checked against the dilute Hasimoto forms (§12).
+- CLI coefficients: written from Ginzburg, Verhaeghe & d'Humières (2008), *Two-relaxation-time lattice Boltzmann scheme: about parametrization, velocity, pressure and mixed boundary conditions*, Commun. Comput. Phys. 3:427 (https://www.researchgate.net/publication/230703724). The paper text could not be fetched in-session, so the form in §3.2 rests on checks F2 and F3: it reduces to halfway at q = ½, is second order on Poiseuille, and holds viscosity independence to 2 ppm.
+
+**Still open:** the adapter's storage-binding limit and real throughput on Matt's machine (the benchmark page reports both).
 
 ---
 
@@ -497,3 +498,30 @@ The specific papers and their numbers are to be confirmed before they are used a
 - **Fluid presets as listed** in §11.2.
 - **Heat transfer: walls at uniform temperature first, conduction through the metal second.**
 - **Sweep export: also a long format**, one row per design × axis × Reynolds number.
+
+---
+
+## 12. Phase 0 results (2026-10-14, v0.27.1)
+
+Float64 CPU reference (`19f-flow-cpu-ref.js`) on geometry built through `14e buildFlowLinksFromFn`, so the walls are the lab's own. TRT, Λ = 3/16, CLI walls unless stated. Run: `node proto/flow/run_checks.js [F1 …]`; rows in `proto/flow/results-F*.jsonl`.
+
+| # | Case | Result | Pass |
+|---|---|---|---|
+| F1 | Plane Poiseuille, walls on the grid, halfway | Profile and WSS exact to 1e-14 | ✓ |
+| F2 | Plane Poiseuille, walls at q = 0.1–0.95, gap ≈ 30 cells | Flow within 0.47 %, WSS within 0.07 %. Gap ≈ 14: within 2.0 %. Halfway: 0.9–8.5 % off | ✓ |
+| F3 | Viscosity independence, sphere array φ 0.216, τ⁺ 0.6 / 1.0 / 2.0 | TRT + CLI: K identical to 2 ppm. TRT + halfway: also independent. TRT + Bouzidi: −2.4 % / +4.9 %. BGK + CLI: −9 % / +38 % | ✓ |
+| F4 | Circular pipe along (1,0,0), (1,1,0), (1,1,1), (1,2,3); R = 8 and 16 | Mean WSS within 0.21 % in every case; point-to-point scatter (sd) ≤ 0.72 % at R = 8, ≤ 0.41 % at R = 16; flow within 1.2 % | ✓ |
+| F5 | Square duct, walls off the grid, side 20.6 / 28.6 / 44.3 cells | Flow within 0.18 % at every size. Mean WSS from wall probes −3.3 / −2.0 / −0.8 %: the probes read low within about two cells of the duct's sharp corners, and the error falls as 1 / side | flow ✓; WSS at 44 cells |
+| F6 | Simple-cubic spheres vs Zick & Homsy (1982), radius ≈ 8 cells | Within 0.95 % for φ = 0.027–0.45. Touching spheres (φ 0.5236, zero-width throats): +2.6 % | ✓ except touching |
+| F7 | Square cylinder arrays, transverse, vs Sangani & Acrivos (1982) | Radius 16: within 0.13 % where the gap between cylinders is ≥ 19 cells, 0.6 % at 13, 1.2 % at 8, 7 % at 4.7. Radius 8: 0.4 % at gap 10, 1.8 % at 6.3, 3.2 % at 4 | ✓ where gap ≥ 8 |
+| F10 (preview) | GPU kernel (benchmark page, software WebGPU) vs CPU, 32³ sheet gyroid, 600 steps | Mean velocity 9.8e-7, every population 7.4e-7 relative | ✓ |
+
+**What it settles**
+- **CLI replaces Bouzidi** as the wall rule (§3.2). It is the only interpolated rule here that keeps TRT's viscosity independence, so τ⁺ really is only a speed knob. τ⁺ = 1.5 converges about twice as fast as 1.0 with the same answer.
+- **The grid rule in §3.8 holds:** permeability lands within 1–2 % once the narrowest gap spans about 8 cells, and within a few tenths of a percent above 12.
+- **Two things for Phase 2 (wall shear):**
+  - Wall probes near sharp concave corners read low (F5). Lattices have filleted junctions rather than 90° corners, but the force-balance residual will show it on real designs. A velocity-gradient fallback where the probe stencil touches solid is the likely fix.
+  - Touching contacts (F6 at φ 0.5236) need the grid flag rather than a solver change.
+- **Speed:** the CPU reference runs about 7.6 M node updates per second on the 2-core VM, so it stays a check tool at N ≤ 48. GPU numbers come from the benchmark page.
+
+**Sources for the reference tables:** Zick & Homsy (1982) Table 2 and Sangani & Acrivos (1982) Table 1, as transcribed in the Basilisk test cases (basilisk.fr `src/test/spheres.c`, `src/test/cylinders.c`). Checked against the dilute Hasimoto forms: spheres φ 0.027 → 2.009 (table 2.008); cylinders φ 0.05 → 15.55 (table 15.56). Drag is the force per cell over 6πμaU (spheres) or μU per unit length (cylinders), with U the superficial velocity and force = G × cell volume.

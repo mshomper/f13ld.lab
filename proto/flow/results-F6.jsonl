@@ -1,0 +1,7 @@
+{"test":"F6 SC sphere array","phi":0.027,"N":43,"radius":8,"tauPlus":1.5,"steps":18000,"K":2.0027,"K_ZH":2.008,"err":"-0.262 %","pass":true,"ms":233015}
+{"test":"F6 SC sphere array","phi":0.064,"N":32,"radius":7.94,"tauPlus":1.5,"steps":6500,"K":2.8219,"K_ZH":2.81,"err":"0.423 %","pass":true,"ms":31302}
+{"test":"F6 SC sphere array","phi":0.125,"N":26,"radius":8.06,"tauPlus":1.5,"steps":3000,"K":4.3141,"K_ZH":4.292,"err":"0.516 %","pass":true,"ms":6924}
+{"test":"F6 SC sphere array","phi":0.216,"N":21,"radius":7.82,"tauPlus":1.5,"steps":1500,"K":7.4267,"K_ZH":7.442,"err":"-0.205 %","pass":true,"ms":1482}
+{"test":"F6 SC sphere array","phi":0.343,"N":18,"radius":7.82,"tauPlus":1.5,"steps":1000,"K":15.5333,"K_ZH":15.4,"err":"0.866 %","pass":true,"ms":563}
+{"test":"F6 SC sphere array","phi":0.45,"N":17,"radius":8.08,"tauPlus":1.5,"steps":1000,"K":28.3652,"K_ZH":28.1,"err":"0.944 %","pass":true,"ms":521}
+{"test":"F6 SC sphere array","phi":0.5236,"N":16,"radius":8,"tauPlus":1.5,"steps":1000,"K":43.1981,"K_ZH":42.1,"err":"2.608 %","pass":false,"ms":296}
