@@ -1,6 +1,6 @@
 # F13LD.lab — Fluids: Lattice Boltzmann Wall Shear Stress and Permeability (Scope)
 
-**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done 2026-10-14 (v0.27.1): CPU reference and checks F1–F7 in §12; GPU benchmark page waiting on Matt's run.**
+**Status:** Approved (Matt, 2026-10-07; decisions in §6). **Phase 0 done 2026-10-14 (v0.27.1): CPU reference, checks F1–F7, GPU benchmark (§12). Phase 1 built 2026-10-14 (v0.28.0, branch `fluids-phase0`): GPU solver `19g`, Flow mode, permeability cards (§13).**
 **Written against:** v0.18.0 (main `18ddbae`), 2026-10-07
 **Goal:** Tell a designer whether a lattice will give cells the right mechanical cue under perfusion. The module computes the wall shear stress (WSS) on every strut surface, how much of the surface falls inside an osteogenic target window, and the permeability tensor. It works for any lattice the lab can build, built from scratch inside F13LD.lab on a lattice Boltzmann (LBM) solver running on the GPU.
 **Out of scope (this pass):**
@@ -331,7 +331,7 @@ Exact answers first, then published data, then self-consistency. The CPU referen
 | Phase | Contents | Rough size |
 |---|---|---|
 | **0 — Groundwork** ✓ | `14e` flow links; CPU reference D3Q19 TRT with three wall rules; F1–F7 on the CPU (§12); **WebGPU benchmark page** in `proto/lbm-bench/` that Matt runs on his RTX to measure updates per second and steps to converge at 64³ and 128³ | done 2026-10-14 |
-| **1 — GPU solver** | `19g`: fused kernel, interpolated walls, force calibration, convergence, mass correction, coarse-to-fine start; fluid connectivity; permeability tensor; card rows and flags; F8–F11 | 1–2 sessions |
+| **1 — GPU solver** ✓ | `19g`: fused kernel, CLI walls, convergence, mass correction; fluid connectivity; permeability tensor; card rows and flags; F8–F11 (§13). Coarse-to-fine start dropped (Matt, 2026-10-14) | built 2026-10-14 |
 | **2 — Wall shear** | `14e` triangle list, `19h` probes / extrapolation / unit tractions, live rescaling, statistics, window presets, best flow rate, force-balance check | 1 session |
 | **3 — Viewer** | Window-band and continuous WSS maps, speed on the section plane, histogram and flow-rate curve, orientation sphere, K(n) surface | 1 session |
 | **4 — Sweep and cleanup** | Sweep and Atlas columns; F12–F14 | ½ session |
@@ -538,3 +538,40 @@ Float64 CPU reference (`19f-flow-cpu-ref.js`) on geometry built through `14e bui
 - 128³ needs 160 MB per population copy, well inside this card's 2 GB binding limit.
 
 **Sources for the reference tables:** Zick & Homsy (1982) Table 2 and Sangani & Acrivos (1982) Table 1, as transcribed in the Basilisk test cases (basilisk.fr `src/test/spheres.c`, `src/test/cylinders.c`). Checked against the dilute Hasimoto forms: spheres φ 0.027 → 2.009 (table 2.008); cylinders φ 0.05 → 15.55 (table 15.56). Drag is the force per cell over 6πμaU (spheres) or μU per unit length (cylinders), with U the superficial velocity and force = G × cell volume.
+
+---
+
+## 13. Phase 1 (2026-10-14, v0.28.0)
+
+**Decisions (Matt, 2026-10-14):**
+- Flow grid defaults to **64³** (32 / 64 / 128 selectable).
+- Tolerance **Standard (1e-6)**, with **High (1e-7)** as the option.
+- A GPU whose buffer limit is too small for the chosen grid gets a clear message; the three-buffer split waits until a user needs it.
+- Coarse-to-fine start dropped: from rest, 64³ converges in about 2,000 steps.
+- Flow is off by default for new browsers.
+
+**What was built**
+- `19g-flow-lbm.js`: the bench kernel as the lab's solver.
+  - Wall tables include fluid connectivity. Sealed pores (6-connected fluid components that never reach their own periodic copy) are treated as solid and reported.
+  - An axis no open pore network reaches reads zero and is not solved.
+  - One solve per open axis from rest, force g = 1e-5 · (64 / N)², τ⁺ 1.5.
+  - The reduce kernel sums the mean speed as well as the mean velocity, which gives hydraulic tortuosity.
+  - The narrowest pore is the 5th percentile of maximal inscribed balls in the open pores (`sweepFeatureThickness` on the pore phase).
+- `17c`: `buildFlowLinksParallel`, x-slab `flowlinks` jobs (14e `iRange`), reusing the elastic run's voxels and margin when the grids match. Worker cache-buster `tv-5`.
+- `50-controls`: `PHYS_STATE.flow`, `FLOW_STATE`, `FLOW_BY_DESIGN`, Run All Phase 5 after thermal with cache signature, time estimate (~N⁴) and calibration, run summary warnings.
+- `51-dock`, `index.html`: Flow tab and pane (grid, tolerance), dock tag, saved settings; Flow view tab.
+- `40-design-grid`: Flow cards — permeability X / Y / Z (m² for the design's cell; k / L² in the note), anisotropy, tortuosity, open porosity (sealed share flagged), narrowest pore (flag below 8 voxels; note below 15 for wall shear), relative density. The viewport draws K(n) from k / L² with the thermal κ(n) code (closed axes → message instead).
+- Console check `runFlowGPUCheck(designIndex, N, steps)`: GPU vs Float64 CPU on any loaded design, with the same mask.
+
+**Checks**
+
+| # | Result |
+|---|---|
+| F8 | Skeletal gyroid 24³: doubling the force doubles the flow to 7e-6; flow along (1,1,0) equals the x and y flows added to 1.5e-6 |
+| F9 | Mass correction per node ≤ 8e-11 per step (2e-7 of the mean speed) on sheet gyroid and Schwarz P at 32³. Force balance on the wall mesh comes with Phase 2 |
+| F10 | `runFlowGPUCheck` on the TPMS demo design, 16³ (software WebGPU in the VM): velocity 3e-7, populations 1e-6, wall links identical |
+| F11 | Sheet gyroid k / L² 1.994e-3 → 2.001e-3 → 2.010e-3 → 2.021e-3 at 16 / 24 / 32 / 48 (CPU), 2.022e-3 / 2.027e-3 at 64 / 128 (Matt's GPU). Schwarz P skeletal 9.10e-3 → 9.03e-3 → 9.03e-3 → 9.04e-3. Within 0.6 % per step from 24³ up |
+
+**For Matt to check on his GPU:** a Flow run on his own designs, including foam and STL imports. Then `runFlowGPUCheck(0)`, `runFlowGPUCheck(1)` and so on in the console; each should print `pass: true`.
+
+**Later (Matt, 2026-10-14):** flow is cheap enough at 32³ and 64³ to go into F13LD.sweep and then F13LD.vault as a comparison metric, like the Sweep stiffness, not a final solve. That needs `14e`, `17c`'s flow job and `19g` copied into Sweep the way it copies 14a and 16b, plus Vault columns.

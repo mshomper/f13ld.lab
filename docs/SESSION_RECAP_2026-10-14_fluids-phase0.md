@@ -1,4 +1,4 @@
-# Session recap — 2026-10-14 · v0.27.1 fluids Phase 0
+# Session recap — 2026-10-14 · v0.27.1 fluids Phase 0 · v0.28.0 fluids Phase 1
 
 Branch `fluids-phase0`. Nothing user-visible; the app only gains a function in 14e.
 
@@ -14,6 +14,19 @@ Branch `fluids-phase0`. Nothing user-visible; the app only gains a function in 1
 - Mass correction every step: every 200 steps left a ρ sawtooth that stalled convergence at 1e-7.
 - q is precomputed per link by bisection on the margin, not interpolated from end values in the kernel (the margin is not a distance).
 
+**Bench on Matt's RTX 4070 Ti Super:** 2 GB binding limit, 16 storage buffers; 64³ 5,050 M node updates/s (fits in L2), 128³ 2,048 M/s (320 GB/s); one direction converges in 0.09 s at 64³ and 2.9 s at 128³; GPU vs CPU 1e-6. Scope §12.
+
+## Phase 1 — v0.28.0 (same branch)
+Decisions (Matt): flow grid 64³ default; Standard tolerance with High as an option; small-GPU message, no buffer split yet; go ahead with Phase 1. Coarse-to-fine dropped (not needed at these step counts).
+- `19g-flow-lbm.js` (new, loaded after 17c): GPU solver, wall tables with sealed pores masked, one solve per open axis, permeability tensor, tortuosity, narrowest pore; `runFlowGPUCheck()` console check.
+- `17c`: `buildFlowLinksParallel` + `flowlinks` slab job (`tv-5`); `14e`: `iRange` slabs (bit-identical to the full build).
+- `50-controls` (CRLF kept): `PHYS_STATE.flow` (off), `FLOW_STATE {N: 64, tol: 1e-6}`, `FLOW_BY_DESIGN`, Run All Phase 5, estimate and calibration, summary warnings.
+- `51-dock` / `index.html`: Flow drawer tab and pane (grid, tolerance), dock tag, saved settings (`flowN`, `flowTol`), Flow view tab; `30-view-tabs`: K surface scale toggle.
+- `40-design-grid`: Flow cards and K(n) surface (thermal κ(n) code).
+- Checks F8 (linearity 7e-6, superposition 1.5e-6), F9 (mass), F10 (TPMS demo, software GPU: 1e-6), F11 (grid convergence) — scope §13. Headless Run All exercised end to end (status, cards, flags, settings).
+- Found, not fixed: on a 390 px phone screen the page is about 840 px wide because the header buttons overflow. Main does the same, so it predates Flow.
+
 ## Next up
-- **Matt:** open the bench from the branch, run it (default 32 / 64 / 128, τ⁺ 1.5) and the GPU vs CPU check, and paste the copied results. They decide whether 128³ needs the 3-buffer population split and set the time estimates.
-- Phase 1 (v0.28.0): `19g-flow-lbm.js` from the bench kernel — three directions, fluid connectivity (sealed voids, open axes), coarse-to-fine start, force calibration, permeability tensor, Flow toggle and card rows; F8–F11.
+- **Matt:** click-test the branch (`https://raw.githack.com/mshomper/f13ld.lab/fluids-phase0/index.html`): turn on Flow, Run, open the Flow tab; then `runFlowGPUCheck(0)`, `(1)`, `(2)` in the console — each should print `pass: true`. Try foam and an STL import too. Approve before merging to main.
+- Phase 2 (v0.29.0): wall shear stress — triangle list from 14e's marching tetrahedra, probes and extrapolation (velocity-gradient fallback near sharp corners, check F5), unit tractions per axis, live flow-rate / direction rescaling, window presets by material, best flow, force-balance residual (F9 proper).
+- Later (Matt): flow at 32³ / 64³ in F13LD.sweep and then F13LD.vault as a comparison metric.

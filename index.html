@@ -71,7 +71,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.27.1</span>
+      <span class="fh-version">v0.28.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -94,6 +94,7 @@
       <button class="view-tab"        data-mode="stress"  onclick="onViewModeClick('stress')"><span class="ico ico-vt" data-ico="stress"></span>Stress</button>
       <button class="view-tab"        data-mode="stiff"   onclick="onViewModeClick('stiff')"><span class="ico ico-vt" data-ico="stiff"></span>Stiffness</button>
       <button class="view-tab"        data-mode="thermal" onclick="onViewModeClick('thermal')"><span class="ico ico-vt" data-ico="thermal"></span>Thermal κ</button>
+      <button class="view-tab"        data-mode="flow"    onclick="onViewModeClick('flow')"><span class="ico ico-vt" data-ico="flow"></span>Flow</button>
       <button class="view-tab"        data-mode="buckle"  onclick="onViewModeClick('buckle')"><span class="ico ico-vt" data-ico="buckle"></span>Buckling</button>
       <button class="view-tab"        data-mode="curve"   onclick="onViewModeClick('curve')"><span class="ico ico-vt" data-ico="nonlin"></span>Crush</button>
     </div>
@@ -151,6 +152,7 @@
       <div class="dr-tab" data-tab="buckle" data-phys-state="buckle" onclick="onDrawerTab('buckle')"><span class="ico ico-md" data-ico="buckle"></span><span class="nm">Buckling</span><button type="button" class="sw" role="switch" data-phys-sw="buckle" onclick="onPhysSwitch(event,'buckle')" title="Run Buckling, or skip it"></button></div>
       <div class="dr-tab" data-tab="nonlin" data-phys-state="nonlin" onclick="onDrawerTab('nonlin')"><span class="ico ico-md" data-ico="nonlin"></span><span class="nm">Crush</span><button type="button" class="sw" role="switch" data-phys-sw="nonlin" onclick="onPhysSwitch(event,'nonlin')" title="Run Crush, or skip it"></button></div>
       <div class="dr-tab" data-tab="thermal" data-phys-state="thermal" onclick="onDrawerTab('thermal')"><span class="ico ico-md" data-ico="thermal"></span><span class="nm">Thermal κ</span><button type="button" class="sw" role="switch" data-phys-sw="thermal" onclick="onPhysSwitch(event,'thermal')" title="Run Thermal κ, or skip it"></button></div>
+      <div class="dr-tab" data-tab="flow" data-phys-state="flow" onclick="onDrawerTab('flow')"><span class="ico ico-md" data-ico="flow"></span><span class="nm">Flow</span><button type="button" class="sw" role="switch" data-phys-sw="flow" onclick="onPhysSwitch(event,'flow')" title="Run Flow, or skip it"></button></div>
       </nav>
       <div class="dr-panes">
       <section class="dr-pane" data-pane="model">
@@ -159,7 +161,7 @@
           <div class="dr-f wide"><label>Material</label><div><div class="dd" id="materialDd"></div></div><div class="hint">AM library (docs/MATERIALS.md). “From design” keeps each design’s own material. Changing it re-solves on the next run.</div></div>
           <div class="dr-f"><label>Connectivity</label><div><div class="dd" id="connDd"></div></div><div class="hint">Which connected pieces of the voxelized cell are analyzed.</div></div>
           <div class="dr-f"><label>Surface voxels</label><div><div class="seg" data-seg="pv"><button type="button" data-v="pv" onclick="onSegClick(this)">Partial volume</button><button type="button" data-v="binary" onclick="onSegClick(this)">0/1 cube</button></div></div><div class="hint">Partial volume: each surface voxel carries its true solid fraction — exact solid fraction, stiffness grid-converged by 64³ on thin walls and struts. 0/1 cube reproduces results from before v0.19.0. Crush and buckling always use the 0/1 cube.</div></div>
-          <div class="dr-f wide dr-resetrow"><div><button type="button" class="dr-reset" onclick="labResetSettings()" title="Elastic 64³ and Thermal κ (water) on, Buckling and Crush off, Ti-6Al-4V Grade 5 (HIP), all networks, partial volume">Reset run settings to defaults</button></div><div class="hint">Your settings are remembered in this browser.</div></div>
+          <div class="dr-f wide dr-resetrow"><div><button type="button" class="dr-reset" onclick="labResetSettings()" title="Elastic 64³ and Thermal κ (water) on, Buckling, Crush and Flow off, Ti-6Al-4V Grade 5 (HIP), all networks, partial volume">Reset run settings to defaults</button></div><div class="hint">Your settings are remembered in this browser.</div></div>
         </div>
       </section>
       <section class="dr-pane" data-pane="elastic" data-phys-state="elastic">
@@ -186,6 +188,13 @@
         <div class="dr-ph"><span class="ico ico-lg" data-ico="thermal"></span><div class="dr-pt-wrap"><div class="dr-pt">Thermal κ</div><div class="dr-ps">Steady-state conduction, effective conductivity tensor</div></div><button type="button" class="sw" role="switch" data-phys-sw="thermal" onclick="onPhysSwitch(event,'thermal')" title="Run Thermal κ, or skip it"></button></div>
         <div class="dr-grid">
           <div class="dr-f wide"><label>Pores filled with · k, W/m·K</label><div><div class="chipset"><button type="button" class="chip" data-filler="air" onclick="onFillerChip(this)"><i></i>air <small>0.027</small></button><button type="button" class="chip" data-filler="water" onclick="onFillerChip(this)"><i></i>water <small>0.63</small></button><button type="button" class="chip" data-filler="tissue" onclick="onFillerChip(this)"><i></i>tissue <small>0.5</small></button></div></div><div class="hint">Each ticked filler is a separate, fast solve; switch between them with “Pores filled with” on the Thermal κ tab. No vacuum option — no real part sits in one.</div></div>
+        </div>
+      </section>
+      <section class="dr-pane" data-pane="flow" data-phys-state="flow">
+        <div class="dr-ph"><span class="ico ico-lg" data-ico="flow"></span><div class="dr-pt-wrap"><div class="dr-pt">Flow</div><div class="dr-ps">Lattice Boltzmann creeping flow through the pores — permeability tensor, tortuosity, open and sealed pores</div></div><button type="button" class="sw" role="switch" data-phys-sw="flow" onclick="onPhysSwitch(event,'flow')" title="Run Flow, or skip it"></button></div>
+        <div class="dr-grid">
+          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="flowN"><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div><div class="hint">Its own grid. Permeability wants about 8 voxels across the narrowest pore; the card flags designs below that. 128³ needs a GPU that allows 160 MB in one buffer.</div></div>
+          <div class="dr-f"><label>Tolerance</label><div><div class="seg" data-seg="flowTol"><button type="button" data-v="std" onclick="onSegClick(this)">Standard</button><button type="button" data-v="high" onclick="onSegClick(this)">High</button></div></div><div class="hint">Each axis runs until the mean flow changes less than 1 in 10⁶ (Standard) or 10⁷ (High) over 500 steps.</div></div>
         </div>
       </section>
       </div>
@@ -245,6 +254,7 @@
 <script src="17a-thermal-cpu-ref.js"></script>
 <script src="17b-thermal-solver.js"></script>
 <script src="17c-thermal-voxel-pool.js"></script>
+<script src="19g-flow-lbm.js"></script>
 <script src="20-svg-mocks.js"></script>
 <script src="20b-curve-plotly.js"></script>
 <script src="20c-f13-shade.js"></script>

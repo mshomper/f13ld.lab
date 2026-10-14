@@ -371,17 +371,23 @@ function buildFlowLinksFromFn(fn, N, kept, raw, mCorner, opts) {
      (x from −π, index i·NY·NZ + j·NZ + k); default the N³ cube */
   var dims = opts.dims || [N, N, N], NX = dims[0], NY = dims[1], NZ = dims[2];
   var L = Math.PI, h = 2 * L / N, SI = NY * NZ, N3 = NX * NY * NZ, nD = FLOW_DIRS.length;
+  /* opts.iRange = [i0, i1): only links starting in that x-slab, stored
+     slab-sized (out.base = i0·NY·NZ is the offset of its first voxel) —
+     one worker job of 17c buildFlowLinksParallel */
+  var I0 = opts.iRange ? opts.iRange[0] : 0, I1 = opts.iRange ? opts.iRange[1] : NX;
+  var base = I0 * SI, len = (I1 - I0) * SI;
   var qa = [], qb = [];
-  for (var d0 = 0; d0 < nD; d0++) { qa.push(new Float32Array(N3)); qb.push(new Float32Array(N3)); }
+  for (var d0 = 0; d0 < nD; d0++) { qa.push(new Float32Array(len)); qb.push(new Float32Array(len)); }
   var solid = new Uint8Array(N3), trim = new Uint8Array(N3), surf = new Uint8Array(N3);
   for (var p0 = 0; p0 < N3; p0++) {
     solid[p0] = kept[p0] > 0.5 ? 1 : 0;
     trim[p0] = raw && raw[p0] > 0.5 && !solid[p0] ? 1 : 0;
   }
   /* surface voxels: centre (kept) disagrees with a corner or a face neighbour */
-  var nSurf = 0;
-  for (var i = 0; i < NX; i++) for (var j = 0; j < NY; j++) for (var k = 0; k < NZ; k++) {
-    var id = i * SI + j * NZ + k, s = solid[id], hit = 0;
+  /* a link from the slab ends at most one voxel further along x */
+  var nSurf = 0, sEnd = opts.iRange ? Math.min(I1 + 1, I0 + NX) : NX;
+  for (var ii = I0; ii < sEnd; ii++) for (var j = 0; j < NY; j++) for (var k = 0; k < NZ; k++) {
+    var i = ii % NX, id = i * SI + j * NZ + k, s = solid[id], hit = 0;
     if (mCorner && !trim[id]) {
       for (var c = 0; c < 8 && !hit; c++) {
         var ci = (i + (c & 1)) % NX, cj = (j + ((c >> 1) & 1)) % NY, ck = (k + (c >> 2)) % NZ;
@@ -398,8 +404,8 @@ function buildFlowLinksFromFn(fn, N, kept, raw, mCorner, opts) {
   var tS = new Float64Array(LINK_SAMPLES + 1), mS = new Float64Array(LINK_SAMPLES + 1);
   for (var q = 0; q <= LINK_SAMPLES; q++) tS[q] = q / LINK_SAMPLES;
   var nEx = 0, nWall = 0, nThin = 0, nMulti = 0;
-  for (var i2 = 0; i2 < NX; i2++) for (var j2 = 0; j2 < NY; j2++) for (var k2 = 0; k2 < NZ; k2++) {
-    var a = i2 * SI + j2 * NZ + k2;
+  for (var i2 = I0; i2 < I1; i2++) for (var j2 = 0; j2 < NY; j2++) for (var k2 = 0; k2 < NZ; k2++) {
+    var a = i2 * SI + j2 * NZ + k2, as = a - base;
     var x = -L + (i2 + 0.5) * h, y = -L + (j2 + 0.5) * h, z = -L + (k2 + 0.5) * h;
     for (var dd = 0; dd < nD; dd++) {
       var cv = FLOW_DIRS[dd];
@@ -408,13 +414,13 @@ function buildFlowLinksFromFn(fn, N, kept, raw, mCorner, opts) {
       if (sa && sb) continue;
       if (trim[a] || trim[b]) {
         /* trimmed islands are pore; no sub-voxel wall on them */
-        if (sa) qb[dd][a] = 0.5; else if (sb) qa[dd][a] = 0.5;
+        if (sa) qb[dd][as] = 0.5; else if (sb) qa[dd][as] = 0.5;
         if (sa || sb) nWall++;
         continue;
       }
       if (!opts.staircase && !surf[a] && !surf[b] && sa === sb) continue;
       if (opts.staircase) {
-        if (sa !== sb) { if (sa) qb[dd][a] = 0.5; else qa[dd][a] = 0.5; nWall++; }
+        if (sa !== sb) { if (sa) qb[dd][as] = 0.5; else qa[dd][as] = 0.5; nWall++; }
         continue;
       }
       nEx++;
@@ -443,12 +449,12 @@ function buildFlowLinksFromFn(fn, N, kept, raw, mCorner, opts) {
       if (nCross === 0) continue;               /* open fluid link (or a sign blip the samples missed) */
       nWall++;
       if (nCross > 1) nMulti++;
-      if (!sa) qa[dd][a] = Math.max(FLOW_Q_MIN, tFirst);
-      if (!sb) qb[dd][a] = Math.max(FLOW_Q_MIN, 1 - tLast);
+      if (!sa) qa[dd][as] = Math.max(FLOW_Q_MIN, tFirst);
+      if (!sb) qb[dd][as] = Math.max(FLOW_Q_MIN, 1 - tLast);
       if (!sa && !sb) nThin++;
     }
   }
-  return { N: N, dims: [NX, NY, NZ], kept: kept, raw: raw, solid: solid, dirs: FLOW_DIRS, qa: qa, qb: qb,
+  return { N: N, dims: [NX, NY, NZ], base: base, kept: kept, raw: raw, solid: solid, dirs: FLOW_DIRS, qa: qa, qb: qb,
            nSurf: nSurf, nExamined: nEx, nWall: nWall, nThin: nThin, nMulti: nMulti };
 }
 

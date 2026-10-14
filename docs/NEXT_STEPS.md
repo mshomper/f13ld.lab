@@ -1,5 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
+> **2026-10-14 · v0.28.0** — fluids Phase 1 on branch `fluids-phase0` (not merged): Flow mode (off by default, own grid 64³, Standard / High tolerance) — GPU lattice Boltzmann permeability tensor, tortuosity, open and sealed porosity, narrowest pore, K(n) surface on the Flow tab. Waiting on Matt's click-test and `runFlowGPUCheck()` on his GPU. Results: [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md) §13. **Queued (Matt):** flow at 32³ / 64³ in F13LD.sweep, then F13LD.vault, as a comparison metric.
+
 > **2026-10-14 · v0.27.1** — fluids Phase 0 on branch `fluids-phase0`: `buildFlowLinks` (14e), Float64 lattice Boltzmann reference `19f`, checks F1–F7 in `proto/flow/` (all pass; wall rule changed to CLI after Bouzidi failed the viscosity-independence check), WebGPU benchmark `proto/lbm-bench/`. Results: [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md) §12. Recap and next up: [`SESSION_RECAP_2026-10-14_fluids-phase0.md`](SESSION_RECAP_2026-10-14_fluids-phase0.md).
 
 > **Update 2026-10-10 (evening):** the round trip's questions are answered and the database and shared push window exist (F13LD.ingest v0.10.1, `f13ld-vault-push.js`; Sweep v0.29.2 pushes already). Lab's part is **Phase 4** — read the *Update* section at the top of [`VAULT_ROUNDTRIP_SCOPE.md`](VAULT_ROUNDTRIP_SCOPE.md) first.

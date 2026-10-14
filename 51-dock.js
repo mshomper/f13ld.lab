@@ -33,9 +33,10 @@ var LAB_ICONS = {
   /* v0.25.0 — VIEW tabs: stress (contour rings around a hot spot), stiffness (directional surface rosette) */
   stress:  '<path d="M20 5 C 31 5, 36 12, 35 21 C 34 31, 26 36, 18 35 C 9 34, 4 27, 5 18 C 6 10, 12 5, 20 5 Z"' + LAB_ICON_SV + ' opacity=".55"/><path d="M21 11 C 28 11, 30 17, 29 22 C 28 28, 23 30, 18 29 C 12 28, 10 23, 11 18 C 12 13, 16 11, 21 11 Z"' + LAB_ICON_SV + ' opacity=".8"/><circle class="acc" cx="20" cy="20" r="3.6"/>',
   stiff:   '<path d="M20 3 V37 M3 20 H37"' + LAB_ICON_SV + ' stroke-width="1.4" opacity=".45"/><path d="M20 6 C 24 14, 26 16, 34 20 C 26 24, 24 26, 20 34 C 16 26, 14 24, 6 20 C 14 16, 16 14, 20 6 Z"' + LAB_ICON_SV + '/><circle class="acc" cx="34" cy="20" r="3.2"/>',
-  /* planned — fluids (LBM wall shear): streamlines around a strut */
+  /* v0.28.0 — Flow (lattice Boltzmann): streamlines around a strut */
   fluid:   '<circle cx="20" cy="20" r="5.5"' + LAB_ICON_SV + '/><path d="M3 12 C 12 12, 14 8.5, 20 8.5 S 29 12, 37 12 M3 28 C 12 28, 14 31.5, 20 31.5 S 29 28, 37 28 M3 20 H10 M30 20 H37"' + LAB_ICON_SV + ' stroke-width="2.2"/><circle class="acc" cx="25.5" cy="16" r="2.8"/>'
 };
+LAB_ICONS.flow = LAB_ICONS.fluid;   /* v0.28.0 — the Flow mode key */
 function labIconSvg(name){ return '<svg viewBox="0 0 40 40" aria-hidden="true">' + (LAB_ICONS[name] || '') + '</svg>'; }
 
 /* Run-button markup the solver code paints through (50-controls.js). */
@@ -48,7 +49,8 @@ var DOCK_MODES = [
   { key: 'elastic', name: 'Elastic' },
   { key: 'buckle',  name: 'Buckling' },
   { key: 'nonlin',  name: 'Crush' },
-  { key: 'thermal', name: 'Thermal κ' }
+  { key: 'thermal', name: 'Thermal κ' },
+  { key: 'flow',    name: 'Flow' }
 ];
 
 /* Drawer open/tab — a per-viewer convenience only (try/catch). */
@@ -67,7 +69,8 @@ var LAB_SETTINGS_KEY = 'f13ld.lab.settings.v1';
 var LAB_SETTINGS_LOADED = false;
 var LAB_SETTINGS_DEFAULTS = null;
 function labSnapshotSettings(){
-  return { phys: { elastic: !!PHYS_STATE.elastic, buckle: !!PHYS_STATE.buckle, nonlin: !!PHYS_STATE.nonlin, thermal: !!PHYS_STATE.thermal },
+  return { phys: { elastic: !!PHYS_STATE.elastic, buckle: !!PHYS_STATE.buckle, nonlin: !!PHYS_STATE.nonlin, thermal: !!PHYS_STATE.thermal, flow: !!PHYS_STATE.flow },
+           flowN: FLOW_STATE.N, flowTol: FLOW_STATE.tol,
            gridN: GRID_STATE.N, buckleN: BUCKLE_STATE.N, nonlinN: NONLIN_STATE.N, cap: NONLIN_STATE.cap, axis: NONLIN_STATE.axis,
            fillers: { air: !!THERMAL_STATE.fillers.air, water: !!THERMAL_STATE.fillers.water, tissue: !!THERMAL_STATE.fillers.tissue },
            conn: GEOM_STATE.connectivity, pv: !!GEOM_STATE.partialVolume };
@@ -78,6 +81,8 @@ function labApplySettings(s){
   if (s.phys) for (k in PHYS_STATE) if (typeof s.phys[k] === 'boolean') PHYS_STATE[k] = s.phys[k];
   if ([32, 64, 128].indexOf(s.gridN) >= 0) { GRID_STATE.mode = 'manual'; GRID_STATE.N = s.gridN; }
   if ([16, 32, 64].indexOf(s.buckleN) >= 0) BUCKLE_STATE.N = s.buckleN;
+  if ([32, 64, 128].indexOf(s.flowN) >= 0) FLOW_STATE.N = s.flowN;          /* v0.28.0 */
+  if ([1e-6, 1e-7].indexOf(s.flowTol) >= 0) FLOW_STATE.tol = s.flowTol;
   if ([16, 32, 64].indexOf(s.nonlinN) >= 0) NONLIN_STATE.N = s.nonlinN;
   if ([0.02, 0.05, 0.1].indexOf(s.cap) >= 0) NONLIN_STATE.cap = s.cap;
   if (['xx', 'yy', 'zz', 'all'].indexOf(s.axis) >= 0) { NONLIN_STATE.axis = s.axis; if (s.axis !== 'all') NONLIN_STATE.view = s.axis; }
@@ -181,6 +186,10 @@ function onSegClick(btn){
     onNonlinAxisChange(v);
   } else if (group === 'pv'){
     onSurfaceVoxelChange(v);
+  } else if (group === 'flowN'){        /* v0.28.0 */
+    FLOW_STATE.N = +v;
+  } else if (group === 'flowTol'){
+    FLOW_STATE.tol = v === 'high' ? 1e-7 : 1e-6;
   }
   recomputeEstimate();
   paintDock();
@@ -292,6 +301,7 @@ function dockSummary(key){
   if (key === 'buckle')  return BUCKLE_STATE.N + '³';
   if (key === 'nonlin')  return NONLIN_STATE.N + '³ · ' + Math.round(NONLIN_STATE.cap * 100) + '% · ' + (NONLIN_STATE.axis === 'all' ? 'XYZ' : NONLIN_STATE.axis.toUpperCase());
   if (key === 'thermal') return thermalFillersOn().map(function(f){ return f.id; }).join(' · ') || 'no filler';
+  if (key === 'flow')    return FLOW_STATE.N + '³' + (FLOW_STATE.tol < 1e-6 ? ' · high' : '');
   return '';
 }
 function dockMaterialShort(){
@@ -322,6 +332,8 @@ function paintDock(){
   paintSegGroup('cap', NONLIN_STATE.cap);
   paintSegGroup('axis', NONLIN_STATE.axis);
   paintSegGroup('pv', GEOM_STATE.partialVolume ? 'pv' : 'binary');
+  paintSegGroup('flowN', FLOW_STATE.N);
+  paintSegGroup('flowTol', FLOW_STATE.tol < 1e-6 ? 'high' : 'std');
   /* switches + on/off styling (tabs, panes) */
   els = document.querySelectorAll('[data-phys-sw]');
   for (i = 0; i < els.length; i++){

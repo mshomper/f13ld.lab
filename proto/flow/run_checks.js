@@ -201,3 +201,55 @@ if (on('F7')) (function () {
     });
   });
 })();
+
+/* triply periodic surfaces on the lattice box [0, N)³ → [−π, π)³ */
+function tpmsLinks(kind, N) {
+  var s = 2 * PI / N;
+  return H.linksFromLat(function (x, y, z) {
+    var X = -PI + x * s, Y = -PI + y * s, Z = -PI + z * s;
+    if (kind === 'gyroid-sheet') return 0.4 - Math.abs(Math.sin(X) * Math.cos(Y) + Math.sin(Y) * Math.cos(Z) + Math.sin(Z) * Math.cos(X));
+    if (kind === 'gyroid-skel') return Math.sin(X) * Math.cos(Y) + Math.sin(Y) * Math.cos(Z) + Math.sin(Z) * Math.cos(X) - 0.4;
+    return Math.cos(X) + Math.cos(Y) + Math.cos(Z) - 0.6;   /* schwarzp-skel */
+  }, [N, N, N], false);
+}
+
+/* ---------- F8: linearity and superposition ---------- */
+if (on('F8')) (function () {
+  var file = out('F8'), N = 24, g = 1e-5 * (64 / N) * (64 / N), tau = 1.5, t0 = now();
+  /* a tilted skeletal gyroid so the flow has cross components */
+  var L = tpmsLinks('gyroid-skel', N), dom = H.prepareFlowDomain(L, {});
+  function run(F) { return H.solveFlowCPU(dom, { force: F, tauPlus: tau, tol: 1e-10 }).U; }
+  var ux = run([g, 0, 0]), u2 = run([2 * g, 0, 0]), uy = run([0, g, 0]), uxy = run([g, g, 0]);
+  var lin = Math.abs(u2[0] / (2 * ux[0]) - 1);
+  var sup = 0, nrm = Math.hypot(uxy[0], uxy[1], uxy[2]);
+  for (var i = 0; i < 3; i++) sup = Math.max(sup, Math.abs(uxy[i] - ux[i] - uy[i]) / nrm);
+  H.emit(file, { test: 'F8 linearity and superposition, skeletal gyroid', N: N, doubling_err: lin.toExponential(2), superposition_err: sup.toExponential(2),
+    pass: lin < 0.005 && sup < 0.005, ms: now() - t0 });
+})();
+
+/* ---------- F9: mass drift (force balance on the wall mesh comes with Phase 2) ---------- */
+if (on('F9')) (function () {
+  var file = out('F9'), t0 = now();
+  [['gyroid-sheet', 32], ['schwarzp-skel', 32]].forEach(function (c) {
+    var L = tpmsLinks(c[0], c[1]), dom = H.prepareFlowDomain(L, {}), g = 1e-5 * (64 / c[1]) * (64 / c[1]);
+    var r = H.solveFlowCPU(dom, { force: [g, 0, 0], tauPlus: 1.5, tol: 1e-9 });
+    H.emit(file, { test: 'F9 mass drift', geometry: c[0], N: c[1], steps: r.steps, max_mass_correction_per_node: r.massDrift.toExponential(2),
+      relative_to_mean_speed: (r.massDrift / Math.abs(r.Ui[0])).toExponential(2), pass: r.massDrift < 1e-6, ms: now() - t0 });
+  });
+})();
+
+/* ---------- F11 (CPU preview): grid convergence of k / L² ---------- */
+if (on('F11')) (function () {
+  var file = out('F11');
+  ['gyroid-sheet', 'schwarzp-skel'].forEach(function (kind) {
+    var prev = null;
+    [16, 24, 32, 48].forEach(function (N) {
+      var t0 = now(), L = tpmsLinks(kind, N), dom = H.prepareFlowDomain(L, {}), g = 1e-5 * (64 / N) * (64 / N);
+      var r = H.solveFlowCPU(dom, { force: [g, 0, 0], tauPlus: 1.5, tol: 1e-8 });
+      var kl = r.nu * r.U[0] / g / (N * N);
+      H.emit(file, { test: 'F11 grid convergence (CPU)', geometry: kind, N: N, steps: r.steps, kL2: kl.toExponential(5),
+        change_from_previous: prev ? pct(kl / prev - 1) : null, ms: now() - t0 });
+      prev = kl;
+    });
+  });
+})();

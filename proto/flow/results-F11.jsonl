@@ -1,0 +1,8 @@
+{"test":"F11 grid convergence (CPU)","geometry":"gyroid-sheet","N":16,"steps":1000,"kL2":"1.99365e-3","change_from_previous":null,"ms":609}
+{"test":"F11 grid convergence (CPU)","geometry":"gyroid-sheet","N":24,"steps":1000,"kL2":"2.00134e-3","change_from_previous":"0.386 %","ms":2002}
+{"test":"F11 grid convergence (CPU)","geometry":"gyroid-sheet","N":32,"steps":1000,"kL2":"2.01037e-3","change_from_previous":"0.451 %","ms":4710}
+{"test":"F11 grid convergence (CPU)","geometry":"gyroid-sheet","N":48,"steps":1500,"kL2":"2.02110e-3","change_from_previous":"0.534 %","ms":22484}
+{"test":"F11 grid convergence (CPU)","geometry":"schwarzp-skel","N":16,"steps":1000,"kL2":"9.09996e-3","change_from_previous":null,"ms":413}
+{"test":"F11 grid convergence (CPU)","geometry":"schwarzp-skel","N":24,"steps":1500,"kL2":"9.02640e-3","change_from_previous":"-0.808 %","ms":2200}
+{"test":"F11 grid convergence (CPU)","geometry":"schwarzp-skel","N":32,"steps":2000,"kL2":"9.03091e-3","change_from_previous":"0.050 %","ms":7027}
+{"test":"F11 grid convergence (CPU)","geometry":"schwarzp-skel","N":48,"steps":4000,"kL2":"9.04430e-3","change_from_previous":"0.148 %","ms":50687}
