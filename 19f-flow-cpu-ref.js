@@ -261,7 +261,7 @@ function solveFlowCPU(dom, opts) {
   if (wantFields) {
     /* one more gather at the converged state: velocity and viscous stress per node
        σ' = −(1 − 1/2τ⁺) [ Σ f^neq c c + ½ (F u + u F) ]   (Krüger, Varnik & Raabe 2009) */
-    uF = new Float64Array(3 * n); sF = new Float64Array(6 * n);
+    uF = new Float64Array(3 * n); sF = new Float64Array(6 * n); var dF = new Float64Array(n);
     var pre = -(1 - 0.5 * wP);
     for (var a = 0; a < n; a++) {
       flowGather(dom, A, a, fl);
@@ -269,6 +269,7 @@ function solveFlowCPU(dom, opts) {
       for (var i3 = 0; i3 < Q; i3++) { var f = fl[i3]; dr += f; jx += f * cx[i3]; jy += f * cy[i3]; jz += f * cz[i3]; }
       var rho = 1 + dr, ux = (jx + 0.5 * Fx) / rho, uy = (jy + 0.5 * Fy) / rho, uz = (jz + 0.5 * Fz) / rho;
       var u2 = ux * ux + uy * uy + uz * uz;
+      dF[a] = dr;
       uF[3 * a] = ux; uF[3 * a + 1] = uy; uF[3 * a + 2] = uz;
       var pxx = 0, pyy = 0, pzz = 0, pxy = 0, pxz = 0, pyz = 0;
       for (var i4 = 1; i4 < Q; i4++) {
@@ -284,7 +285,7 @@ function solveFlowCPU(dom, opts) {
       sF[6 * a + 4] = pre * (pxz + 0.5 * (Fx * uz + Fz * ux));
       sF[6 * a + 5] = pre * (pyz + 0.5 * (Fy * uz + Fz * uy));
     }
-    out.u = uF; out.sigma = sF;
+    out.u = uF; out.sigma = sF; out.dr = dF;   /* v0.30.0 — ρ − 1 per node (pressure for the force balance) */
   }
   out.state = A;
   return out;

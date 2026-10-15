@@ -494,6 +494,15 @@ html, body {
 .dr-f { display:flex; flex-direction:column; gap:6px; min-width:0 }
 .dr-f > label { font:600 9.5px 'JetBrains Mono', monospace; color:var(--sec); text-transform:uppercase; letter-spacing:0.14em }
 .dr-f.wide { grid-column:span 2 }
+/* v0.30.0 — number fields (Flow pane) */
+.dr-num {
+  width:96px; height:26px; padding:0 8px; border-radius:7px; border:1px solid var(--hair); background:var(--s1);
+  color:var(--t1); font:500 11px 'JetBrains Mono', monospace; box-sizing:border-box;
+}
+.dr-num:hover { border-color:var(--hair2) }
+.dr-num:focus { outline:none; border-color:var(--lab-ring); box-shadow:0 0 0 1px var(--lab-ring) }
+.dr-pair { display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+.dr-pair span { font:500 11px 'JetBrains Mono', monospace; color:var(--t3) }
 
 /* run status strip — shown during / after a run (ids written by 50-controls.js) */
 .prog-row {
@@ -823,6 +832,10 @@ html, body {
   padding:5px 0; border-top:0.5px solid rgba(255,255,255,0.04);
 }
 .dc-row:first-child { border-top:none; }
+/* v0.30.0 — section label inside a metrics drawer (Flow: flow through the cell / wall shear) */
+.dc-grp { padding:8px 0 3px; font:600 8.5px 'JetBrains Mono', monospace; color:var(--ink-dim); text-transform:uppercase; letter-spacing:0.14em; }
+.dc-grp:first-child { padding-top:4px; }
+.dc-grp + .dc-row { border-top:none; }
 .dc-row .rl {
   font-family:'JetBrains Mono', monospace; font-size:9px; letter-spacing:0.08em;
   text-transform:uppercase; color:var(--ink-dim);
@@ -833,6 +846,9 @@ html, body {
   letter-spacing:0.02em;
 }
 .dc-row .rv.lab { color:var(--lab); }
+/* v0.30.0 — Flow rows carry X / Y / Z values on one line */
+.dc-row.wide { grid-template-columns:minmax(0, 1fr) minmax(0, 168px); }
+.dc-row.wide .rv { font-size:13px; }
 .dc-row .rd { font-family:'JetBrains Mono', monospace; font-size:9px; line-height:1.2; }
 .dc-row .rd.up   { color:var(--good); }     /* comparison only */
 .dc-row .rd.down { color:var(--bad); }      /* comparison only */

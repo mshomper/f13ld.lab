@@ -42,12 +42,13 @@
                kL2 [x, y, z], tort [x, y, z], perAxis [{ open, converged,
                steps, t_ms, U }], porosity, openPorosity, sealedPorosity,
                openBits, axialBits, throatVox, medPoreVox, nWall, nThin,
-               t_links_ms, t_solve_ms, workers, reused, tauPlus, tol, g }
+               t_links_ms, t_solve_ms, workers, reused, tauPlus, tol, g,
+               wss (v0.30.0) { n, pos, nrm, area, nSplit, axes [x, y, z] (19h flowWallTractions or null), t_ms }, wssKey }
      flowGPUTables(links, mask)         wall tables for the kernel
      flowGPUSolver(N) / flowGPURelease() the cached solver (WGPU_DEVICE_CACHE_KEYS)
    ============================================================ */
 
-var FLOW_GPU_VERSION = 'fg-2';   /* v0.29.0 — runs keep velocity fields for the flow view */
+var FLOW_GPU_VERSION = 'fg-3';   /* v0.30.0 — runs keep wall shear per probe (19h); fg-2 v0.29.0 velocity fields for the flow view */
 var FLOW_TAU_PLUS = 1.5;
 var FLOW_CHECK_EVERY = 500;
 var FLOW_MIN_STEPS = 1000;
@@ -98,6 +99,71 @@ function flowGPUTables(links, mask) {
 }
 
 /* ---------- WGSL ---------- */
+/* Pull streaming with the CLI wall rule into f0 … f18 (shared by the step
+   and the v0.30.0 stress kernel, so both read the same populations). */
+function flowGatherWGSL(L, at) {
+  L.push('    var f0 = fin[c] - red[0];');
+  for (var i = 1; i < 19; i++) L.push('    var f' + i + ' = fin[' + i + 'u * N3 + ' + at(-FLOW_CX[i], -FLOW_CY[i], -FLOW_CZ[i]) + '];');
+  L.push('    if (fl > 1u) { let ws = wslot[c] * 18u;');
+  for (var i2 = 1; i2 < 19; i2++) {
+    var j = (i2 & 1) ? i2 + 1 : i2 - 1;
+    L.push('      if ((fl & ' + (1 << i2) + 'u) != 0u) { let q = qtab[ws + ' + (i2 - 1) + 'u]; let kap = (1.0 - 2.0 * q) / (1.0 + 2.0 * q);');
+    L.push('        f' + i2 + ' = fin[' + j + 'u * N3 + c] + kap * (fin[' + j + 'u * N3 + ' + at(FLOW_CX[i2], FLOW_CY[i2], FLOW_CZ[i2]) + '] - fin[' + i2 + 'u * N3 + c]); }');
+  }
+  L.push('    }');
+}
+/* v0.30.0 — viscous stress and ρ − 1 at every fluid cell, from the
+   populations the next step would collide (19f fields, Krüger, Varnik &
+   Raabe 2009): σ' = −(1 − ω⁺/2)[Σ f^neq c c + ½(F u + u F)].  7 floats
+   per cell: σxx σyy σzz σxy σxz σyz, ρ − 1; solid cells 0. */
+function flowStressWGSL() {
+  var ax = ['xm', 'x0', 'xp'], ay = ['ym', 'y0', 'yp'], az = ['zm', 'z0', 'zp'], L = [];
+  function at(dx, dy, dz) { return '((' + ax[dx + 1] + ' * N + ' + ay[dy + 1] + ') * N + ' + az[dz + 1] + ')'; }
+  L.push('struct Params { N: u32, N3: u32, invFluid: f32, invN3: f32, Fx: f32, Fy: f32, Fz: f32, wP: f32, wM: f32, p0: f32, p1: f32, p2: f32 };');
+  L.push('@group(0) @binding(0) var<storage, read> fin: array<f32>;');
+  L.push('@group(0) @binding(1) var<storage, read> flags: array<u32>;');
+  L.push('@group(0) @binding(2) var<storage, read> wslot: array<u32>;');
+  L.push('@group(0) @binding(3) var<storage, read> qtab: array<f32>;');
+  L.push('@group(0) @binding(4) var<storage, read> red: array<f32>;');
+  L.push('@group(0) @binding(5) var<storage, read_write> sout: array<f32>;');
+  L.push('@group(0) @binding(6) var<uniform> P: Params;');
+  L.push('@compute @workgroup_size(256)');
+  L.push('fn main(@builtin(global_invocation_id) gid: vec3<u32>) {');
+  L.push('  let c = gid.x; if (c >= P.N3) { return; }');
+  L.push('  let fl = flags[c]; let o = 7u * c;');
+  L.push('  if ((fl & 1u) != 0u) { for (var m = 0u; m < 7u; m = m + 1u) { sout[o + m] = 0.0; } return; }');
+  L.push('  let N = P.N; let N3 = P.N3; let z0 = c % N; let y0 = (c / N) % N; let x0 = c / (N * N);');
+  L.push('  let xm = select(x0 - 1u, N - 1u, x0 == 0u); let xp = select(x0 + 1u, 0u, x0 + 1u == N);');
+  L.push('  let ym = select(y0 - 1u, N - 1u, y0 == 0u); let yp = select(y0 + 1u, 0u, y0 + 1u == N);');
+  L.push('  let zm = select(z0 - 1u, N - 1u, z0 == 0u); let zp = select(z0 + 1u, 0u, z0 + 1u == N);');
+  flowGatherWGSL(L, at);
+  L.push('  let dr = f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14 + f15 + f16 + f17 + f18;');
+  L.push('  let jx = f1 - f2 + f7 - f8 + f9 - f10 + f11 - f12 + f13 - f14;');
+  L.push('  let jy = f3 - f4 + f7 - f8 - f9 + f10 + f15 - f16 + f17 - f18;');
+  L.push('  let jz = f5 - f6 + f11 - f12 - f13 + f14 + f15 - f16 - f17 + f18;');
+  L.push('  let rho = 1.0 + dr; let ir = 1.0 / rho; let Fx = P.Fx; let Fy = P.Fy; let Fz = P.Fz;');
+  L.push('  let ux = (jx + 0.5 * Fx) * ir; let uy = (jy + 0.5 * Fy) * ir; let uz = (jz + 0.5 * Fz) * ir;');
+  L.push('  let u2 = ux * ux + uy * uy + uz * uz;');
+  L.push('  var pxx = 0.0; var pyy = 0.0; var pzz = 0.0; var pxy = 0.0; var pxz = 0.0; var pyz = 0.0; var cu: f32; var nq: f32;');
+  for (var i = 1; i < 19; i++) {
+    var cx = FLOW_CX[i], cy = FLOW_CY[i], cz = FLOW_CZ[i], W = (Math.abs(cx) + Math.abs(cy) + Math.abs(cz)) === 1 ? '(1.0 / 18.0)' : '(1.0 / 36.0)';
+    var terms = [];
+    if (cx) terms.push((cx > 0 ? '' : '-') + 'ux'); if (cy) terms.push((cy > 0 ? '' : '-') + 'uy'); if (cz) terms.push((cz > 0 ? '' : '-') + 'uz');
+    L.push('  cu = ' + terms.join(' + ').replace(/\+ -/g, '- ') + '; nq = f' + i + ' - ' + W + ' * (dr + rho * (3.0 * cu + 4.5 * cu * cu - 1.5 * u2));');
+    var acc = [];
+    if (cx) acc.push('pxx = pxx + nq;'); if (cy) acc.push('pyy = pyy + nq;'); if (cz) acc.push('pzz = pzz + nq;');
+    if (cx && cy) acc.push('pxy = pxy ' + (cx * cy > 0 ? '+' : '-') + ' nq;');
+    if (cx && cz) acc.push('pxz = pxz ' + (cx * cz > 0 ? '+' : '-') + ' nq;');
+    if (cy && cz) acc.push('pyz = pyz ' + (cy * cz > 0 ? '+' : '-') + ' nq;');
+    L.push('  ' + acc.join(' '));
+  }
+  L.push('  let pre = -(1.0 - 0.5 * P.wP);');
+  L.push('  sout[o] = pre * (pxx + Fx * ux); sout[o + 1u] = pre * (pyy + Fy * uy); sout[o + 2u] = pre * (pzz + Fz * uz);');
+  L.push('  sout[o + 3u] = pre * (pxy + 0.5 * (Fx * uy + Fy * ux)); sout[o + 4u] = pre * (pxz + 0.5 * (Fx * uz + Fz * ux)); sout[o + 5u] = pre * (pyz + 0.5 * (Fy * uz + Fz * uy));');
+  L.push('  sout[o + 6u] = dr;');
+  L.push('}');
+  return L.join('\n');
+}
 function flowStepWGSL() {
   var ax = ['xm', 'x0', 'xp'], ay = ['ym', 'y0', 'yp'], az = ['zm', 'z0', 'zp'], L = [];
   function at(dx, dy, dz) { return '((' + ax[dx + 1] + ' * N + ' + ay[dy + 1] + ') * N + ' + az[dz + 1] + ')'; }
@@ -120,15 +186,7 @@ function flowStepWGSL() {
   L.push('    let xm = select(x0 - 1u, N - 1u, x0 == 0u); let xp = select(x0 + 1u, 0u, x0 + 1u == N);');
   L.push('    let ym = select(y0 - 1u, N - 1u, y0 == 0u); let yp = select(y0 + 1u, 0u, y0 + 1u == N);');
   L.push('    let zm = select(z0 - 1u, N - 1u, z0 == 0u); let zp = select(z0 + 1u, 0u, z0 + 1u == N);');
-  L.push('    var f0 = fin[c] - red[0];');
-  for (var i = 1; i < 19; i++) L.push('    var f' + i + ' = fin[' + i + 'u * N3 + ' + at(-FLOW_CX[i], -FLOW_CY[i], -FLOW_CZ[i]) + '];');
-  L.push('    if (fl > 1u) { let ws = wslot[c] * 18u;');
-  for (var i2 = 1; i2 < 19; i2++) {
-    var j = (i2 & 1) ? i2 + 1 : i2 - 1;
-    L.push('      if ((fl & ' + (1 << i2) + 'u) != 0u) { let q = qtab[ws + ' + (i2 - 1) + 'u]; let kap = (1.0 - 2.0 * q) / (1.0 + 2.0 * q);');
-    L.push('        f' + i2 + ' = fin[' + j + 'u * N3 + c] + kap * (fin[' + j + 'u * N3 + ' + at(FLOW_CX[i2], FLOW_CY[i2], FLOW_CZ[i2]) + '] - fin[' + i2 + 'u * N3 + c]); }');
-  }
-  L.push('    }');
+  flowGatherWGSL(L, at);
   L.push('    let dr = f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14 + f15 + f16 + f17 + f18;');
   L.push('    let jx = f1 - f2 + f7 - f8 + f9 - f10 + f11 - f12 + f13 - f14;');
   L.push('    let jy = f3 - f4 + f7 - f8 - f9 + f10 + f15 - f16 + f17 - f18;');
@@ -223,7 +281,9 @@ function FlowGPUSolver(N) {
   this.pStep = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: flowStepWGSL() }), entryPoint: 'main' } });
   this.pRed = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: FLOW_REDUCE_WGSL }), entryPoint: 'main' } });
   this.pVel = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: FLOW_VELOCITY_WGSL }), entryPoint: 'main' } });
+  this.pStress = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: flowStressWGSL() }), entryPoint: 'main' } });
   this.ubuf = null;   /* 3·N³ velocity, made on the first readVelocity */
+  this.sbuf = null;   /* v0.30.0 — 7·N³ stress, made on the first readStress */
   this.bytes = 2 * popBytes + 2 * N3 * 4 + this.nWG * 32;
 }
 FlowGPUSolver.prototype.upload = function (T) {
@@ -309,13 +369,27 @@ FlowGPUSolver.prototype.readVelocity = async function () {
   enc.copyBufferToBuffer(this.ubuf, 0, rd, 0, bytes); dev.queue.submit([enc.finish()]);
   await rd.mapAsync(GPUMapMode.READ); var v = new Float32Array(rd.getMappedRange().slice(0)); rd.unmap(); rd.destroy(); return v;
 };
+/* v0.30.0 — stress and ρ − 1 of the last solve, 7 floats per cell (flowStressWGSL). */
+FlowGPUSolver.prototype.readStress = async function () {
+  var dev = this.device, bytes = 7 * this.N3 * 4;
+  if (!this.sbuf) this.sbuf = this._buf(bytes, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  var bg = dev.createBindGroup({ layout: this.pStress.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: this._last || this.A } }, { binding: 1, resource: { buffer: this.flags } },
+    { binding: 2, resource: { buffer: this.wslot } }, { binding: 3, resource: { buffer: this.qtab } },
+    { binding: 4, resource: { buffer: this.red } }, { binding: 5, resource: { buffer: this.sbuf } }, { binding: 6, resource: { buffer: this.ub } }] });
+  var rd = dev.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  var enc = dev.createCommandEncoder(), pass = enc.beginComputePass();
+  pass.setPipeline(this.pStress); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(this.nWG); pass.end();
+  enc.copyBufferToBuffer(this.sbuf, 0, rd, 0, bytes); dev.queue.submit([enc.finish()]);
+  await rd.mapAsync(GPUMapMode.READ); var v = new Float32Array(rd.getMappedRange().slice(0)); rd.unmap(); rd.destroy(); return v;
+};
 FlowGPUSolver.prototype.readState = async function () {
   var dev = this.device, rd = dev.createBuffer({ size: this.popBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
   var enc = dev.createCommandEncoder(); enc.copyBufferToBuffer(this._last || this.A, 0, rd, 0, this.popBytes); dev.queue.submit([enc.finish()]);
   await rd.mapAsync(GPUMapMode.READ); var v = new Float32Array(rd.getMappedRange().slice(0)); rd.unmap(); rd.destroy(); return v;
 };
 FlowGPUSolver.prototype.destroy = function () {
-  ['A', 'B', 'flags', 'wslot', 'qtab', 'part', 'red', 'stage', 'ub', 'rb', 'ubuf'].forEach(function (k) { if (this[k]) { try { this[k].destroy(); } catch (e) {} this[k] = null; } }, this);
+  ['A', 'B', 'flags', 'wslot', 'qtab', 'part', 'red', 'stage', 'ub', 'rb', 'ubuf', 'sbuf'].forEach(function (k) { if (this[k]) { try { this[k].destroy(); } catch (e) {} this[k] = null; } }, this);
 };
 
 function flowGPUSolver(N) {
@@ -409,7 +483,7 @@ async function _homogenizeFlowGPU(recipe, N, opts, st) {
     out.t_solve_ms = 0; out.t_ms = performance.now() - t0; return out;
   }
   st.step = 'GPU tables';
-  var T = flowGPUTables(links, dom.mask);
+  var T = flowGPUTables(links, dom.mask), probes = links.probes || null;
   links = null;
   out.nWall = T.nWall; out.nFallback = T.nFallback;
   st.step = 'GPU setup';
@@ -419,7 +493,7 @@ async function _homogenizeFlowGPU(recipe, N, opts, st) {
   /* force scaled so ⟨u⟩ lands near the same lattice speed at every grid */
   var g = 1e-5 * (64 / N) * (64 / N), tS = performance.now(), idx = 0;
   out.g = g;
-  var viz = null;
+  var viz = null, fluidMask = null;
   for (var ax = 0; ax < 3; ax++) {
     if (!(dom.openBits & (1 << ax))) { out.perAxis.push({ open: false }); continue; }
     if (opts.onProgress) opts.onProgress({ axis: 'xyz'[ax], index: idx, total: nOpenAxes, step: 0, rel: 1 });
@@ -438,9 +512,22 @@ async function _homogenizeFlowGPU(recipe, N, opts, st) {
       if (!viz) viz = flowVizInit(dom.mask, N);
       flowVizAddAxis(viz, ax, vel, N, g);
     }
+    /* v0.30.0 — wall shear per probe for unit force along this axis (19h) */
+    if (probes && probes.n && opts.keepWss !== false && typeof flowWallTractions === 'function') {
+      st.step = 'wall shear along ' + 'XYZ'[ax];
+      var sig = await S.readStress();
+      if (opts.isStale && opts.isStale()) return null;
+      if (!fluidMask) { fluidMask = new Uint8Array(N3); for (var c0 = 0; c0 < N3; c0++) fluidMask[c0] = (T.flags[c0] & 1) ? 0 : 1; }
+      var vOpen = (probes.solidVol > 0) ? N3 - probes.solidVol - (dom.nFluid - dom.nOpen) : 0;
+      var tW = performance.now(), tr = flowWallTractions(probes, sig, fluidMask, N, g, ax, vOpen);
+      sig = null;
+      if (!out.wss) out.wss = { n: probes.n, pos: probes.pos, nrm: probes.nrm, area: probes.area, nSplit: probes.nSplit, axes: [null, null, null], t_ms: 0 };
+      out.wss.axes[ax] = tr; out.wss.t_ms += performance.now() - tW;
+    }
     idx++;
   }
   if (viz) out.viz = viz;
+  if (out.wss) out.wssKey = FLOW_WSS_VERSION + '|' + Date.now().toString(36) + '|' + Math.random().toString(36).slice(2, 8);
   /* symmetrize over solved columns (an unsolved axis has no column) */
   var dia = 0, offd = 0;
   for (var p = 0; p < 3; p++) for (var q = 0; q < 3; q++) {

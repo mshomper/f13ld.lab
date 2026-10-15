@@ -60,6 +60,9 @@
        → { N, kept, raw, solid (Uint8 N³), dirs, qa: [9 × Float32 N³], qb: [9 × Float32 N³],
            nSurf, nExamined, nWall, nThin, nMulti }
      buildFlowLinksFromFn(fn, N, kept, raw, mCorner, opts)
+     marginWallProbes(m, N, kept, raw, iRange)    (v0.30.0) wall shear probe points, one per surface voxel
+       → { n, pos, nrm, area, nSplit }; buildFlowLinks adds it as out.probes
+     mergeWallProbes(list)                        (v0.30.0) join slab probe sets
 
    3. Surface area (v0.23.0, thermal Phase 3 — THERMAL_SCOPE.md §3.9, §14).
       Marching tetrahedra on the corner margin grid: each voxel cube is
@@ -240,6 +243,138 @@ function marginSurfaceArea(m, N, kept, raw, iRange) {
   return area / NN;
 }
 
+/* ── v0.30.0 — wall probe points for the wall shear stress (fluids Phase 2,
+   FLUIDS_LBM_SCOPE.md §3.6, §15) ──────────────────────────────────────────
+   The same marching-tetrahedra wall as marginSurfaceArea (same island-trim
+   rules, so the probe areas add up to exactly that area), reduced to one
+   probe per surface voxel: the area-weighted centroid, the summed area and
+   the direction of the summed area vector, which points into the fluid.
+   A voxel whose triangles face opposite ways (a wall thinner than a voxel,
+   |Σ a n| < WALL_PROBE_COHERE · Σ a) keeps one probe per triangle instead,
+   so neither side of the thin wall is lost.
+
+   Positions are in lattice units: corner (i, j, k) of the margin grid at
+   (i, j, k), so voxel centres sit at integer + ½ (the 19f / 19g node
+   convention), not wrapped (a probe may sit up to one voxel past N).
+   Areas are in voxel faces (h²).  solidVol: the solid volume (voxels) under
+   the same linear margin, island-trimmed — the true fluid volume for the
+   force balance (the node count overstates it by up to half a voxel of wall).
+   → { n, pos (Float32 3n), nrm (Float32 3n, unit, into the fluid), area (Float32 n), nSplit, solidVol } */
+var WALL_PROBE_COHERE = 0.6;
+function marginWallProbes(m, N, kept, raw, iRange) {
+  var NN = N * N, c = new Float64Array(8), P = new Float64Array(12);
+  var iLo = iRange ? iRange[0] : 0, iHi = iRange ? iRange[1] : N;
+  var pos = [], nrm = [], area = [], nSplit = 0, solidVol = 0;
+  var tri = [];
+  function tetVol(p, q, r, t) {   /* |det| / 6 of four points, each [x, y, z] */
+    var ax = q[0] - p[0], ay = q[1] - p[1], az = q[2] - p[2], bx = r[0] - p[0], by = r[1] - p[1], bz = r[2] - p[2];
+    var cx = t[0] - p[0], cy = t[1] - p[1], cz = t[2] - p[2];
+    return Math.abs(ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6;
+  }   /* this voxel's triangles: [a, cx, cy, cz, vx, vy, vz] (v = area vector) */
+  function isTrimmed(id) { return raw && raw[id] > 0.5 && !(kept[id] > 0.5); }
+  function addTri(ax, ay, az, bx, by, bz, qx, qy, qz, sx, sy, sz) {
+    /* triangle a-b-q; (sx, sy, sz) a solid corner of the tetrahedron, so the area vector is flipped to point away from it */
+    var ux = bx - ax, uy = by - ay, uz = bz - az, vx = qx - ax, vy = qy - ay, vz = qz - az;
+    var wx = 0.5 * (uy * vz - uz * vy), wy = 0.5 * (uz * vx - ux * vz), wz = 0.5 * (ux * vy - uy * vx);
+    var a = Math.sqrt(wx * wx + wy * wy + wz * wz);
+    if (!(a > 1e-14)) return;
+    var cx = (ax + bx + qx) / 3, cy = (ay + by + qy) / 3, cz = (az + bz + qz) / 3;
+    if (wx * (cx - sx) + wy * (cy - sy) + wz * (cz - sz) < 0) { wx = -wx; wy = -wy; wz = -wz; }
+    tri.push([a, cx, cy, cz, wx, wy, wz]);
+  }
+  for (var i = iLo; i < iHi; i++) {
+    var i1 = (i + 1) % N;
+    for (var j = 0; j < N; j++) {
+      var j1 = (j + 1) % N;
+      for (var k = 0; k < N; k++) {
+        var k1 = (k + 1) % N, id = i * NN + j * N + k;
+        c[0] = m[i * NN + j * N + k];   c[1] = m[i1 * NN + j * N + k];
+        c[2] = m[i * NN + j1 * N + k];  c[3] = m[i1 * NN + j1 * N + k];
+        c[4] = m[i * NN + j * N + k1];  c[5] = m[i1 * NN + j * N + k1];
+        c[6] = m[i * NN + j1 * N + k1]; c[7] = m[i1 * NN + j1 * N + k1];
+        var npos = 0;
+        for (var q = 0; q < 8; q++) if (c[q] > 0) npos++;
+        if (npos === 0) continue;
+        if (isTrimmed(id)) continue;
+        if (npos === 8) { solidVol += 1; continue; }
+        if (!(kept[id] > 0.5) && raw && raw !== kept) {
+          var nearKept = false, nearTrim = false;
+          for (var a0 = -1; a0 <= 1 && !nearKept; a0++) for (var b0 = -1; b0 <= 1 && !nearKept; b0++) for (var e0 = -1; e0 <= 1 && !nearKept; e0++) {
+            var nb = ((i + a0 + N) % N) * NN + ((j + b0 + N) % N) * N + ((k + e0 + N) % N);
+            if (kept[nb] > 0.5) nearKept = true; else if (isTrimmed(nb)) nearTrim = true;
+          }
+          if (!nearKept && nearTrim) continue;
+        }
+        tri.length = 0;
+        for (var t = 0; t < 6; t++) {
+          var T = MT_TETS[t], inn = [], out = [];
+          for (var v = 0; v < 4; v++) (c[T[v]] > 0 ? inn : out).push(T[v]);
+          if (!out.length) { solidVol += 1 / 6; continue; }
+          if (!inn.length) continue;
+          var np = 0;
+          for (var ia = 0; ia < inn.length; ia++) for (var ob = 0; ob < out.length; ob++) {
+            var A = inn[ia], B = out[ob], sa = c[A], sb = c[B], f = sa / (sa - sb);
+            P[np++] = i + MT_CX[A] + f * (MT_CX[B] - MT_CX[A]);
+            P[np++] = j + MT_CY[A] + f * (MT_CY[B] - MT_CY[A]);
+            P[np++] = k + MT_CZ[A] + f * (MT_CZ[B] - MT_CZ[A]);
+          }
+          var S0 = inn[0], sx = i + MT_CX[S0], sy = j + MT_CY[S0], sz = k + MT_CZ[S0];
+          /* solid volume of this tetrahedron (1/6 of the voxel) under the linear margin */
+          if (inn.length === 1) {
+            var fA = 1;
+            for (var ob1 = 0; ob1 < 3; ob1++) { var sb1 = c[out[ob1]]; fA *= c[inn[0]] / (c[inn[0]] - sb1); }
+            solidVol += fA / 6;
+          } else if (inn.length === 3) {
+            var fB = 1;
+            for (var ia1 = 0; ia1 < 3; ia1++) { var sa1 = c[inn[ia1]]; fB *= (-c[out[0]]) / (sa1 - c[out[0]]); }
+            solidVol += (1 - fB) / 6;
+          } else {
+            /* 2 in (a, b), 2 out: a prism a·P_ac·P_ad | b·P_bc·P_bd */
+            var Va = [i + MT_CX[inn[0]], j + MT_CY[inn[0]], k + MT_CZ[inn[0]]], Vb = [i + MT_CX[inn[1]], j + MT_CY[inn[1]], k + MT_CZ[inn[1]]];
+            var Pac = [P[0], P[1], P[2]], Pad = [P[3], P[4], P[5]], Pbc = [P[6], P[7], P[8]], Pbd = [P[9], P[10], P[11]];
+            solidVol += tetVol(Va, Pac, Pad, Pbd) + tetVol(Va, Pac, Pbc, Pbd) + tetVol(Va, Vb, Pbc, Pbd);
+          }
+          if (np === 9) addTri(P[0], P[1], P[2], P[3], P[4], P[5], P[6], P[7], P[8], sx, sy, sz);
+          else {
+            /* 2 in, 2 out: the same split as marginSurfaceArea */
+            addTri(P[0], P[1], P[2], P[3], P[4], P[5], P[9], P[10], P[11], sx, sy, sz);
+            addTri(P[0], P[1], P[2], P[9], P[10], P[11], P[6], P[7], P[8], sx, sy, sz);
+          }
+        }
+        if (!tri.length) continue;
+        var sA = 0, cx0 = 0, cy0 = 0, cz0 = 0, vx0 = 0, vy0 = 0, vz0 = 0;
+        for (var r = 0; r < tri.length; r++) {
+          var tr = tri[r];
+          sA += tr[0]; cx0 += tr[0] * tr[1]; cy0 += tr[0] * tr[2]; cz0 += tr[0] * tr[3];
+          vx0 += tr[4]; vy0 += tr[5]; vz0 += tr[6];
+        }
+        var vl = Math.sqrt(vx0 * vx0 + vy0 * vy0 + vz0 * vz0);
+        if (vl >= WALL_PROBE_COHERE * sA) {
+          pos.push(cx0 / sA, cy0 / sA, cz0 / sA); nrm.push(vx0 / vl, vy0 / vl, vz0 / vl); area.push(sA);
+        } else {
+          nSplit++;
+          for (var r2 = 0; r2 < tri.length; r2++) {
+            var t2 = tri[r2];
+            pos.push(t2[1], t2[2], t2[3]); nrm.push(t2[4] / t2[0], t2[5] / t2[0], t2[6] / t2[0]); area.push(t2[0]);
+          }
+        }
+      }
+    }
+  }
+  return { n: area.length, pos: Float32Array.from(pos), nrm: Float32Array.from(nrm), area: Float32Array.from(area), nSplit: nSplit, solidVol: solidVol };
+}
+/* Join slab probe sets (17c) in slab order. */
+function mergeWallProbes(list) {
+  var n = 0, nSplit = 0, solidVol = 0;
+  for (var a = 0; a < list.length; a++) { n += list[a].n; nSplit += list[a].nSplit || 0; solidVol += list[a].solidVol || 0; }
+  var pos = new Float32Array(3 * n), nrm = new Float32Array(3 * n), area = new Float32Array(n), o = 0;
+  for (var b = 0; b < list.length; b++) {
+    var L = list[b];
+    pos.set(L.pos, 3 * o); nrm.set(L.nrm, 3 * o); area.set(L.area, o); o += L.n;
+  }
+  return { n: n, pos: pos, nrm: nrm, area: area, nSplit: nSplit, solidVol: solidVol };
+}
+
 /* Does the pore space (everything the kept solid does not occupy, trimmed
    islands included) run continuously through the cell along each axis? */
 function voidOpenAxes(kept, N) {
@@ -354,7 +489,7 @@ function buildLinkFieldFromFn(fn, N, kept, raw, mCorner, opts) {
    6 bisection steps (1/512 of a link), as buildLinkField.  Ends the island
    trim removed count as pore: a link touching one is open, or halfway
    (q = ½) when its other end is kept solid. */
-var FLOW_LINKS_VERSION = 'fl-2';   /* v0.28.1 — slab output (iRange); 17c checks workers carry the same copy */
+var FLOW_LINKS_VERSION = 'fl-3';   /* v0.30.0 — slabs also return wall probes; v0.28.1 — slab output (iRange); 17c checks workers carry the same copy */
 var FLOW_DIRS = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, -1, 0], [1, 0, 1], [1, 0, -1], [0, 1, 1], [0, 1, -1]];
 var FLOW_Q_MIN = 1e-4;     /* a wall right on a node still counts as a wall */
 
@@ -362,6 +497,7 @@ function buildFlowLinks(recipe, N, opts) {
   opts = opts || {};
   var t0 = linkNowMs(), d = designMarginSetup(recipe, N, opts);
   var out = buildFlowLinksFromFn(d.mg.fn, N, d.kept, d.raw, d.mg.m, opts);
+  if (opts.probes !== false) out.probes = marginWallProbes(d.mg.m, N, d.kept, d.raw);   /* v0.30.0 */
   out.t_ms = linkNowMs() - t0;
   return out;
 }
@@ -479,6 +615,6 @@ function planeCubeSolidFraction(m0, gx, gy, gz) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { buildVoxelTensors: buildVoxelTensors, voxelTensorsFromMargin: voxelTensorsFromMargin, buildLinkField: buildLinkField,
     buildLinkFieldFromFn: buildLinkFieldFromFn, planeCubeSolidFraction: planeCubeSolidFraction,
-    marginSurfaceArea: marginSurfaceArea, voidOpenAxes: voidOpenAxes, designGeometryMetrics: designGeometryMetrics,
+    marginSurfaceArea: marginSurfaceArea, marginWallProbes: marginWallProbes, mergeWallProbes: mergeWallProbes, voidOpenAxes: voidOpenAxes, designGeometryMetrics: designGeometryMetrics,
     buildFlowLinks: buildFlowLinks, buildFlowLinksFromFn: buildFlowLinksFromFn, FLOW_DIRS: FLOW_DIRS, FLOW_LINKS_VERSION: FLOW_LINKS_VERSION };
 }

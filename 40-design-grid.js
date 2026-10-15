@@ -341,9 +341,9 @@ function fmtSci(v, digits){
   var sup = String(e).replace(/-/g, '\u207b').replace(/[0-9]/g, function (c) { return '\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079'[+c]; });
   return m.toFixed(digits == null ? 2 : digits) + '\u00d710' + sup;
 }
-/* v0.29.3 \u2014 fixed-scale permeability (Matt, 2026-10-14): every card in
-   units of 10\u207b\u2079 m\u00b2 (the bone-scaffold convention) and k/L\u00b2 in units of
-   10\u207b\u00b3, three significant figures, so designs compare at a glance instead
+/* v0.29.3 — fixed-scale permeability (Matt, 2026-10-14): every card in
+   units of 10⁻⁹ m² (the bone-scaffold convention) and k/L² in units of
+   10⁻³, three significant figures, so designs compare at a glance instead
    of each card picking its own exponent. */
 var FLOW_K_UNIT = '\u00d710\u207b\u2079 m\u00b2', FLOW_KL2_UNIT = '\u00d710\u207b\u00b3';
 function fmtFixedScale(v, scale){
@@ -357,58 +357,131 @@ function fmtKL2(v){ return fmtFixedScale(v, 1e-3) + ' ' + FLOW_KL2_UNIT; }
 /* hover note on the permeability labels (Matt, 2026-10-14): published bone
    range for reference, kept off the card itself since not every user is biomed */
 var FLOW_K_BONE_TIP = 'Trabecular bone: 0.027\u201320 \u00d710\u207b\u2079 m\u00b2 across anatomic sites and directions (Nauman, Fong & Keaveny 1999, Ann Biomed Eng 27:517)';
-function flowAxisRow(d, fr, ax){
-  var r = _flowAxisRow(d, fr, ax); r.tip = FLOW_K_BONE_TIP; return r;
+/* v0.30.0 — Flow cards, ranked (Matt, 2026-10-14): general flow first (any
+   use: filters, heat exchangers, scaffolds), then wall shear.  X / Y / Z on
+   one row each; anisotropy, k/L² and relative density in the notes.  The
+   shear rows follow the Flow settings (direction, fluid, target, units) and
+   rescale live — no re-solve (19h). */
+function flowPermVals(d, fr){
+  var cell = (typeof labCellMm === 'function') ? labCellMm(d) : null;
+  return [0, 1, 2].map(function (a) {
+    var pa = fr.perAxis[a];
+    if (!pa || !pa.open) return '0';
+    return cell > 0 ? fmtFixedScale(fr.kL2[a] * (cell / 1000) * (cell / 1000), 1e-9) : fmtFixedScale(fr.kL2[a], 1e-3);
+  });
 }
-function _flowAxisRow(d, fr, ax){
-  var idx = 'xyz'.indexOf(ax), lbl = 'Permeability ' + ax.toUpperCase(), pa = fr.perAxis && fr.perAxis[idx];
-  if (!pa || !pa.open) return { lbl:lbl, val:'0', delta:['no open pore path along ' + ax.toUpperCase(), 'warn'] };
-  var kl = fr.kL2[idx], cell = (typeof labCellMm === 'function') ? labCellMm(d) : null;
-  var val = cell > 0 ? fmtPermM2(kl * (cell / 1000) * (cell / 1000)) : 'k/L\u00b2 ' + fmtKL2(kl);
-  if (!pa.converged) return { lbl:lbl, val:val, delta:['not converged \u00b7 ' + pa.steps.toLocaleString('en-US') + ' steps', 'warn'] };
-  return { lbl:lbl, val:val, delta:['k/L\u00b2 ' + fmtKL2(kl), 'neut'] };
+function flowPermRow(d, fr){
+  var cell = (typeof labCellMm === 'function') ? labCellMm(d) : null;
+  var open = [0, 1, 2].filter(function (a) { return fr.perAxis[a] && fr.perAxis[a].open; });
+  var closed = [0, 1, 2].filter(function (a) { return open.indexOf(a) < 0; }).map(function (a) { return 'XYZ'[a]; });
+  var ks = open.map(function (a) { return fr.kL2[a]; });
+  var tail = open.length === 3 ? 'anisotropy ' + (Math.max.apply(null, ks) / Math.min.apply(null, ks)).toFixed(2)
+           : open.length ? 'closed along ' + closed.join(', ') : 'no open pore path';
+  var unc = open.filter(function (a) { return !fr.perAxis[a].converged; });
+  var delta = unc.length ? ['not converged along ' + unc.map(function (a) { return 'XYZ'[a]; }).join(', ') + ' · ' + fr.perAxis[unc[0]].steps.toLocaleString('en-US') + ' steps', 'warn']
+            : [(cell > 0 ? FLOW_K_UNIT : 'k/L² ' + FLOW_KL2_UNIT) + ' · X / Y / Z · ' + tail, open.length === 3 ? 'neut' : 'warn'];
+  return { lbl:'Permeability', val:flowPermVals(d, fr).join(' / '), delta:delta, tip:FLOW_K_BONE_TIP };
 }
+function flowShearRows(d, fr){
+  var dash = ['—', 'neut'];
+  function blank(note){
+    return [
+      { lbl:'Shear per mm/s', val:'—', delta:note || dash },
+      { lbl:'At target shear', val:'—', delta:dash },
+      { lbl:'Best flow speed', val:'—', delta:dash },
+      { lbl:'Usable speed range', val:'—', delta:dash }
+    ];
+  }
+  if (typeof flowShearConfig !== 'function') return blank();
+  var cfg = flowShearConfig(d), unit = cfg.unit, su = flowSpeedUnit(unit), shU = flowShearUnit(unit);
+  var rows = blank();
+  rows[0].lbl = 'Shear per ' + su;
+  if (!fr.wss) { rows[0].delta = ['re-run Flow for wall shear', 'neut']; return rows; }
+  if (!(cfg.mu > 0)) { rows[0].delta = ['enter the custom viscosity in Flow settings', 'warn']; return rows; }
+  var pick = flowShearPick(fr, cfg);
+  if (!pick) { rows[0].delta = ['no open pore path', 'warn']; return rows; }
+  var ax = 'XYZ'[pick.axis];
+  if (pick.closed || !pick.stats) { rows[0].delta = ['no open pore path along ' + ax, 'warn']; return rows; }
+  var st = pick.stats, along = 'along ' + ax + (pick.best ? ' (best)' : '');
+  var wssMin = (typeof FLOW_THROAT_WSS !== 'undefined') ? FLOW_THROAT_WSS : 15, warn = [];
+  if (fr.throatVox != null && fr.throatVox < wssMin) warn.push('coarse grid');
+  var res = st.residual, fw = (typeof FLOW_FORCE_WARN !== 'undefined') ? FLOW_FORCE_WARN : 0.05;
+  if (isFinite(res) && Math.abs(res) > fw) warn.push('wall force off by ' + Math.round(Math.abs(res) * 100) + '%');
+  rows[0].val = fmtShear(st.median) + ' / ' + fmtShear(st.p95) + ' ' + shU;
+  rows[0].delta = ['median / 95th · ' + along + (warn.length ? ' · ' + warn.join(' · ') : ''), warn.length ? 'warn' : 'neut'];
+  var tg = cfg.targetInfo;
+  if (!tg) {
+    rows[1].delta = ['set a shear target in Flow settings', 'neut'];
+    return rows;
+  }
+  if (!(st.inTarget > 0)) {
+    rows[1].val = '0%';
+    rows[1].delta = [tg.label + ' · no speed puts wall in this range', 'warn'];
+    return rows;
+  }
+  function pct(v){ var p = v * 100; return p >= 10 || p === 0 ? Math.round(p) + '%' : p.toFixed(1) + '%'; }
+  rows[1].val = pct(st.inTarget) + ' of wall';
+  rows[1].delta = [tg.label + ' · ' + tg.note + ' · ' + pct(st.under) + ' under · ' + pct(st.over) + ' over', 'neut'];
+  rows[2].val = fmtFlowSpeed(st.bestU, unit);
+  var bNote = (st.mlMin != null ? fmt3(st.mlMin) + ' mL/min in a ' + fmt3(cfg.chamberMm) + ' mm chamber' : ''), bCls = 'neut';
+  if (st.Re > 0.5) { bNote += ' · Re ' + st.Re.toFixed(1) + ', inertia starts to matter'; bCls = 'warn'; }
+  else if (!tg.custom && (st.bestU < 0.05e-3 || st.bestU > 2e-3)) { bNote += ' · outside the usual bioreactor range'; bCls = 'warn'; }
+  rows[2].delta = [bNote || along, bCls];
+  if (st.rangeLo > 0 && st.rangeHi > 0) {
+    rows[3].val = fmtFlowSpeedPair(st.rangeLo, st.rangeHi, unit);
+    rows[3].delta = [fmt3(st.rangeHi / st.rangeLo) + '× span · keeps at least half the best coverage', 'neut'];
+  }
+  return rows;
+}
+/* every Flow row takes the wide value column (X / Y / Z values on one line) */
 function flowStats(d){
-  var fr = flowData(d), dash = ['\u2014', 'neut'];
+  var rows = _flowStats(d);
+  for (var i = 0; i < rows.length; i++) if (!rows[i].group) rows[i].wide = true;
+  return rows;
+}
+function _flowStats(d){
+  var fr = flowData(d), dash = ['—', 'neut'];
   if (!fr || fr.error){
     var note = fr && fr.error ? [fr.error, 'warn']
       : [(typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'run to compute' : 'enable Flow + Run', 'neut'];
+    var su = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.speedUnit === 'm') ? 'm/s' : 'mm/s';
     return [
-      { lbl:'Permeability X', val:'\u2014', delta:note , tip:FLOW_K_BONE_TIP },
-      { lbl:'Permeability Y', val:'\u2014', delta:dash , tip:FLOW_K_BONE_TIP },
-      { lbl:'Permeability Z', val:'\u2014', delta:dash , tip:FLOW_K_BONE_TIP },
-      { lbl:'Anisotropy', val:'\u2014', delta:dash },
-      { lbl:'Tortuosity', val:'\u2014', delta:dash },
-      { lbl:'Open Porosity', val:'\u2014', delta:dash },
-      { lbl:'Narrowest Pore', val:'\u2014', delta:dash },
-      { lbl:'Relative Density', val:densityText(d), delta:['solver voxel \u03c1', 'neut'] }
+      { group:'Flow through the cell' },
+      { lbl:'Permeability', val:'—', delta:note, tip:FLOW_K_BONE_TIP },
+      { lbl:'Tortuosity', val:'—', delta:dash },
+      { lbl:'Open Porosity', val:'—', delta:dash },
+      { lbl:'Narrowest Pore', val:'—', delta:dash },
+      { group:'Wall shear' },
+      { lbl:'Shear per ' + su, val:'—', delta:dash },
+      { lbl:'At target shear', val:'—', delta:dash },
+      { lbl:'Best flow speed', val:'—', delta:dash },
+      { lbl:'Usable speed range', val:'—', delta:dash }
     ];
   }
   var open = [0, 1, 2].filter(function (a) { return fr.perAxis[a] && fr.perAxis[a].open; });
-  var ks = open.map(function (a) { return fr.kL2[a]; });
-  var anis = open.length === 3 ? Math.max.apply(null, ks) / Math.min.apply(null, ks) : Infinity;
-  var tl = open.map(function (a) { return fr.tort[a]; }).filter(isFinite);
-  var tMean = tl.length ? tl.reduce(function (p, q) { return p + q; }, 0) / tl.length : NaN;
-  var tNote = open.map(function (a) { return 'XYZ'[a] + ' ' + (isFinite(fr.tort[a]) ? fr.tort[a].toFixed(2) : '\u2014'); }).join(' \u00b7 ');
+  var tVals = [0, 1, 2].map(function (a) { return (open.indexOf(a) >= 0 && isFinite(fr.tort[a])) ? fr.tort[a].toFixed(2) : '—'; });
   var sealed = fr.sealedPorosity || 0;
   var cell = (typeof labCellMm === 'function') ? labCellMm(d) : null, thr = fr.throatVox;
-  var thrRow = { lbl:'Narrowest Pore', val:'\u2014', delta:['no open pores', 'neut'] };
+  var thrRow = { lbl:'Narrowest Pore', val:'—', delta:['no open pores', 'neut'] };
   if (thr != null){
     var um = cell > 0 ? Math.round(thr * cell / fr.N * 1000) : null;
     var permMin = (typeof FLOW_THROAT_PERM !== 'undefined') ? FLOW_THROAT_PERM : 8, wssMin = (typeof FLOW_THROAT_WSS !== 'undefined') ? FLOW_THROAT_WSS : 15;
-    thrRow = { lbl:'Narrowest Pore', val:(um != null ? um.toLocaleString('en-US') + ' \u00b5m' : thr.toFixed(1) + ' voxels'),
-      delta: thr < permMin ? [thr.toFixed(1) + ' voxels \u00b7 coarse for permeability \u00b7 raise the flow grid', 'warn']
-           : [thr.toFixed(1) + ' voxels across at ' + fr.N + '\u00b3' + (thr < wssMin ? ' \u00b7 wall shear will want ' + wssMin + '+' : ''), 'neut'] };
+    thrRow = { lbl:'Narrowest Pore', val:(um != null ? um.toLocaleString('en-US') + ' µm' : thr.toFixed(1) + ' voxels'),
+      delta: thr < permMin ? [thr.toFixed(1) + ' voxels at ' + fr.N + '³ · coarse for permeability · raise the flow grid', 'warn']
+           : thr < wssMin ? [thr.toFixed(1) + ' voxels at ' + fr.N + '³ · coarse for wall shear (wants ' + wssMin + '+)', 'warn']
+           : [thr.toFixed(1) + ' voxels across at ' + fr.N + '³', 'neut'] };
   }
+  var sh = flowShearRows(d, fr);
   return [
-    flowAxisRow(d, fr, 'x'), flowAxisRow(d, fr, 'y'), flowAxisRow(d, fr, 'z'),
-    { lbl:'Anisotropy', val:isFinite(anis) ? anis.toFixed(2) : '\u221e', delta:[open.length === 3 ? 'K max / K min' : 'closed along ' + [0, 1, 2].filter(function (a) { return open.indexOf(a) < 0; }).map(function (a) { return 'XYZ'[a]; }).join(', '), 'neut'] },
-    { lbl:'Tortuosity', val:isFinite(tMean) ? tMean.toFixed(2) : '\u2014', delta:[tNote ? 'mean speed \u00f7 mean flow \u00b7 ' + tNote : '\u2014', 'neut'] },
+    { group:'Flow through the cell' },
+    flowPermRow(d, fr),
+    { lbl:'Tortuosity', val:tVals.join(' / '), delta:['mean speed ÷ mean flow · X / Y / Z', 'neut'] },
     { lbl:'Open Porosity', val:(fr.openPorosity * 100).toFixed(1) + '%',
-      delta: sealed > 0.0005 ? ['sealed pores ' + (sealed * 100).toFixed(1) + '% \u00b7 no flow through them', 'warn'] : ['every pore joins the flow', 'neut'] },
+      delta: sealed > 0.0005 ? ['sealed pores ' + (sealed * 100).toFixed(1) + '% · no flow through them', 'warn']
+           : ['relative density ' + (1 - fr.porosity).toFixed(2) + ' · every pore joins the flow', 'neut'] },
     thrRow,
-    { lbl:'Relative Density', val:(1 - fr.porosity).toFixed(2), delta:['flow grid ' + fr.N + '\u00b3, island-trimmed', 'neut'] }
-  ];
+    { group:'Wall shear' }
+  ].concat(sh);
 }
 function flowEmptyMsg(d){
   var fr = flowData(d), surf = (typeof VIEW_STATE === 'undefined' || VIEW_STATE.flowView === 'surface');
@@ -1337,9 +1410,10 @@ function buildSummary(stats, d){
   var rows = '';
   for (var i = 0; i < stats.length; i++){
     var s = stats[i];
+    if (s.group){ rows += '<div class="dc-grp">' + s.group + '</div>'; continue; }   /* v0.30.0 — section label (Flow cards) */
     var dtxt = (s.delta && s.delta[0]) ? s.delta[0] : '';
     var dcls = (s.delta && s.delta[1]) ? s.delta[1] : 'neut';
-    rows += '<div class="dc-row">' +
+    rows += '<div class="dc-row' + (s.wide ? ' wide' : '') + '">' +
               '<span class="rl"'+(s.tip ? ' title="'+s.tip+'"' : '')+'>'+s.lbl+'</span>' +
               '<span class="rr">' +
                 '<span class="rv'+(s.valcls ? ' '+s.valcls : '')+'">'+s.val+'</span>' +

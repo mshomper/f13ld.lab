@@ -71,6 +71,8 @@ var LAB_SETTINGS_DEFAULTS = null;
 function labSnapshotSettings(){
   return { phys: { elastic: !!PHYS_STATE.elastic, buckle: !!PHYS_STATE.buckle, nonlin: !!PHYS_STATE.nonlin, thermal: !!PHYS_STATE.thermal, flow: !!PHYS_STATE.flow },
            flowN: FLOW_STATE.N, flowTol: FLOW_STATE.tol,
+           flowDir: FLOW_STATE.dir, flowFluid: FLOW_STATE.fluid, flowMu: FLOW_STATE.muCustom, flowTarget: FLOW_STATE.target,
+           flowTLo: FLOW_STATE.tLo, flowTHi: FLOW_STATE.tHi, flowUnit: FLOW_STATE.speedUnit, flowChamber: FLOW_STATE.chamberMm,
            gridN: GRID_STATE.N, buckleN: BUCKLE_STATE.N, nonlinN: NONLIN_STATE.N, cap: NONLIN_STATE.cap, axis: NONLIN_STATE.axis,
            fillers: { air: !!THERMAL_STATE.fillers.air, water: !!THERMAL_STATE.fillers.water, tissue: !!THERMAL_STATE.fillers.tissue },
            conn: GEOM_STATE.connectivity, pv: !!GEOM_STATE.partialVolume };
@@ -83,6 +85,15 @@ function labApplySettings(s){
   if ([16, 32, 64].indexOf(s.buckleN) >= 0) BUCKLE_STATE.N = s.buckleN;
   if ([32, 64, 128].indexOf(s.flowN) >= 0) FLOW_STATE.N = s.flowN;          /* v0.28.0 */
   if ([1e-6, 1e-7].indexOf(s.flowTol) >= 0) FLOW_STATE.tol = s.flowTol;
+  /* v0.30.0 — wall shear settings */
+  if (['zz', 'xx', 'yy', 'all'].indexOf(s.flowDir) >= 0) FLOW_STATE.dir = s.flowDir;
+  if (['water', 'medium', 'custom'].indexOf(s.flowFluid) >= 0) FLOW_STATE.fluid = s.flowFluid;
+  if (s.flowMu > 0) FLOW_STATE.muCustom = s.flowMu;
+  if (typeof FLOW_SHEAR_TARGETS !== 'undefined' && FLOW_SHEAR_TARGETS.some(function(t){ return t.id === s.flowTarget; })) FLOW_STATE.target = s.flowTarget;
+  if (s.flowTLo > 0) FLOW_STATE.tLo = s.flowTLo;
+  if (s.flowTHi > 0) FLOW_STATE.tHi = s.flowTHi;
+  if (s.flowUnit === 'mm' || s.flowUnit === 'm') FLOW_STATE.speedUnit = s.flowUnit;
+  if (s.flowChamber > 0) FLOW_STATE.chamberMm = s.flowChamber;
   if ([16, 32, 64].indexOf(s.nonlinN) >= 0) NONLIN_STATE.N = s.nonlinN;
   if ([0.02, 0.05, 0.1].indexOf(s.cap) >= 0) NONLIN_STATE.cap = s.cap;
   if (['xx', 'yy', 'zz', 'all'].indexOf(s.axis) >= 0) { NONLIN_STATE.axis = s.axis; if (s.axis !== 'all') NONLIN_STATE.view = s.axis; }
@@ -190,9 +201,28 @@ function onSegClick(btn){
     FLOW_STATE.N = +v;
   } else if (group === 'flowTol'){
     FLOW_STATE.tol = v === 'high' ? 1e-7 : 1e-6;
+  } else if (group === 'flowDir' || group === 'flowFluid' || group === 'flowUnit'){   /* v0.30.0 — display only, no re-solve */
+    if (group === 'flowDir') FLOW_STATE.dir = v;
+    else if (group === 'flowFluid') FLOW_STATE.fluid = v;
+    else FLOW_STATE.speedUnit = v;
+    paintDock();
+    if (typeof renderDesignGrid === 'function') renderDesignGrid();
+    return;
   }
   recomputeEstimate();
   paintDock();
+}
+
+/* v0.30.0 — Flow number fields (custom viscosity, custom target, chamber).
+   Applied on change (Enter or leaving the field); bad entries snap back. */
+function onFlowNum(el){
+  var k = el.getAttribute('data-k'), v = parseFloat(String(el.value).replace(',', '.'));
+  if (!(v > 0) || !isFinite(v)) { paintDock(); return; }
+  if (k === 'tLo' && v >= FLOW_STATE.tHi) { paintDock(); return; }
+  if (k === 'tHi' && v <= FLOW_STATE.tLo) { paintDock(); return; }
+  if (k === 'muCustom' || k === 'tLo' || k === 'tHi' || k === 'chamberMm') FLOW_STATE[k] = v;
+  paintDock();
+  if (typeof renderDesignGrid === 'function') renderDesignGrid();
 }
 
 /* A run needs at least one pore filler, so the last one cannot be unticked. */
@@ -224,8 +254,13 @@ var DOCK_CONN_GROUPS = [{ label: null, items: [
   { v: 'off',      name: 'Keep everything', sub: 'No removal (buckling still drops floating islands — they are free bodies)' }
 ]}];
 
-function ddGroups(key){ return key === 'material' ? dockMaterialGroups() : DOCK_CONN_GROUPS; }
-function ddValue(key){ return key === 'material' ? MATERIAL_STATE.id : GEOM_STATE.connectivity; }
+/* v0.30.0 — shear target (19h FLOW_SHEAR_TARGETS) */
+function dockShearTargetGroups(){
+  var items = (typeof FLOW_SHEAR_TARGETS !== 'undefined') ? FLOW_SHEAR_TARGETS.map(function(t){ return { v: t.id, name: t.name, sub: t.sub }; }) : [];
+  return [{ label: null, items: items }];
+}
+function ddGroups(key){ return key === 'material' ? dockMaterialGroups() : key === 'shearTarget' ? dockShearTargetGroups() : DOCK_CONN_GROUPS; }
+function ddValue(key){ return key === 'material' ? MATERIAL_STATE.id : key === 'shearTarget' ? FLOW_STATE.target : GEOM_STATE.connectivity; }
 function ddFind(key, v){
   var g = ddGroups(key);
   for (var i = 0; i < g.length; i++) for (var j = 0; j < g[i].items.length; j++) if (g[i].items[j].v === v) return g[i].items[j];
@@ -239,6 +274,10 @@ function renderDropdown(key){
   var cur = ddFind(key, ddValue(key)) || { name: '—', sub: '' };
   var open = host.classList.contains('open');
   var label = escHtml(cur.name) + (key === 'material' && ddValue(key) !== F13LD_MATERIAL_RECIPE_ID ? '<em>' + escHtml(cur.sub.split(' · ')[0]) + '</em>' : '');
+  if (key === 'shearTarget' && typeof flowShearTarget === 'function'){
+    var tg = flowShearTarget(null);
+    if (tg) label = escHtml(cur.name) + '<em>' + escHtml(tg.label) + '</em>';
+  }
   var html = '<button type="button" class="dd-btn" onclick="toggleDropdown(\'' + key + '\', event)" aria-haspopup="listbox" aria-expanded="' + open + '" title="' + escHtml(cur.name + (cur.sub ? ' — ' + cur.sub : '')) + '">' +
     '<span class="val">' + label + '</span>' +
     '<svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>';
@@ -274,9 +313,16 @@ function pickDropdown(key, v, ev){
   if (ev) ev.stopPropagation();
   if (key === 'material') onMaterialChange(v);
   else if (key === 'conn') onConnectivityChange(v);
+  else if (key === 'shearTarget'){   /* v0.30.0 — display only */
+    FLOW_STATE.target = v;
+    closeDropdowns(); paintDock();
+    if (typeof renderDesignGrid === 'function') renderDesignGrid();
+    return;
+  }
   closeDropdowns();
   recomputeEstimate();
   paintDock();
+  if (key === 'material' && FLOW_STATE.target === 'material' && typeof renderDesignGrid === 'function') renderDesignGrid();
 }
 function closeDropdowns(){
   var open = document.querySelectorAll('.dd.open');
@@ -301,7 +347,7 @@ function dockSummary(key){
   if (key === 'buckle')  return BUCKLE_STATE.N + '³';
   if (key === 'nonlin')  return NONLIN_STATE.N + '³ · ' + Math.round(NONLIN_STATE.cap * 100) + '% · ' + (NONLIN_STATE.axis === 'all' ? 'XYZ' : NONLIN_STATE.axis.toUpperCase());
   if (key === 'thermal') return thermalFillersOn().map(function(f){ return f.id; }).join(' · ') || 'no filler';
-  if (key === 'flow')    return FLOW_STATE.N + '³' + (FLOW_STATE.tol < 1e-6 ? ' · high' : '');
+  if (key === 'flow')    return FLOW_STATE.N + '³' + (FLOW_STATE.tol < 1e-6 ? ' · high' : '') + ' · ' + (FLOW_STATE.dir === 'all' ? 'best' : FLOW_STATE.dir.charAt(0).toUpperCase());
   return '';
 }
 function dockMaterialShort(){
@@ -334,6 +380,19 @@ function paintDock(){
   paintSegGroup('pv', GEOM_STATE.partialVolume ? 'pv' : 'binary');
   paintSegGroup('flowN', FLOW_STATE.N);
   paintSegGroup('flowTol', FLOW_STATE.tol < 1e-6 ? 'high' : 'std');
+  /* v0.30.0 — wall shear settings */
+  paintSegGroup('flowDir', FLOW_STATE.dir);
+  paintSegGroup('flowFluid', FLOW_STATE.fluid);
+  paintSegGroup('flowUnit', FLOW_STATE.speedUnit);
+  els = document.querySelectorAll('input[data-k]');
+  for (i = 0; i < els.length; i++){
+    if (els[i] === document.activeElement) continue;
+    var fk = els[i].getAttribute('data-k');
+    if (FLOW_STATE[fk] != null) els[i].value = +(+FLOW_STATE[fk]).toPrecision(4);
+  }
+  el = document.getElementById('flowMuRow');     if (el) el.style.display = FLOW_STATE.fluid === 'custom' ? '' : 'none';
+  el = document.getElementById('flowTargetRow'); if (el) el.style.display = FLOW_STATE.target === 'custom' ? '' : 'none';
+  renderDropdown('shearTarget');
   /* switches + on/off styling (tabs, panes) */
   els = document.querySelectorAll('[data-phys-sw]');
   for (i = 0; i < els.length; i++){

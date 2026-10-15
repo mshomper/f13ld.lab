@@ -75,7 +75,12 @@ var THERMAL_FRAG_FLAG = 0.05;   /* > 5 % of the solid in sub-3³-voxel fragments
    openBits, throatVox, … } | { error }, kept out of d.results like thermal.
    Permeability needs about 8 cells across the narrowest pore (scope §3.8,
    checks F6/F7); fewer flags the design as coarse for permeability. */
-var FLOW_STATE = { N: 64, tol: 1e-6 };
+var FLOW_STATE = { N: 64, tol: 1e-6,
+  /* v0.30.0 — wall shear display settings (19h).  None of these re-solve: shear rescales with speed,
+     direction and viscosity.  dir: zz / xx / yy / all (all = the best direction); target: 19h
+     FLOW_SHEAR_TARGETS id, none by default (Matt, 2026-10-14: the tool is not only for biomed);
+     tLo / tHi: custom target, mPa; muCustom: mPa·s; speedUnit: mm (mm/s) or m (m/s); chamberMm. */
+  dir: 'all', fluid: 'water', muCustom: 1.0, target: 'none', tLo: 10, tHi: 30, speedUnit: 'mm', chamberMm: 10 };
 var FLOW_BY_DESIGN = {};
 var FLOW_THROAT_PERM = 8;   /* cells across the narrowest pore for permeability within ~2 % */
 var FLOW_THROAT_WSS = 15;   /* … and for wall shear stress (Phase 2) */
@@ -1017,7 +1022,10 @@ async function runRealSweep(N, runToken){
         nFresh.flow++;
         console.log('[flow] ' + (df.label || df.id) + ' · N=' + fN + ' · links ' + (FR.t_links_ms / 1000).toFixed(2) + ' s (' + FR.reused + ' reused, ' + FR.workers + ' workers) · solve ' +
                     ((FR.t_solve_ms || 0) / 1000).toFixed(2) + ' s · steps ' + FR.perAxis.map(function(q){ return q.open ? q.steps + (q.converged ? '' : '!') : '—'; }).join('/') +
-                    ' · k/L² ' + FR.kL2.map(function(v){ return v.toExponential(3); }).join(' / '));
+                    ' · k/L² ' + FR.kL2.map(function(v){ return v.toExponential(3); }).join(' / ') +
+                    (FR.wss ? ' · wall probes ' + FR.wss.n + ' (' + (FR.wss.t_ms / 1000).toFixed(2) + ' s) · force balance ' +
+                      FR.wss.axes.map(function(a){ return a ? (a.residual * 100).toFixed(2) + '%' : '—'; }).join(' / ') +
+                      ' · fallback ' + FR.wss.axes.map(function(a){ return a ? a.nNear + '+' + a.nSingle + ' drop ' + a.nDrop : '—'; }).join(' / ') : ''));
       } catch (err){
         if (stale()) return;
         console.error('[run] design ' + df.id + ' flow solve failed:', err);

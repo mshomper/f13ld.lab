@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="lab.css?v=0.29.2">
+<link rel="stylesheet" href="lab.css?v=0.30.0">
 </head>
 <body>
 <!-- v0.24.0 — startup splash: the wordmark resolves from scrambled glyphs
@@ -71,7 +71,7 @@
       <button class="fh-action-btn ghost" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design parameter or run a run-matrix CSV; exports stiffness per run">⟳ Sweep</button>
       <button class="fh-action-btn ghost" id="exportPdfBtn" onclick="onExportPdfClick()" disabled>⤓ Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
-      <span class="fh-version">v0.29.3</span>
+      <span class="fh-version">v0.30.0</span>
       <div class="fh-icon">
         <svg width="18" height="18" viewBox="0 0 40 40">
           <path d="M20 3 L20 8" stroke="#8C2A2E" stroke-width="1.9" stroke-linecap="round"/>
@@ -200,10 +200,17 @@
         </div>
       </section>
       <section class="dr-pane" data-pane="flow" data-phys-state="flow">
-        <div class="dr-ph"><span class="ico ico-lg" data-ico="flow"></span><div class="dr-pt-wrap"><div class="dr-pt">Flow</div><div class="dr-ps">Lattice Boltzmann creeping flow through the pores — permeability tensor, tortuosity, open and sealed pores</div></div><button type="button" class="sw" role="switch" data-phys-sw="flow" onclick="onPhysSwitch(event,'flow')" title="Run Flow, or skip it"></button></div>
+        <div class="dr-ph"><span class="ico ico-lg" data-ico="flow"></span><div class="dr-pt-wrap"><div class="dr-pt">Flow</div><div class="dr-ps">Lattice Boltzmann creeping flow through the pores — permeability tensor, tortuosity, open and sealed pores, wall shear stress</div></div><button type="button" class="sw" role="switch" data-phys-sw="flow" onclick="onPhysSwitch(event,'flow')" title="Run Flow, or skip it"></button></div>
         <div class="dr-grid">
           <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="flowN"><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div><div class="hint">Its own grid. Permeability wants about 8 voxels across the narrowest pore; the card flags designs below that. 128³ needs a GPU that allows 160 MB in one buffer.</div></div>
           <div class="dr-f"><label>Tolerance</label><div><div class="seg" data-seg="flowTol"><button type="button" data-v="std" onclick="onSegClick(this)">Standard</button><button type="button" data-v="high" onclick="onSegClick(this)">High</button></div></div><div class="hint">Each axis runs until the mean flow changes less than 1 in 10⁶ (Standard) or 10⁷ (High) over 500 steps.</div></div>
+          <div class="dr-f"><label>Flow direction</label><div><div class="seg" data-seg="flowDir"><button type="button" data-v="zz" onclick="onSegClick(this)">Z</button><button type="button" data-v="xx" onclick="onSegClick(this)">X</button><button type="button" data-v="yy" onclick="onSegClick(this)">Y</button><button type="button" data-v="all" onclick="onSegClick(this)">All</button></div></div><div class="hint">The direction the wall shear rows report. All picks the best one: the most wall at your shear target, or the most permeable direction with no target. No extra solve — all three directions already run for permeability.</div></div>
+          <div class="dr-f"><label>Fluid</label><div><div class="seg" data-seg="flowFluid"><button type="button" data-v="water" onclick="onSegClick(this)">Water 37 °C</button><button type="button" data-v="medium" onclick="onSegClick(this)">Culture medium</button><button type="button" data-v="custom" onclick="onSegClick(this)">Custom</button></div></div><div class="hint">Viscosity only scales the shear; permeability does not depend on it. Water 0.69 mPa·s, culture medium with 10 % serum 0.93 mPa·s, both at 37 °C.</div></div>
+          <div class="dr-f" id="flowMuRow"><label>Viscosity · mPa·s</label><div><input class="dr-num" type="number" min="0.01" step="0.01" data-k="muCustom" onchange="onFlowNum(this)" aria-label="Custom viscosity in mPa·s"></div><div class="hint">Dynamic viscosity of your fluid. Water at 20 °C is 1.0.</div></div>
+          <div class="dr-f wide"><label>Shear target</label><div><div class="dd" id="shearTargetDd"></div></div><div class="hint">The wall shear range you want the surface in. The cards then give the share of wall in it, the flow speed that maximizes it and the range of speeds that keeps at least half. No target reports shear per unit speed only.</div></div>
+          <div class="dr-f" id="flowTargetRow"><label>Custom target · mPa</label><div class="dr-pair"><input class="dr-num" type="number" min="0.001" step="0.1" data-k="tLo" onchange="onFlowNum(this)" aria-label="Lowest target shear in mPa"><span>to</span><input class="dr-num" type="number" min="0.001" step="0.1" data-k="tHi" onchange="onFlowNum(this)" aria-label="Highest target shear in mPa"></div><div class="hint">1 mPa = 0.001 Pa.</div></div>
+          <div class="dr-f"><label>Speed units</label><div><div class="seg" data-seg="flowUnit"><button type="button" data-v="mm" onclick="onSegClick(this)">mm/s</button><button type="button" data-v="m" onclick="onSegClick(this)">m/s</button></div></div><div class="hint">Superficial speed: flow rate ÷ the part's cross-section. Shear per mm/s reads in mPa; per m/s in Pa (the same number).</div></div>
+          <div class="dr-f"><label>Chamber diameter · mm</label><div><input class="dr-num" type="number" min="0.1" step="1" data-k="chamberMm" onchange="onFlowNum(this)" aria-label="Chamber diameter in mm"></div><div class="hint">Turns the best flow speed into a pump flow rate (mL/min) for a perfusion chamber this wide.</div></div>
         </div>
       </section>
       </div>
@@ -246,7 +253,7 @@
 <script src="14a-connectivity.js"></script>
 <script src="14c-stl-import.js"></script>
 <script src="14d-voxel-stats.js"></script>
-<script src="14e-link-field.js"></script>
+<script src="14e-link-field.js?v=0.30.0"></script>
 <script src="15-demo-recipes.js"></script>
 <script src="15b-demo-recipes-new.js"></script>
 <script src="15c-materials.js"></script>
@@ -262,8 +269,9 @@
 <script src="16i-elastic-fast.js"></script>
 <script src="17a-thermal-cpu-ref.js"></script>
 <script src="17b-thermal-solver.js"></script>
-<script src="17c-thermal-voxel-pool.js?v=0.29.2"></script>
-<script src="19g-flow-lbm.js"></script>
+<script src="17c-thermal-voxel-pool.js?v=0.30.0"></script>
+<script src="19g-flow-lbm.js?v=0.30.0"></script>
+<script src="19h-flow-wss.js?v=0.30.0"></script>
 <script src="20-svg-mocks.js"></script>
 <script src="20b-curve-plotly.js"></script>
 <script src="20c-f13-shade.js"></script>
@@ -271,9 +279,9 @@
 <script src="22-stiffness-viz.js"></script>
 <script src="23-flow-viz.js?v=0.29.1"></script>
 <script src="30-view-tabs.js?v=0.29.1"></script>
-<script src="40-design-grid.js?v=0.29.3"></script>
-<script src="50-controls.js"></script>
-<script src="51-dock.js"></script>
+<script src="40-design-grid.js?v=0.30.0"></script>
+<script src="50-controls.js?v=0.30.0"></script>
+<script src="51-dock.js?v=0.30.0"></script>
 <script src="52-status.js"></script>
 <script src="60-add-design.js?v=0.29.2"></script>
 <script src="61-import-stl.js"></script>

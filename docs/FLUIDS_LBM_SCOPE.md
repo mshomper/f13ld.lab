@@ -596,3 +596,40 @@ Float64 CPU reference (`19f-flow-cpu-ref.js`) on geometry built through `14e bui
 
 **Next:** Phase 2 wall shear stress; then flow-rate units (mm/s) on the colour bar and the WSS map on the strut surface.
 
+
+---
+
+## 15. Phase 2 — wall shear stress (2026-10-14, v0.30.0)
+
+**Decisions (Matt, 2026-10-14)**
+- The flow tool is not only for biomedical work. The cards lead with general flow (permeability, tortuosity, open porosity, narrowest pore), then wall shear. No "in window" wording: the rows say what they measure.
+- X / Y / Z on one row each (permeability, tortuosity). Anisotropy, k/L² and relative density move into the notes.
+- Wall shear is reported **per unit flow speed** (median / 95th percentile), which is exact at every speed in creeping flow and needs no reference flow.
+- The **shear target** is a Flow setting (presets from §3.7, "From the material", custom), **none by default**. With a target the cards add the share of wall at the target, the best flow speed (with mL/min for a chamber diameter) and the usable speed range (at least half the best share).
+- **Flow direction** is a setting like crush's load axis: Z / X / Y / All. All reports the best direction — the most wall at the target, or the most permeable with no target — so the card says how to orient the cells. It costs nothing: all three directions already run.
+- Speed units are a setting (mm/s or m/s; shear per mm/s reads in mPa, per m/s in Pa — the same number).
+- Coarse grids still show their numbers, with a warning (narrowest pore under 15 voxels).
+- Permeability labels carry a hover note with the trabecular range (Nauman, Fong & Keaveny 1999: 0.027–20 ×10⁻⁹ m²), kept off the card itself.
+
+**Built**
+- `14e marginWallProbes`: the marching-tetrahedra wall of the surface-area metric, one probe per surface voxel (area-weighted centre, summed area, summed area vector as the normal into the fluid); voxels whose triangles face opposite ways (walls thinner than a voxel) keep one probe per triangle. It also returns the exact solid volume under the same linear margin (`solidVol`) for the force balance. Built in the `flowlinks` worker jobs (17c, `tv-8`; `FLOW_LINKS_VERSION` `fl-3`).
+- `19g`: `flowStressWGSL` (the same gather as the step kernel, then σ' and ρ − 1 per cell) and `readStress`; after each open axis the stress is read back and `flowWallTractions` runs. `FLOW_GPU_VERSION` `fg-3`, so older cached flow results re-solve.
+- `19h-flow-wss.js` (new): sampling and extrapolation (pair 1.25 / 2.25 voxels, then 0.75 / 1.5, then a single value at 1.0 where stencils are mostly solid; walls of sealed pores drop), unit shear vectors per probe per axis, force balance, statistics (`flowShearStats`: area-weighted median / 95th per m/s; with a target the widest window over the sorted shears — exact — centred on the plateau within 1 % of wall, share in / under / over, usable range, Reynolds number on the median pore), direction pick (`flowShearPick`), settings (`flowShearConfig`).
+- Flow pane: Flow direction, Fluid (water 37 °C, culture medium, custom viscosity), Shear target, Speed units, Chamber diameter. All rescale the cards live — no re-solve.
+- Cards: two labelled sections, wide value column.
+
+**Checks** (`node proto/flow/wss_checks.js`, Float64 CPU fields through the lab's own probe code)
+
+| # | Case | Result |
+|---|---|---|
+| W1 | Circular pipe along x, R = 8 / 16 | Mean wall shear −0.16 % / −0.04 %; scatter 0.86 % / 0.40 %; force balance 0.03 % / 0.01 % |
+| W2 | Square duct, side 28.6 / 44.3 (sharp inside corners) | Mean wall shear −0.99 % / −0.38 %; force balance −1.6 % / −0.8 % (the F5 corner effect, falling with size) |
+| W3 | Probe areas vs `marginSurfaceArea` (sheet gyroid 24³, 32³); slabs merged | Equal to 3e-9; normals all point away from the discretized solid |
+| W4 | Sheet gyroid (t 0.4), three axes, 32³ → 48³ | Force balance −2.3 % → −1.2 %; median shear per mm/s (water, 2 mm cell) 12.4 → 13.2 mPa; a (1,1,0) solve equals the x + y shears to 6e-5; k/L² 2.010e-3 → 2.021e-3. Wall shear converges more slowly than permeability, as §3.8 expects (15–20 voxels across throats) |
+| — | Generated stress shader vs the reference formula | identical (transcribed and run in node) |
+
+The card warns when the force balance is off by more than 5 % (`FLOW_FORCE_WARN`). The run log prints probes, the force balance per axis and how many probes used the fallbacks.
+
+**For Matt to check on his GPU:** a Flow run on his designs (the log line now ends with the wall probe summary), then the Flow settings: direction, target presets, custom target, units. `runFlowGPUCheck(i)` should still print `pass: true`.
+
+**Next (Phase 3, viewer):** the wall shear map on the strut surface (the probes keep their positions and normals for the splat), histogram and in-target vs speed curve, orientation sphere.
