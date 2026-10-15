@@ -39,6 +39,14 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (Configure → Crush → Grid, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Load axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.34.0
+
+- **Atlas in the header**, beside Sweep, with the response-surface icon and a count of finished runs; greyed with a hover note until a sweep has results. Header buttons use drawn icons (Add Design, Import STL, Sweep, Atlas, Export PDF).
+- **Sweep panel:** "Explore results in Atlas" is the one filled button; a completion strip appears when a sweep finishes or is stopped (runs, physics, notes, failures) with the same button — the Atlas never opens on its own.
+- **Runs table fits its pane** — no sideways scroll: Setting ellipsizes, E and G each on one line, κ and K columns when thermal or flow ran, N / ν / expected % and iterations / residual in hovers; G, then κ / K, hide on narrow panes.
+- **Run all is greyed while a sweep runs**, with a hover note (closing the Sweep panel never stops a sweep).
+- **Atlas first-open guide** (four steps) and a help icon that brings it back.
+
 ## What's new in v0.33.0
 
 - **Atlas: Stiffness | Thermal | Flow switch** in the header (drawn physics icons, Lab red). Cell geometry, series and selection stay shared; every other panel follows the mode:

@@ -1,5 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
+> **2026-10-15 · v0.34.0** — same branch `flow-sweep`, waiting on Matt's click-test (mockup `atlas-entry-mockup.html` approved; Atlas mark = response surface): header Atlas button with run count, drawn header icons (Mesh button unchanged — stamped across the suite), Sweep-panel Atlas call to action and completion strip (no auto-open), condensed runs table without sideways scroll, Run all locked with a hover note during a sweep, Atlas first-open guide + help icon. Give Matt commit-pinned raw.githack links (branch links cache).
+>
 > **2026-10-15 · v0.33.0** — same branch `flow-sweep`, waiting on Matt's click-test: Atlas Stiffness | Thermal | Flow switch (mockup approved), per-mode panels, fitted 3-D axis, bone band, fillers overlaid, cross-physics design space; sweep keeps full κ and K tensors. Scope §18.
 >
 > **2026-10-15 · v0.32.0** — branch `flow-sweep`, waiting on Matt's click-test: fluids Phase 4 — flow in the parameter sweep (Physics: stiffness + thermal / flow toggles; flow on the Configure flow grid), flow CSV columns, Atlas flow metrics, 1,000-point wall shear summary per run (fluid / target / direction change after a sweep without a re-solve), console check `runFlowCastroCheck()` (F12). Scope §17; recap [`SESSION_RECAP_2026-10-15_flow-sweep.md`](SESSION_RECAP_2026-10-15_flow-sweep.md).

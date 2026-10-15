@@ -470,8 +470,7 @@ function setDesignCount(text){
    ============================================================ */
 function onRunClick(){
   if (typeof SWEEP_STATE !== 'undefined' && SWEEP_STATE.running){
-    alert('A parameter sweep is running. Stop it from the Sweep panel first.');
-    return;
+    return;   /* v0.34.0 — the button is greyed with a hover note while a sweep runs (62 labPaintRunLock) */
   }
   if (RUN_STATE.running){
     cancelRun();

@@ -479,10 +479,12 @@ function openSweepAtlas() {
   ov.id = 'atOverlay'; ov.className = 'imp-overlay at-overlay';
   ov.innerHTML =
     '<div class="at-page" role="dialog" aria-label="Sweep Atlas">' +
-      '<header class="at-top"><div class="at-tblk"><div class="at-title">Sweep Atlas <span class="at-ver">' + swEsc(typeof sweepTitle === 'function' ? sweepTitle() : (SWEEP_STATE.name || '')) + '</span></div>' +
+      '<header class="at-top"><div class="at-tblk"><div class="at-title">' + (typeof labIconSvg === 'function' ? '<span class="at-tico">' + labIconSvg('atlas') + '</span>' : '') + 'Sweep Atlas <span class="at-ver">' + swEsc(typeof sweepTitle === 'function' ? sweepTitle() : (SWEEP_STATE.name || '')) + '</span></div>' +
         '<div class="at-meta" id="atMeta"></div></div>' +
         '<div class="at-modes" id="atModes" role="tablist" aria-label="Physics"></div>' +
-        '<button class="dc-icon-btn at-close" title="Close" onclick="closeSweepAtlas()">' + ATLAS_ICON.close + '</button></header>' +
+        '<div class="at-hbtns2"><button class="dc-icon-btn at-help" id="atHelpBtn" title="How to use the Atlas" aria-label="How to use the Atlas" onclick="atlasGuide(true)">' + (typeof labIconSvg === 'function' ? labIconSvg('help') : '') + '</button>' +
+        '<button class="dc-icon-btn at-close" title="Close" onclick="closeSweepAtlas()">' + ATLAS_ICON.close + '</button></div></header>' +
+      '<div class="at-guide" id="atGuide" hidden></div>' +
       '<div class="at-controls" id="atControls"></div>' +
       '<div class="at-grid2">' +
         '<section class="at-panel"><div class="at-phead"><h3>Cell geometry</h3><div class="at-hbtns"><div class="at-seg" id="atTiles"></div>' + atlasViewBtns('Geo') + '</div></div>' +
@@ -511,8 +513,33 @@ function openSweepAtlas() {
   ov.addEventListener('mousedown', function (e) { if (e.target === ov) closeSweepAtlas(); });
   atlasMountViews();
   atlasUpdate();
+  atlasGuide(false);
   window.addEventListener('resize', atlasOnResize);
 }
+/* v0.34.0 — first-open guide: four steps; dismissed once it stays dismissed in this
+   browser; the help icon in the header brings it back (toggles). */
+var ATLAS_GUIDE_KEY = 'f13ld.lab.atlasGuide';
+function atlasGuide(fromHelp) {
+  var el = swEl('atGuide'), seen = false;
+  if (!el) return;
+  try { seen = localStorage.getItem(ATLAS_GUIDE_KEY) === 'done'; } catch (e) {}
+  if (fromHelp) { if (!el.hidden) { el.hidden = true; atlasPaintHelp(); return; } }
+  else if (seen) { el.hidden = true; atlasPaintHelp(); return; }
+  var ic = function (n) { return '<span class="si">' + (typeof labIconSvg === 'function' ? labIconSvg(n) : '') + '</span>'; };
+  var steps = [['elastic', 'Pick a physics', 'Stiffness, Thermal or Flow at the top — every panel follows it.'],
+    ['slider', 'Pick a run', 'Scrub the run slider, or click any map cell or chart point.'],
+    ['atlas', 'Read the surface', 'How a result changes over both swept parameters at once.'],
+    ['front', 'Compare designs', 'The design space puts any two results against each other.']];
+  el.innerHTML = '<div class="hd"><b>Explore every run of your sweep</b><span>' + (seen ? 'opened from the help icon' : 'shown the first time · bring it back with the help icon') + '</span></div>' +
+    '<div class="steps">' + steps.map(function (s) { return '<div class="step">' + ic(s[0]) + '<div><b>' + s[1] + '</b><span>' + s[2] + '</span></div></div>'; }).join('') + '</div>' +
+    '<div class="ft">' + (seen ? '' : '<button class="g" onclick="atlasGuideClose(false)">Show again next time</button>') + '<button onclick="atlasGuideClose(true)">Got it</button></div>';
+  el.hidden = false; atlasPaintHelp();
+}
+function atlasGuideClose(done) {
+  if (done) { try { localStorage.setItem(ATLAS_GUIDE_KEY, 'done'); } catch (e) {} }
+  var el = swEl('atGuide'); if (el) el.hidden = true; atlasPaintHelp();
+}
+function atlasPaintHelp() { var b = swEl('atHelpBtn'), el = swEl('atGuide'); if (b) b.setAttribute('aria-pressed', String(!!(el && !el.hidden))); }
 function closeSweepAtlas() {
   ATLAS.open = false;
   if (ATLAS.rm) { try { ATLAS.rm.destroy(); } catch (e) {} ATLAS.rm = null; }

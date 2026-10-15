@@ -37,6 +37,15 @@ var LAB_ICONS = {
   fluid:   '<circle cx="20" cy="20" r="5.5"' + LAB_ICON_SV + '/><path d="M3 12 C 12 12, 14 8.5, 20 8.5 S 29 12, 37 12 M3 28 C 12 28, 14 31.5, 20 31.5 S 29 28, 37 28 M3 20 H10 M30 20 H37"' + LAB_ICON_SV + ' stroke-width="2.2"/><circle class="acc" cx="25.5" cy="16" r="2.8"/>'
 };
 LAB_ICONS.flow = LAB_ICONS.fluid;   /* v0.28.0 — the Flow mode key */
+/* v0.34.0 — header and Atlas icons (Matt, 2026-10-15: the Atlas mark is the response surface) */
+LAB_ICONS.atlas = '<path d="M5 27 C 11 22, 15 13, 20 14 S 28 22, 35 18"' + LAB_ICON_SV + '/><path d="M9 33 C 15 28, 19 20, 24 21 S 31 27, 37 24"' + LAB_ICON_SV + ' opacity=".65"/><path d="M5 27 L9 33 M35 18 L37 24 M20 14 L24 21"' + LAB_ICON_SV + ' stroke-width="1.8" opacity=".55"/><circle class="acc" cx="18.5" cy="12" r="3.2"/>';
+LAB_ICONS.sweep = '<path d="M31 14 A 12.5 12.5 0 0 0 9.5 13"' + LAB_ICON_SV + '/><path d="M9 26 A 12.5 12.5 0 0 0 30.5 27"' + LAB_ICON_SV + '/><path d="M31 7 V14 H24 M9 33 V26 H16"' + LAB_ICON_SV + '/><circle class="acc" cx="20" cy="20" r="3.2"/>';
+LAB_ICONS.plus = '<path d="M20 8 V32 M8 20 H32"' + LAB_ICON_SV + ' stroke-width="3.2"/>';
+LAB_ICONS.importCell = '<path d="M8 24 V33 H32 V24"' + LAB_ICON_SV + '/><path d="M20 5 V22 M13 15 L20 22 L27 15"' + LAB_ICON_SV + '/>';
+LAB_ICONS.exportDoc = '<path d="M11 5 H24 L30 11 V35 H11 Z"' + LAB_ICON_SV + '/><path d="M24 5 V11 H30"' + LAB_ICON_SV + ' stroke-width="2" opacity=".7"/><path d="M20.5 15 V28 M15.5 23 L20.5 28 L25.5 23"' + LAB_ICON_SV + '/>';
+LAB_ICONS.front = '<path d="M6 5 V34 H36"' + LAB_ICON_SV + ' opacity=".7"/><path d="M10 9 C 14 17, 20 24, 33 29"' + LAB_ICON_SV + ' stroke-width="2" opacity=".75"/><circle cx="14" cy="26" r="1.9" fill="currentColor"/><circle cx="21" cy="30" r="1.9" fill="currentColor"/><circle cx="27" cy="25" r="1.9" fill="currentColor" opacity=".7"/><circle cx="12" cy="18" r="1.9" fill="currentColor" opacity=".7"/><circle class="acc" cx="18" cy="19.5" r="3.2"/>';
+LAB_ICONS.slider = '<path d="M5 20 H35"' + LAB_ICON_SV + '/><path d="M5 12 V28 M35 12 V28"' + LAB_ICON_SV + ' stroke-width="2" opacity=".5"/><circle class="acc" cx="22" cy="20" r="4.2"/>';
+LAB_ICONS.help = '<circle cx="20" cy="20" r="15"' + LAB_ICON_SV + '/><path d="M15.2 15.5 C 15.2 12.2, 17.5 10.8, 20 10.8 C 22.8 10.8, 24.8 12.6, 24.8 15.1 C 24.8 18.4, 20 18.7, 20 22.5"' + LAB_ICON_SV + '/><circle cx="20" cy="28.6" r="1.9" fill="currentColor"/>';
 function labIconSvg(name){ return '<svg viewBox="0 0 40 40" aria-hidden="true">' + (LAB_ICONS[name] || '') + '</svg>'; }
 
 /* Run-button markup the solver code paints through (50-controls.js). */

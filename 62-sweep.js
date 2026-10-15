@@ -122,6 +122,7 @@ function sweepLoad() {
   }).catch(function () { return null; }).then(function (saved) {
     if (saved) sweepApplySaved(saved);
     else if (legacy && sweepApplySaved(legacy)) { sweepSave(); }
+    labPaintAtlasBtn();
     try { localStorage.removeItem(SWEEP_STORE_KEY); } catch (e) {}
     if (SWEEP_STATE.open) { sweepRenderBuilder(); sweepRender(); }
   });
@@ -762,6 +763,8 @@ async function sweepStart() {
   try { ok = await ensureDevice(); } catch (e) { ok = false; }
   if (!ok) { alert('WebGPU is not available, so the sweep cannot run.'); return; }
   SWEEP_STATE.running = true; SWEEP_STATE.stopRequested = false; SWEEP_STATE.startedAt = performance.now();
+  SWEEP_STATE.finished = null; SWEEP_UI.doneHidden = false;   /* v0.34.0 — completion strip */
+  var doneIds = [];
   sweepRender(); sweepPaintHeaderBtn();
   for (var i = 0; i < todo.length; i++) {
     if (SWEEP_STATE.stopRequested) break;
@@ -780,11 +783,39 @@ async function sweepStart() {
       SWEEP_STATE.results[run.id] = { id: run.id, error: (err && err.message) || String(err), when: new Date().toISOString() };
       console.error('[sweep] ' + run.id + ' failed:', err);
     }
+    doneIds.push(run.id);
     sweepSave();
     if (typeof atlasOnResult === 'function') atlasOnResult();
   }
+  SWEEP_STATE.finished = { ids: doneIds, total: todo.length, stopped: doneIds.length < todo.length, secs: (performance.now() - SWEEP_STATE.startedAt) / 1000 };
   SWEEP_STATE.running = false; SWEEP_STATE.current = null;
   sweepRender(); sweepPaintHeaderBtn();
+}
+/* v0.34.0 — "Sweep finished" strip above the runs, with the way into the Atlas (no auto-open, Matt 2026-10-15) */
+function sweepDoneStrip() {
+  var fin = SWEEP_STATE.finished;
+  if (!fin || SWEEP_UI.doneHidden || SWEEP_STATE.running || !fin.ids.length) return '';
+  var ok = 0, failed = 0, notes = 0, noteRuns = 0, th = false, fl = false, fillers = {};
+  fin.ids.forEach(function (id) {
+    var r = SWEEP_STATE.results[id]; if (!r) return;
+    if (r.error) { failed++; return; }
+    ok++;
+    if (r.notes && r.notes.length) { notes += r.notes.length; noteRuns++; }
+    if (r.thermal && r.thermal.byFiller) { th = true; for (var f in r.thermal.byFiller) fillers[f] = 1; }
+    if (r.flow && !r.flow.error) fl = r.flow.N;
+  });
+  var phys = 'stiffness' + (th ? ', thermal (' + Object.keys(fillers).join(', ') + ')' : '') + (fl ? ', flow (' + fl + '³)' : '');
+  var head = fin.stopped ? 'Sweep stopped · ' + fin.ids.length + ' of ' + fin.total + ' runs' : 'Sweep finished · ' + fin.ids.length + ' run' + (fin.ids.length > 1 ? 's' : '');
+  return '<div class="sw-done' + (fin.stopped ? ' stopped' : '') + '"><span class="sw-done-ok">' + (typeof ATLAS_ICON !== 'undefined' ? ATLAS_ICON.pass : '') + '</span>' +
+    '<div class="sw-done-txt"><div class="t1">' + head + ' in ' + sweepFmtDur(fin.secs) + '</div>' +
+    '<div class="t2">' + swEsc(phys) + (failed ? ' on ' + ok + ' run' + (ok === 1 ? '' : 's') + ' · <span class="bad">' + failed + ' failed</span>' : ' on every run') +
+      (notes ? ' · <span class="w">' + notes + ' note' + (notes > 1 ? 's' : '') + '</span> on ' + noteRuns + ' run' + (noteRuns > 1 ? 's' : '') : '') + '</div></div>' +
+    (ok ? sweepAtlasCta() : '') +
+    '<button class="sw-done-x" title="Dismiss" aria-label="Dismiss" onclick="SWEEP_UI.doneHidden=true;sweepRenderBar()">' + (typeof ATLAS_ICON !== 'undefined' ? ATLAS_ICON.close : '') + '</button></div>';
+}
+function sweepAtlasCta(disabled) {
+  return '<button class="sw-cta" onclick="openSweepAtlas()"' + (disabled ? ' disabled' : '') + ' title="See every run’s results — maps, surfaces and charts">' +
+    (typeof labIconSvg === 'function' ? labIconSvg('atlas') : '') + 'Explore results in Atlas</button>';
 }
 
 /* ── Export ───────────────────────────────────────────────── */
@@ -1345,8 +1376,9 @@ function sweepRenderBar() {
   });
   var wrap = swEl('swTableWrap'); if (wrap) wrap.hidden = !runs.length;
   if (!runs.length) { el.innerHTML = '<div class="sw-empty">No runs yet. Build a sweep from a design or load a CSV run matrix above.</div>'; return; }
+  var strip = sweepDoneStrip();
   var tierBtns = Object.keys(tiers).sort().map(function (t) { return '<a href="#" onclick="sweepSelect(\'' + t + '\');return false;">tier ' + t + '</a>'; }).join(' · ');
-  el.innerHTML =
+  el.innerHTML = strip +
     '<div class="sw-bar-row sw-runs-head"><div class="sw-title-blk"><div class="sw-title"><span>' + swEsc(sweepTitle()) + '</span>' +
         '<button class="sw-rename" onclick="sweepRename()"' + (SWEEP_STATE.running ? ' disabled' : '') + ' title="Rename this study (also names the exported CSV)">✎ rename</button></div>' +
       '<div class="imp-sub">' + runs.length + ' runs · ' + nDone + ' done · ' + nSel + ' selected' +
@@ -1354,14 +1386,14 @@ function sweepRenderBar() {
       ' · <a href="#" onclick="sweepSelect(\'pending\');return false;">not run</a> · <a href="#" onclick="sweepSelect(\'none\');return false;">none</a></span>' +
       (SWEEP_STATE.previewing ? ' · <span class="sw-checking">checking geometry ' + SWEEP_STATE.previewDone + ' / ' + SWEEP_STATE.previewTotal + '…</span>' : '') + '</div></div>' +
       '<span class="sw-spacer"></span><div class="sw-actions">' +
-      '<button class="fh-action-btn ghost" onclick="openSweepAtlas()"' + (nDone ? '' : ' disabled') + ' title="Explore the results: geometry, stiffness surface, parameter map and charts">◈ Atlas</button>' +
+      sweepAtlasCta(!nDone) +
       (SWEEP_STATE.running
         ? '<span class="imp-sub">Running ' + swEsc(SWEEP_STATE.current || '') + ' · ~' + sweepFmtDur(sweepEta(nTodo)) + ' left</span>' +
           '<button class="fh-action-btn ghost" onclick="SWEEP_STATE.stopRequested=true;this.disabled=true;this.textContent=\'Stopping after this run…\'">Stop</button>'
         : '<button class="fh-action-btn ghost" onclick="sweepClearResults(true)" title="Delete the results of the ticked runs so they run again; the runs stay in the list">Clear results of selected</button>' +
           '<button class="fh-action-btn ghost" onclick="sweepExportCsv()"' + (nDone ? '' : ' disabled') + '>Export CSV</button>' +
           (nTodo.length ? '<span class="imp-sub">' + nTodo.length + ' to run · ~' + sweepFmtDur(sweepEta(nTodo)) + '</span>' : '') +
-          '<button class="fh-action-btn" onclick="sweepStart()"' + (nTodo.length && !SWEEP_STATE.previewing ? '' : ' disabled') + '>▶ Run ' + nTodo.length + '</button>') +
+          '<button class="fh-action-btn" onclick="sweepStart()"' + (nTodo.length && !SWEEP_STATE.previewing ? '' : ' disabled') + '>' + (typeof DOCK_RUN_IDLE !== 'undefined' ? DOCK_RUN_IDLE.replace(/Run all$/, '') : '') + 'Run ' + nTodo.length + '</button>') +
     '</div></div>';
 }
 /* Run settings: precision, void, second grid (v0.12.1: its own section). */
@@ -1453,51 +1485,80 @@ function sweepNew() {
 }
 var SWEEP_UI = { notesOpen: false, tab: null };
 function sweepRender() {
+  labPaintAtlasBtn();
   sweepRenderBar();
   var tb = swEl('swTable'), notes = swEl('swNotes');
   if (!tb) return;
+  /* v0.34.0 — fixed columns, no sideways scroll (Matt: a hard no): Setting ellipsizes
+     (full text on hover), E and G each on one line, N / ν / expected % in the Run and
+     Solid hovers, iterations and residual in the Time hover; κ and K columns when a run
+     has thermal or flow.  Narrow panes hide G, then κ / K, instead of scrolling. */
   var showRef = SWEEP_STATE.runs.some(function (r) { return r.ref && r.ref.Ex != null; });
-  var showExp = SWEEP_STATE.runs.some(function (r) { return r.expectedVf != null; });
-  var h = '<thead><tr><th></th><th>Run</th><th>Setting</th><th>N</th><th>ν</th>' +
-    (showExp ? '<th>Expected %</th>' : '') + '<th>Solid %</th><th>Ex</th><th>Ey</th><th>Ez</th><th>Gyz</th><th>Gxz</th><th>Gxy</th>' +
-    (showRef ? '<th title="Ex, Ey, Ez ÷ reference">÷ ref</th>' : '') +
-    '<th>Iter.</th><th>Resid.</th><th>Time</th><th class="fl">Checks</th></tr></thead><tbody>';
+  var showTh = false, showFl = false, fills = {};
+  SWEEP_STATE.runs.forEach(function (run) { var r = SWEEP_STATE.results[run.id]; if (!r) return;
+    if (r.thermal && r.thermal.byFiller) { showTh = true; for (var ff in r.thermal.byFiller) fills[ff] = 1; }
+    if (r.flow && !r.flow.error) showFl = true; });
+  var thF = (typeof ATLAS !== 'undefined' && ATLAS.focus && fills[ATLAS.focus]) ? ATLAS.focus : (fills.water ? 'water' : Object.keys(fills)[0]);
+  var h = '<thead><tr><th class="c-cb"></th><th class="c-id">Run</th><th class="c-set">Setting</th><th class="c-vf">Solid %</th>' +
+    '<th class="c-tri" title="Ex / Ey / Ez ÷ E solid">E x / y / z</th><th class="c-tri hN" title="Gyz / Gxz / Gxy ÷ E solid">G yz / xz / xy</th>' +
+    (showRef ? '<th class="c-ref" title="Ex, Ey, Ez ÷ reference">÷ ref</th>' : '') +
+    (showTh ? '<th class="c-ph hS" title="Mean conductivity with pores filled with ' + swEsc(thF) + ', W/m·K">κ ' + swEsc(thF) + '</th>' : '') +
+    (showFl ? '<th class="c-ph hS" title="Mean permeability of the open axes, ×10⁻⁹ m²">K ×10⁻⁹</th>' : '') +
+    '<th class="c-t">Time</th><th class="c-fl fl">Checks</th></tr></thead><tbody>';
   var allNotes = [], noteRuns = {};
+  function emptyCells(msg, cls) {
+    return '<td class="c-tri ' + (cls || '') + '"' + (msg ? ' title="' + swEsc(msg) + '"' : '') + '>' + (msg ? swEsc(msg) : '') + '</td><td class="hN"></td>' +
+      (showRef ? '<td></td>' : '') + (showTh ? '<td class="hS"></td>' : '') + (showFl ? '<td class="hS"></td>' : '') + '<td></td>';
+  }
   SWEEP_STATE.runs.forEach(function (run) {
     var r = SWEEP_STATE.results[run.id], cur = SWEEP_STATE.current === run.id;
     var cls = cur ? 'cur' : (r && r.error ? 'err' : (r ? 'done' : ''));
-    var setting = run.params ? run.params.map(function (p) { return p.name + ' ' + sweepFmtVal(p.value); }).join(' \u00b7 ')
+    var setting = run.params ? run.params.map(function (p) { return p.name + ' ' + sweepFmtVal(p.value); }).join(' · ')
                              : (run.param ? run.param.name + ' ' + (+(+run.param.value).toPrecision(4)) : '');
     if (run.shift) setting = run.shift + ' · ' + setting;
-    h += '<tr class="' + cls + '" title="' + swEsc(run.purpose + (run.note ? ' — ' + run.note : '')) + '">' +
-      '<td><input type="checkbox"' + (SWEEP_STATE.selected[run.id] ? ' checked' : '') + (SWEEP_STATE.running ? ' disabled' : '') +
+    var setTxt = (run.recipe && run.label ? run.label.split(' · ')[0] + ' · ' : '') + setting;
+    h += '<tr class="' + cls + '">' +
+      '<td class="c-cb"><input type="checkbox"' + (SWEEP_STATE.selected[run.id] ? ' checked' : '') + (SWEEP_STATE.running ? ' disabled' : '') +
         ' onchange="sweepToggle(\'' + run.id + '\', this.checked)"></td>' +
-      '<td class="id">' + swEsc(run.id) + '</td><td class="set">' + swEsc((run.recipe && run.label ? run.label.split(' · ')[0] + ' · ' : '') + setting) + '</td>' +
-      '<td>' + run.N + '</td><td>' + run.nu + '</td>' + (showExp ? '<td>' + (run.expectedVf != null ? run.expectedVf : '') + '</td>' : '');
+      '<td class="id" title="' + swEsc('N = ' + run.N + ' · ν ' + run.nu + (run.purpose ? ' · ' + run.purpose : '') + (run.note ? ' — ' + run.note : '')) + '">' + swEsc(run.id) + '</td>' +
+      '<td class="set" title="' + swEsc(setTxt) + '">' + swEsc(setTxt) + '</td>';
     var st = SWEEP_STATE.preview[run.id], flags = sweepFlags(run, st);
     var flagHtml = '<td class="fl">' + (st ? (flags.length ? flags.map(function (f) {
         return '<span class="imp-chip ' + (f.level === 'skip' ? 'bad' : (f.level === 'warn' ? 'warn' : '')) + '" title="' + swEsc(f.text) + '">' + swEsc(f.short) + '</span>'; }).join(' ')
       : '<span class="imp-chip good" title="solid ' + (st.vf_trim * 100).toFixed(2) + ' %, spans x y z' + (st.thinVox ? ', thinnest feature ≈ ' + st.thinVox.toFixed(1) + ' voxels' : '') + '">ok</span>')
       : (SWEEP_STATE.previewing ? '<span class="imp-sub">…</span>' : '')) + '</td>';
-    var preVf = st && !st.error ? '<td class="pre" title="voxel solid after island trim (geometry check)">' + (st.vf_trim * 100).toFixed(2) + '</td>' : '<td></td>';
-    if (cur) h += preVf + '<td colspan="' + (7 + (showRef ? 1 : 0)) + '" class="imp-sub">solving…</td><td></td><td></td>';
-    else if (r && r.error) h += preVf + '<td colspan="' + (7 + (showRef ? 1 : 0)) + '" class="sw-err">' + swEsc(r.error) + '</td><td></td><td></td>';
+    var expT = run.expectedVf != null ? 'expected ' + run.expectedVf + ' %' : '';
+    var preVf = st && !st.error ? '<td class="pre" title="voxel solid after island trim (geometry check)' + (expT ? ' · ' + expT : '') + '">' + (st.vf_trim * 100).toFixed(2) + '</td>' : '<td' + (expT ? ' title="' + expT + '"' : '') + '></td>';
+    if (cur) h += preVf + emptyCells('solving…', 'imp-sub');
+    else if (r && r.error) h += preVf + emptyCells(r.error, 'sw-err');
     else if (r) {
-      var vfCls = r.vf_check != null && Math.abs(r.vf_check) > SWEEP_VF_TOL ? ' class="warn"' : '';
+      var vfCls = r.vf_check != null && Math.abs(r.vf_check) > SWEEP_VF_TOL ? ' warn' : '';
       var src = r.ext && r.ext.Ex != null ? r.ext : r;
-      var ratios = '';
-      if (showRef) ratios = '<td>' + (run.ref && run.ref.Ex != null ? ['Ex', 'Ey', 'Ez'].map(function (k) {
-        var ref = run.ref[k]; return Math.abs(ref) > 1e-5 ? (src[k] / ref).toFixed(2) : '—'; }).join(' / ') : '') + '</td>';
-      function ec(k) {
-        if (src === r) return '<td>' + swFmt(r[k]) + '</td>';
-        return '<td class="ext" title="extrapolated from N = ' + r.ext.coarseN + ' and ' + r.ext.fineN + ' (order ' + r.ext.order + '); N = ' + r.N + ': ' +
-          swFmt(r[k]) + ', N = ' + r.companion.N + ': ' + swFmt(r.companion[k]) + '">' + swFmt(r.ext[k]) + '<sup>e</sup></td>';
+      function tri(keys) {
+        if (src === r) return keys.map(function (k) { return swFmt(r[k]); }).join(' / ');
+        return keys.map(function (k) { return swFmt(r.ext[k]) + '<sup>e</sup>'; }).join(' / ');
       }
-      h += '<td' + vfCls + '>' + r.vf_solved.toFixed(2) + (r.trim_removed_pct > 0.005 ? '<sup title="before island trim ' + r.vf_voxel.toFixed(2) + ' %">*</sup>' : '') + '</td>' +
-        ec('Ex') + ec('Ey') + ec('Ez') + ec('Gyz') + ec('Gxz') + ec('Gxy') + ratios +
-        '<td' + (r.converged ? '' : ' class="warn"') + '>' + r.iters + '</td><td>' + r.residual.toExponential(1) + '</td><td>' + sweepFmtDur(r.wall_s) + '</td>';
+      function triTip(keys) {
+        if (src === r) return keys.map(function (k) { return k + ' ' + swFmt(r[k]); }).join(' · ');
+        return 'extrapolated from N = ' + r.ext.coarseN + ' and ' + r.ext.fineN + ' (order ' + r.ext.order + ') · ' + keys.map(function (k) { return k + ' ' + swFmt(r.ext[k]) + ' (N = ' + r.N + ': ' + swFmt(r[k]) + ')'; }).join(' · ');
+      }
+      var ratios = '';
+      if (showRef) ratios = '<td class="c-ref">' + (run.ref && run.ref.Ex != null ? ['Ex', 'Ey', 'Ez'].map(function (k) {
+        var ref = run.ref[k]; return Math.abs(ref) > 1e-5 ? (src[k] / ref).toFixed(2) : '—'; }).join(' / ') : '') + '</td>';
+      var thC = '', flC = '';
+      if (showTh) { var g = r.thermal && r.thermal.byFiller && r.thermal.byFiller[thF]; thC = '<td class="hS"' + (g ? ' title="κ x / y / z ' + swFmt(g.kx) + ' / ' + swFmt(g.ky) + ' / ' + swFmt(g.kz) + ' W/m·K"' : '') + '>' + (g ? swFmt(g.kMean) : '—') + '</td>'; }
+      if (showFl) {
+        var F = r.flow, kv = null;
+        if (F && !F.error) { var op = [0, 1, 2].filter(function (a) { return F.open[a]; }), cm = sweepCellMm(sweepRecipeForRun(run));
+          if (op.length) kv = op.reduce(function (s0, a) { return s0 + F.kL2[a]; }, 0) / op.length * cm * cm * 1e3; }
+        flC = '<td class="hS"' + (kv != null ? ' title="X / Y / Z ' + F.kL2.map(function (v) { return swFmt(v * Math.pow(sweepCellMm(sweepRecipeForRun(run)), 2) * 1e3); }).join(' / ') + ' ×10⁻⁹ m² · flow ' + F.N + '³"' : '') + '>' + (kv != null ? swFmt(kv) : (F && F.error ? '<span class="warn" title="' + swEsc(F.error) + '">failed</span>' : '—')) + '</td>';
+      }
+      h += '<td class="' + vfCls + '" title="' + swEsc((expT ? expT + ' · ' : '') + 'voxel ' + r.vf_voxel.toFixed(2) + ' %' + (r.trim_removed_pct > 0.005 ? ' before island trim' : '')) + '">' + r.vf_solved.toFixed(2) + (r.trim_removed_pct > 0.005 ? '<sup>*</sup>' : '') + '</td>' +
+        '<td class="c-tri' + (src !== r ? ' ext' : '') + '" title="' + swEsc(triTip(['Ex', 'Ey', 'Ez'])) + '">' + tri(['Ex', 'Ey', 'Ez']) + '</td>' +
+        '<td class="c-tri hN' + (src !== r ? ' ext' : '') + '" title="' + swEsc(triTip(['Gyz', 'Gxz', 'Gxy'])) + '">' + tri(['Gyz', 'Gxz', 'Gxy']) + '</td>' + ratios + thC + flC +
+        '<td class="' + (r.converged ? '' : 'warn') + '" title="' + swEsc(r.iters + ' iterations' + (r.converged ? '' : ' (did not converge)') + ' · residual ' + r.residual.toExponential(1) + ' · N = ' + r.N) + '">' + sweepFmtDur(r.wall_s) + '</td>';
       (r.notes || []).forEach(function (n) { noteRuns[run.id] = 1; allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(n)); });
-    } else h += preVf + '<td colspan="' + (7 + (showRef ? 1 : 0)) + '"></td><td></td><td></td>';
+    } else h += preVf + emptyCells('');
     h += flagHtml + '</tr>';
     if (st && !r) flags.forEach(function (f) { if (f.level !== 'info') { noteRuns[run.id] = 1; allNotes.push('<b>' + swEsc(run.id) + '</b> ' + swEsc(f.text)); } });
   });
@@ -1515,10 +1576,33 @@ function sweepRender() {
 
 function sweepPaintHeaderBtn(i, n) {
   var b = swEl('sweepBtn');
+  labPaintAtlasBtn(); labPaintRunLock();
   if (!b) return;
-  if (SWEEP_STATE.running) b.textContent = '⟳ Sweep ' + ((i || 0) + 1) + '/' + (n || '?');
-  else b.textContent = '⟳ Sweep';
+  var pg = b.querySelector('.fh-prog');
+  if (pg) pg.textContent = SWEEP_STATE.running ? ((i || 0) + 1) + ' / ' + (n || '?') : '';
+  else b.textContent = SWEEP_STATE.running ? 'Sweep ' + ((i || 0) + 1) + '/' + (n || '?') : 'Sweep';
   b.classList.toggle('sw-running', !!SWEEP_STATE.running);
+}
+/* v0.34.0 — the header Atlas button: a count of finished runs, greyed (with its
+   hover note) until a sweep has results.  aria-disabled rather than disabled so the
+   hover note still shows. */
+function sweepDoneCount() { var n = 0; for (var id in SWEEP_STATE.results) if (SWEEP_STATE.results[id] && !SWEEP_STATE.results[id].error) n++; return n; }
+function labPaintAtlasBtn() {
+  var b = swEl('atlasBtn'); if (!b) return;
+  var n = sweepDoneCount(), cnt = swEl('atlasCnt');
+  b.setAttribute('aria-disabled', String(!n));
+  b.title = n ? 'Atlas — see every sweep run’s results: maps, surfaces and charts (' + n + ' run' + (n > 1 ? 's' : '') + (SWEEP_STATE.running ? ', more coming' : '') + ')'
+              : 'Atlas — see every sweep run’s results: maps, surfaces and charts. Run a sweep to explore its results here.';
+  if (cnt) cnt.textContent = n ? String(n) : '';
+}
+function onAtlasBtnClick() { if (sweepDoneCount()) openSweepAtlas(); }
+/* v0.34.0 — Run all is locked while a sweep runs (closing the Sweep panel does not stop the sweep). */
+function labPaintRunLock() {
+  var b = swEl('runBtn'); if (!b) return;
+  var lock = !!SWEEP_STATE.running;
+  b.classList.toggle('sweep-lock', lock);
+  if (lock) { b.setAttribute('aria-disabled', 'true'); b.title = 'A sweep is in progress. Run all is paused until it finishes, or stop it from the Sweep panel. Closing the Sweep panel does not stop the sweep.'; }
+  else if (b.getAttribute('aria-disabled') === 'true') { b.removeAttribute('aria-disabled'); b.title = ''; }
 }
 
 sweepLoad();
