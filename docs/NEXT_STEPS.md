@@ -1,6 +1,8 @@
 # F13LD.lab — Next Steps (session handoff)
 
-> **2026-10-15 · v0.34.0** — same branch `flow-sweep`, waiting on Matt's click-test (mockup `atlas-entry-mockup.html` approved; Atlas mark = response surface): header Atlas button with run count, drawn header icons (Mesh button unchanged — stamped across the suite), Sweep-panel Atlas call to action and completion strip (no auto-open), condensed runs table without sideways scroll, Run all locked with a hover note during a sweep, Atlas first-open guide + help icon. Give Matt commit-pinned raw.githack links (branch links cache).
+> **2026-10-15 · v0.32.0–v0.34.0 merged to main** (Matt click-tested, "looks great"). Next: the F13LD.sweep flow port (32³ Fast, 64³ otherwise), then HX-1.
+>
+> **2026-10-15 · v0.34.0** — same branch `flow-sweep`, click-tested (mockup `atlas-entry-mockup.html` approved; Atlas mark = response surface): header Atlas button with run count, drawn header icons (Mesh button unchanged — stamped across the suite), Sweep-panel Atlas call to action and completion strip (no auto-open), condensed runs table without sideways scroll, Run all locked with a hover note during a sweep, Atlas first-open guide + help icon. Give Matt commit-pinned raw.githack links (branch links cache).
 >
 > **2026-10-15 · v0.33.0** — same branch `flow-sweep`, waiting on Matt's click-test: Atlas Stiffness | Thermal | Flow switch (mockup approved), per-mode panels, fitted 3-D axis, bone band, fillers overlaid, cross-physics design space; sweep keeps full κ and K tensors. Scope §18.
 >
