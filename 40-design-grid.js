@@ -378,9 +378,10 @@ function flowPermRow(d, fr){
   var tail = open.length === 3 ? 'anisotropy ' + (Math.max.apply(null, ks) / Math.min.apply(null, ks)).toFixed(2)
            : open.length ? 'closed along ' + closed.join(', ') : 'no open pore path';
   var unc = open.filter(function (a) { return !fr.perAxis[a].converged; });
-  var delta = unc.length ? ['not converged along ' + unc.map(function (a) { return 'XYZ'[a]; }).join(', ') + ' · ' + fr.perAxis[unc[0]].steps.toLocaleString('en-US') + ' steps', 'warn']
-            : [(cell > 0 ? FLOW_K_UNIT : 'k/L² ' + FLOW_KL2_UNIT) + ' · X / Y / Z · ' + tail, open.length === 3 ? 'neut' : 'warn'];
-  return { lbl:'Permeability', val:flowPermVals(d, fr).join(' / '), delta:delta, tip:FLOW_K_BONE_TIP };
+  var delta = [(cell > 0 ? FLOW_K_UNIT : 'k/L² ' + FLOW_KL2_UNIT) + ' · X / Y / Z · ' + tail, 'neut'];
+  var warn = unc.length ? 'not converged along ' + unc.map(function (a) { return 'XYZ'[a]; }).join(', ') + ' · ' + fr.perAxis[unc[0]].steps.toLocaleString('en-US') + ' steps'
+           : open.length < 3 ? 'no flow along ' + closed.join(', ') : null;
+  return { lbl:'Permeability', val:flowPermVals(d, fr).join(' / '), delta:delta, warn:warn, tip:FLOW_K_BONE_TIP };
 }
 function flowShearRows(d, fr){
   var dash = ['—', 'neut'];
@@ -397,18 +398,19 @@ function flowShearRows(d, fr){
   var rows = blank();
   rows[0].lbl = 'Shear per ' + su;
   if (!fr.wss) { rows[0].delta = ['re-run Flow for wall shear', 'neut']; return rows; }
-  if (!(cfg.mu > 0)) { rows[0].delta = ['enter the custom viscosity in Flow settings', 'warn']; return rows; }
+  if (!(cfg.mu > 0)) { rows[0].delta = ['enter the custom viscosity in Flow settings', 'neut']; return rows; }
   var pick = flowShearPick(fr, cfg);
-  if (!pick) { rows[0].delta = ['no open pore path', 'warn']; return rows; }
+  if (!pick) { rows[0].delta = ['no open pore path', 'neut']; return rows; }
   var ax = 'XYZ'[pick.axis];
-  if (pick.closed || !pick.stats) { rows[0].delta = ['no open pore path along ' + ax, 'warn']; return rows; }
+  if (pick.closed || !pick.stats) { rows[0].delta = ['no open pore path along ' + ax, 'neut']; return rows; }
   var st = pick.stats, along = 'along ' + ax + (pick.best ? ' (best)' : '');
   var wssMin = (typeof FLOW_THROAT_WSS !== 'undefined') ? FLOW_THROAT_WSS : 15, warn = [];
   if (fr.throatVox != null && fr.throatVox < wssMin) warn.push('coarse grid');
   var res = st.residual, fw = (typeof FLOW_FORCE_WARN !== 'undefined') ? FLOW_FORCE_WARN : 0.05;
   if (isFinite(res) && Math.abs(res) > fw) warn.push('wall force off by ' + Math.round(Math.abs(res) * 100) + '%');
   rows[0].val = fmtShear(st.median) + ' / ' + fmtShear(st.p95) + ' ' + shU;
-  rows[0].delta = ['median / 95th · ' + along + (warn.length ? ' · ' + warn.join(' · ') : ''), warn.length ? 'warn' : 'neut'];
+  rows[0].delta = ['median / 95th · ' + along, 'neut'];
+  if (warn.length) rows[0].warn = warn.join(' · ');
   var tg = cfg.targetInfo;
   if (!tg) {
     rows[1].delta = ['set a shear target in Flow settings', 'neut'];
@@ -416,23 +418,26 @@ function flowShearRows(d, fr){
   }
   if (!(st.inTarget > 0)) {
     rows[1].val = '0%';
-    rows[1].delta = [tg.label + ' · no speed puts wall in this range', 'warn'];
+    rows[1].delta = [tg.label, 'neut'];
+    rows[1].warn = 'no flow speed puts wall in this range';
     return rows;
   }
   function pct(v){ var p = v * 100; return p >= 10 || p === 0 ? Math.round(p) + '%' : p.toFixed(1) + '%'; }
   rows[1].val = pct(st.inTarget) + ' of wall';
   rows[1].delta = [tg.label + ' · ' + tg.note + ' · ' + pct(st.under) + ' under · ' + pct(st.over) + ' over', 'neut'];
   rows[2].val = fmtFlowSpeed(st.bestU, unit);
-  var bNote = (st.mlMin != null ? fmt3(st.mlMin) + ' mL/min in a ' + fmt3(cfg.chamberMm) + ' mm chamber' : ''), bCls = 'neut';
-  if (st.Re > 0.5) { bNote += ' · Re ' + st.Re.toFixed(1) + ', inertia starts to matter'; bCls = 'warn'; }
-  else if (!tg.custom && (st.bestU < 0.05e-3 || st.bestU > 2e-3)) { bNote += ' · outside the usual bioreactor range'; bCls = 'warn'; }
-  rows[2].delta = [bNote || along, bCls];
+  var bNote = (st.mlMin != null ? fmt3(st.mlMin) + ' mL/min in a ' + fmt3(cfg.chamberMm) + ' mm chamber' : '');
+  if (st.Re > 0.5) rows[2].warn = 'Reynolds number ' + st.Re.toFixed(1) + ' · inertia starts to matter, so the shear is approximate';
+  else if (!tg.custom && (st.bestU < 0.05e-3 || st.bestU > 2e-3)) rows[2].warn = 'outside the usual bioreactor range (0.05–2 mm/s)';
+  rows[2].delta = [bNote || along, 'neut'];
   if (st.rangeLo > 0 && st.rangeHi > 0) {
     rows[3].val = fmtFlowSpeedPair(st.rangeLo, st.rangeHi, unit);
     rows[3].delta = [fmt3(st.rangeHi / st.rangeLo) + '× span · keeps at least half the best coverage', 'neut'];
   }
   return rows;
 }
+/* drawn warning mark (brand rule: no glyph icons): amber ring with a stroke and a dot */
+var LAB_WARN_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 3.2 V6.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="8.7" r="0.85" fill="currentColor"/></svg>';
 /* every Flow row takes the wide value column (X / Y / Z values on one line) */
 function flowStats(d){
   var rows = _flowStats(d);
@@ -467,9 +472,9 @@ function _flowStats(d){
     var um = cell > 0 ? Math.round(thr * cell / fr.N * 1000) : null;
     var permMin = (typeof FLOW_THROAT_PERM !== 'undefined') ? FLOW_THROAT_PERM : 8, wssMin = (typeof FLOW_THROAT_WSS !== 'undefined') ? FLOW_THROAT_WSS : 15;
     thrRow = { lbl:'Narrowest Pore', val:(um != null ? um.toLocaleString('en-US') + ' µm' : thr.toFixed(1) + ' voxels'),
-      delta: thr < permMin ? [thr.toFixed(1) + ' voxels at ' + fr.N + '³ · coarse for permeability · raise the flow grid', 'warn']
-           : thr < wssMin ? [thr.toFixed(1) + ' voxels at ' + fr.N + '³ · coarse for wall shear (wants ' + wssMin + '+)', 'warn']
-           : [thr.toFixed(1) + ' voxels across at ' + fr.N + '³', 'neut'] };
+      delta: [thr.toFixed(1) + ' voxels across at ' + fr.N + '³', 'neut'],
+      warn: thr < permMin ? 'coarse for permeability (wants ' + permMin + '+ voxels) · raise the flow grid'
+          : thr < wssMin ? 'coarse for wall shear (wants ' + wssMin + '+ voxels) · raise the flow grid' : null };
   }
   var sh = flowShearRows(d, fr);
   return [
@@ -477,8 +482,8 @@ function _flowStats(d){
     flowPermRow(d, fr),
     { lbl:'Tortuosity', val:tVals.join(' / '), delta:['mean speed ÷ mean flow · X / Y / Z', 'neut'] },
     { lbl:'Open Porosity', val:(fr.openPorosity * 100).toFixed(1) + '%',
-      delta: sealed > 0.0005 ? ['sealed pores ' + (sealed * 100).toFixed(1) + '% · no flow through them', 'warn']
-           : ['relative density ' + (1 - fr.porosity).toFixed(2) + ' · every pore joins the flow', 'neut'] },
+      delta: ['relative density ' + (1 - fr.porosity).toFixed(2) + (sealed > 0.0005 ? '' : ' · every pore joins the flow'), 'neut'],
+      warn: sealed > 0.0005 ? 'sealed pores ' + (sealed * 100).toFixed(1) + '% · no flow through them' : null },
     thrRow,
     { group:'Wall shear' }
   ].concat(sh);
@@ -1413,11 +1418,17 @@ function buildSummary(stats, d){
     if (s.group){ rows += '<div class="dc-grp">' + s.group + '</div>'; continue; }   /* v0.30.0 — section label (Flow cards) */
     var dtxt = (s.delta && s.delta[0]) ? s.delta[0] : '';
     var dcls = (s.delta && s.delta[1]) ? s.delta[1] : 'neut';
+    /* v0.30.1 — a row's warning sits behind a small amber mark next to the
+       value (hover for the text; a tap or click shows it under the value),
+       so warnings don't add height (Matt, 2026-10-14). */
+    var wtxt = s.warn ? String(s.warn).replace(/"/g, '&quot;') : '';
+    var wmark = wtxt ? '<span class="rwm" role="button" tabindex="0" title="' + wtxt + '" aria-label="Warning: ' + wtxt + '" onclick="this.closest(\'.dc-row\').classList.toggle(\'show-warn\'); event.stopPropagation();">' + LAB_WARN_ICON + '</span>' : '';
     rows += '<div class="dc-row' + (s.wide ? ' wide' : '') + '">' +
               '<span class="rl"'+(s.tip ? ' title="'+s.tip+'"' : '')+'>'+s.lbl+'</span>' +
               '<span class="rr">' +
-                '<span class="rv'+(s.valcls ? ' '+s.valcls : '')+'">'+s.val+'</span>' +
+                '<span class="rv'+(s.valcls ? ' '+s.valcls : '')+'">'+s.val+wmark+'</span>' +
                 (dtxt ? ('<span class="rd '+dcls+'">'+dtxt+'</span>') : '') +
+                (wtxt ? ('<span class="rd warn rwt">'+wtxt+'</span>') : '') +
               '</span>' +
             '</div>';
   }

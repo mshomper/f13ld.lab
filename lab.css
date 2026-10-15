@@ -849,6 +849,12 @@ html, body {
 /* v0.30.0 — Flow rows carry X / Y / Z values on one line */
 .dc-row.wide { grid-template-columns:minmax(0, 1fr) minmax(0, 168px); }
 .dc-row.wide .rv { font-size:13px; }
+/* v0.30.1 — warning mark next to a value; the text shows on hover (title) or after a tap */
+.dc-row .rwm { display:inline-flex; width:12px; height:12px; margin-left:6px; vertical-align:1px; color:var(--warn); cursor:pointer; }
+.dc-row .rwm svg { width:12px; height:12px; }
+.dc-row .rwm:focus-visible { outline:1px solid var(--warn); outline-offset:2px; border-radius:50%; }
+.dc-row .rwt { display:none; }
+.dc-row.show-warn .rwt { display:block; }
 .dc-row .rd { font-family:'JetBrains Mono', monospace; font-size:9px; line-height:1.2; }
 .dc-row .rd.up   { color:var(--good); }     /* comparison only */
 .dc-row .rd.down { color:var(--bad); }      /* comparison only */
