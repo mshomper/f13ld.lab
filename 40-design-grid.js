@@ -354,7 +354,13 @@ function fmtFixedScale(v, scale){
 }
 function fmtPermM2(k){ return fmtFixedScale(k, 1e-9) + ' ' + FLOW_K_UNIT; }
 function fmtKL2(v){ return fmtFixedScale(v, 1e-3) + ' ' + FLOW_KL2_UNIT; }
+/* hover note on the permeability labels (Matt, 2026-10-14): published bone
+   range for reference, kept off the card itself since not every user is biomed */
+var FLOW_K_BONE_TIP = 'Trabecular bone: 0.027\u201320 \u00d710\u207b\u2079 m\u00b2 across anatomic sites and directions (Nauman, Fong & Keaveny 1999, Ann Biomed Eng 27:517)';
 function flowAxisRow(d, fr, ax){
+  var r = _flowAxisRow(d, fr, ax); r.tip = FLOW_K_BONE_TIP; return r;
+}
+function _flowAxisRow(d, fr, ax){
   var idx = 'xyz'.indexOf(ax), lbl = 'Permeability ' + ax.toUpperCase(), pa = fr.perAxis && fr.perAxis[idx];
   if (!pa || !pa.open) return { lbl:lbl, val:'0', delta:['no open pore path along ' + ax.toUpperCase(), 'warn'] };
   var kl = fr.kL2[idx], cell = (typeof labCellMm === 'function') ? labCellMm(d) : null;
@@ -368,9 +374,9 @@ function flowStats(d){
     var note = fr && fr.error ? [fr.error, 'warn']
       : [(typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'run to compute' : 'enable Flow + Run', 'neut'];
     return [
-      { lbl:'Permeability X', val:'\u2014', delta:note },
-      { lbl:'Permeability Y', val:'\u2014', delta:dash },
-      { lbl:'Permeability Z', val:'\u2014', delta:dash },
+      { lbl:'Permeability X', val:'\u2014', delta:note , tip:FLOW_K_BONE_TIP },
+      { lbl:'Permeability Y', val:'\u2014', delta:dash , tip:FLOW_K_BONE_TIP },
+      { lbl:'Permeability Z', val:'\u2014', delta:dash , tip:FLOW_K_BONE_TIP },
       { lbl:'Anisotropy', val:'\u2014', delta:dash },
       { lbl:'Tortuosity', val:'\u2014', delta:dash },
       { lbl:'Open Porosity', val:'\u2014', delta:dash },
@@ -1334,7 +1340,7 @@ function buildSummary(stats, d){
     var dtxt = (s.delta && s.delta[0]) ? s.delta[0] : '';
     var dcls = (s.delta && s.delta[1]) ? s.delta[1] : 'neut';
     rows += '<div class="dc-row">' +
-              '<span class="rl">'+s.lbl+'</span>' +
+              '<span class="rl"'+(s.tip ? ' title="'+s.tip+'"' : '')+'>'+s.lbl+'</span>' +
               '<span class="rr">' +
                 '<span class="rv'+(s.valcls ? ' '+s.valcls : '')+'">'+s.val+'</span>' +
                 (dtxt ? ('<span class="rd '+dcls+'">'+dtxt+'</span>') : '') +
