@@ -134,6 +134,12 @@ function buildLabRaymarcherFS(stepCount) {
        drawn after the march (LAB_FLOW_LINE_*) hide behind struts. */
     'uniform float uFlowOn; uniform float uFlowPlane; uniform float uFlowHi; uniform float uFlowN;',
     'uniform highp sampler3D uFlowSpd;',
+    /* v0.31.0 — wall shear on the strut surface (flow view): log10 of the
+       shear per m/s on an R16F grid (TEXTURE6, 19h flowShearVoxelField).
+       uShearMode 0: log colour, turbo over [uShearA, uShearB];
+       1: target bands — under uShearA / inside / over uShearB (blue, jade, amber). */
+    'uniform float uShearOn; uniform float uShearMode; uniform float uShearA; uniform float uShearB;',
+    'uniform highp sampler3D uShear;',
     'float gDepth = 1.0;',
 
     'const float H = 3.141593;',
@@ -608,7 +614,16 @@ function buildLabRaymarcherFS(stepCount) {
        principled, and pairs with the JS-side dilation that handles
        the larger interface-contamination issue. */
     '  vec3 col;',
-    '  if (uViewMode > 2.5 && uViewMode < 3.5 && uThermOn > 0.5) {',
+    '  if (uViewMode > 3.5 && uShearOn > 0.5 && hit) {',
+    '    vec3 uvs = uTile > 1.0 ? fract(pos / (2.0 * H) * uTile + 0.5) : fract(pos / (2.0 * H) + 0.5);',
+    '    float sv = textureLod(uShear, uvs, 0.0).r;',
+    '    if (sv > -10.0) {',
+    '      vec3 sc;',
+    '      if (uShearMode > 0.5) sc = sv < uShearA ? vec3(0.306, 0.482, 0.710) : (sv > uShearB ? vec3(0.878, 0.639, 0.227) : vec3(0.114, 0.620, 0.459));',
+    '      else sc = turbo(clamp((sv - uShearA) / max(uShearB - uShearA, 1e-6), 0.0, 1.0));',
+    '      col = f13ShadeData(sc, pos, n, rd, rot, H*0.3, uNrmStep, f13TMax);',
+    '    } else col = f13Shade(uBodyColor, pos, n, rd, rot, false, H*0.3, uNrmStep, f13TMax);',
+    '  } else if (uViewMode > 2.5 && uViewMode < 3.5 && uThermOn > 0.5) {',
     '    col = f13ShadeData(thermColor(pos), pos, n, rd, rot, H*0.3, uNrmStep, f13TMax);',
     '  } else if (uViewMode > 1.5 && uViewMode < 2.5 && uStressUploaded > 0.5) {',
     '    float cAmpS = uDeformAmp * uDeformSign;',
@@ -969,7 +984,9 @@ LabRaymarcher.prototype._finishProgram = function() {
    'uThermOn','uThermView','uThermAxis','uThermScale','uThermHi','uDT','uTherm','uThermN',
    'uClipAxis','uClipPos','uClipSide','uClipC0','uClipC1','uClipC2','uClipC3','uClipHandle','uClipDpr','uClipCol',
    /* v0.29.0 — flow view */
-   'uFlowOn','uFlowPlane','uFlowHi','uFlowN','uFlowSpd'].forEach(function(name){
+   'uFlowOn','uFlowPlane','uFlowHi','uFlowN','uFlowSpd',
+   /* v0.31.0 — wall shear map */
+   'uShearOn','uShearMode','uShearA','uShearB','uShear'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -1575,7 +1592,28 @@ LabRaymarcher.prototype.uploadFlowSpeed = function(spd, M) {
 };
 LabRaymarcher.prototype.setFlowParams = function(p) {
   if (this.failed || !p) return;
-  this._u.flowPlane = !!p.plane; this._u.flowHi = (p.hi > 0) ? p.hi : 1; this._dirty = true;
+  this._u.flowPlane = !!p.plane; this._u.flowHi = (p.hi > 0) ? p.hi : 1;
+  /* v0.31.0 — p.shear { mode: 'log' | 'bands', a, b } (log10 shear per m/s) or null */
+  var sh = p.shear;
+  this._u.shearOn = !!sh;
+  if (sh) { this._u.shearMode = sh.mode === 'bands' ? 1 : 0; this._u.shearA = sh.a; this._u.shearB = sh.b; }
+  this._dirty = true;
+};
+/* v0.31.0 — the wall shear voxel grid (19h flowShearVoxelField, solver order) */
+LabRaymarcher.prototype.uploadFlowShear = function(v, M) {
+  if (this.failed || !v || v.length !== M * M * M) return;
+  var gl = this.gl, tex = solverToTexOrder(v, M);
+  if (!this._shearTex) this._shearTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, this._shearTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R16F, M, M, M, 0, gl.RED, gl.FLOAT, tex);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+  gl.bindTexture(gl.TEXTURE_3D, null);
+  this._dirty = true;
 };
 LabRaymarcher.prototype.setFlowParticles = function(ps) {
   if (this.failed) return;
@@ -2070,6 +2108,17 @@ LabRaymarcher.prototype._render = function(t) {
     gl.bindTexture(gl.TEXTURE_3D, this._flowTex);
     gl.uniform1i(u.uFlowSpd, 5);
   }
+  /* v0.31.0 — wall shear map (TEXTURE6) */
+  var shearOn = (this._viewMode === 'flow' && this._shearTex && S.shearOn);
+  gl.uniform1f(u.uShearOn,   shearOn ? 1 : 0);
+  gl.uniform1f(u.uShearMode, S.shearMode || 0);
+  gl.uniform1f(u.uShearA,    S.shearA != null ? S.shearA : -1);
+  gl.uniform1f(u.uShearB,    S.shearB != null ? S.shearB : 1);
+  if (this._shearTex) {
+    gl.activeTexture(gl.TEXTURE6);
+    gl.bindTexture(gl.TEXTURE_3D, this._shearTex);
+    gl.uniform1i(u.uShear, 6);
+  }
   var cAx = (C && C.axis > 0) ? C.axis : 0;
   gl.uniform1f(u.uClipAxis, cAx);
   gl.uniform1f(u.uClipPos,  C ? C.pos : 0);
@@ -2151,6 +2200,7 @@ LabRaymarcher.prototype.destroy = function() {
   if (this._dispTex)   gl.deleteTexture(this._dispTex);    /* A.2 — displacement texture */
   if (this._stressTex) gl.deleteTexture(this._stressTex);  /* A.3 — stress texture */
   if (this._thermTex)  gl.deleteTexture(this._thermTex);   /* v0.21.0 — thermal field */
+  if (this._shearTex)  gl.deleteTexture(this._shearTex);   /* v0.31.0 — wall shear map */
   if (this._flowTex)   gl.deleteTexture(this._flowTex);    /* v0.29.0 — flow speed field */
   if (this._flowLine)  { gl.deleteProgram(this._flowLine.prog); gl.deleteBuffer(this._flowLine.buf); gl.deleteBuffer(this._flowLine.ibuf); gl.deleteVertexArray(this._flowLine.vao); this._flowLine = null; }
   if (this._prog)      gl.deleteProgram(this._prog);
@@ -2355,7 +2405,7 @@ function mountRaymarcherTiles() {
 /* Pause all when grid loses geom/deform/stress view (e.g. user clicks Buckle tab) */
 function pauseRaymarcherTilesForViewMode(mode) {
   var kappaSurface = (mode === 'thermal' && typeof VIEW_STATE !== 'undefined' && VIEW_STATE.thermalView === 'kappa');   /* v0.21.0 — κ(n) uses the surface viewer */
-  var flowSurface = (mode === 'flow' && typeof VIEW_STATE !== 'undefined' && VIEW_STATE.flowView === 'surface');   /* v0.29.0 — K(n) uses the surface viewer */
+  var flowSurface = (mode === 'flow' && typeof VIEW_STATE !== 'undefined' && (VIEW_STATE.flowView === 'surface' || VIEW_STATE.flowView === 'orient' || VIEW_STATE.flowView === 'charts'));   /* v0.29.0 — K(n) uses the surface viewer; v0.31.0 — orient, charts */
   if ((mode !== 'geom' && mode !== 'deform' && mode !== 'stress' && mode !== 'buckle' && mode !== 'thermal' && mode !== 'flow') || kappaSurface || flowSurface) {
     pauseAllRaymarchers();
   }

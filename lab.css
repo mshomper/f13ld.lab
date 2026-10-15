@@ -1307,3 +1307,38 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
 .vp-flow-control .flow-play { display:inline-flex; align-items:center; justify-content:center; padding:3px 7px; color:rgba(255,255,255,0.8) }
 .vp-flow-control .flow-play svg { display:block }
 .lab-clip.lab-clip-top { bottom:auto; top:10px }
+
+/* ============ v0.31.0 — FLOW WALL SHEAR VIEWS (40, 24-flow-charts.js) ============ */
+.vp-flow-control .th-toggle { flex-wrap:wrap; justify-content:flex-end; row-gap:4px }
+.flow-shear-legend {
+  position:absolute; right:12px; top:30px; max-width:calc(100% - 24px);
+  background:rgba(6,8,15,0.82); border:0.5px solid var(--line); border-radius:7px; padding:6px 9px;
+  font:9.5px 'JetBrains Mono', ui-monospace, monospace; color:rgba(255,255,255,0.85); letter-spacing:0.03em;
+  display:flex; flex-direction:column; gap:3px; pointer-events:none;
+}
+.flow-shear-legend .fsl-h { color:rgba(255,255,255,0.55); text-transform:uppercase; letter-spacing:0.08em; font-size:8.5px }
+.flow-shear-legend .fsl-r { display:flex; align-items:center; gap:6px; white-space:normal }
+.flow-shear-legend .fsl-r.dim { color:rgba(255,255,255,0.55) }
+.flow-shear-legend i { width:9px; height:9px; border-radius:2px; flex-shrink:0 }
+.flow-shear-legend i.mk { background:#c8f542; border-radius:50% }
+.flow-orient-note { top:auto; bottom:44px; right:auto; left:12px }
+
+/* charts view: replaces the merged plot area while open */
+#flowCharts { display:none }
+.compare.merged.flow-charts-on { grid-template-columns:1fr }
+.compare.merged.flow-charts-on > * { display:none !important }
+.compare.merged.flow-charts-on > #flowCharts { display:flex !important }
+#flowCharts {
+  flex-direction:column; gap:12px; min-width:0;
+  background:var(--panel); border:0.5px solid var(--line); border-radius:10px; padding:14px 16px;
+}
+.fc-head { display:flex; justify-content:space-between; align-items:flex-end; gap:12px; flex-wrap:wrap }
+.fc-title { font-size:16px; font-weight:600; color:var(--ink) }
+.fc-title small { display:block; margin-top:4px; font:400 10px 'JetBrains Mono', monospace; color:var(--ink-dim); letter-spacing:0.05em }
+.fc-head .th-toggle { flex-wrap:wrap; row-gap:4px }
+.fc-plot { position:relative; width:100%; height:300px; min-width:0 }
+.fc-cap { font:600 9.5px 'JetBrains Mono', monospace; color:var(--ink-dim); text-transform:uppercase; letter-spacing:0.12em }
+.fc-empty { padding:28px 8px; text-align:center; font:11px 'JetBrains Mono', monospace; color:var(--ink-dim); letter-spacing:0.05em }
+.fc-legend { display:flex; gap:14px; flex-wrap:wrap; font:11px 'JetBrains Mono', monospace; color:var(--ink-2) }
+.fc-legend i { display:inline-block; width:14px; height:3px; border-radius:1px; margin-right:6px; vertical-align:middle }
+@media (max-width: 880px) { .fc-plot { height:260px } }

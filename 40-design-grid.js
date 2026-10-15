@@ -490,6 +490,9 @@ function _flowStats(d){
 }
 function flowEmptyMsg(d){
   var fr = flowData(d), surf = (typeof VIEW_STATE === 'undefined' || VIEW_STATE.flowView === 'surface');
+  var fv = (typeof VIEW_STATE !== 'undefined') ? VIEW_STATE.flowView : '';
+  if (fr && !fr.error && fv === 'shear') return flowCardPick(d).why || 'No wall shear data';   /* v0.31.0 */
+  if (fr && !fr.error && fv === 'orient') return flowOrientData(d).why || 'No wall shear data';
   if (!fr) return (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? (surf ? 'Run to see the permeability surface' : 'Run to see the flow') : 'Enable Flow \u00b7 Run';
   if (fr.error) return fr.error;
   if (surf) return 'Closed along at least one axis \u00b7 no permeability surface';
@@ -519,6 +522,123 @@ function flowScaleTop(ff){
   for (var i = 0; i < ds.length && i < 3; i++){ var f2 = flowVizField(flowData(ds[i]), VIEW_STATE.flowDir); if (f2) top = Math.max(top, f2.hi); }
   return top;
 }
+/* ── v0.31.0 — wall shear views (shear map, orientation sphere; charts in 24) ──
+   Everything follows the card: its direction (Flow settings) and, with a
+   target, its best flow speed.  flowCardPick says why a view is empty. */
+function flowCardPick(d){
+  var fr = flowData(d);
+  if (!fr || fr.error) return { why: flowEmptyMsgBase(d) };
+  if (!fr.wss) return { why: 'Re-run Flow for wall shear' };
+  if (typeof flowShearConfig !== 'function') return { why: 'Wall shear needs 19h' };
+  var cfg = flowShearConfig(d);
+  if (!(cfg.mu > 0)) return { why: 'Enter the custom viscosity in Flow settings' };
+  var pick = flowShearPick(fr, cfg);
+  if (!pick || pick.closed || !pick.stats) return { why: 'No open pore path' + (pick ? ' along ' + 'XYZ'[pick.axis] : '') };
+  return { fr: fr, cfg: cfg, pick: pick, st: pick.stats };
+}
+function flowEmptyMsgBase(d){
+  var fr = flowData(d);
+  if (!fr) return (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'Run to see the flow' : 'Enable Flow \u00b7 Run';
+  return fr.error || '';
+}
+/* map params for one design: bands at the card's best speed with a target,
+   else a log colour range (2nd–98th percentile, or the widest across
+   designs with the shared scale) */
+function flowShearRange(st){
+  var S = st.S, C = st.C, lo = S[0], hi = S[S.length - 1];
+  for (var q = 0; q < S.length; q++) if (C[q + 1] >= 0.02) { lo = S[q]; break; }
+  for (var q2 = 0; q2 < S.length; q2++) if (C[q2 + 1] >= 0.98) { hi = S[q2]; break; }
+  return [Math.log(Math.max(lo, 1e-12)) / Math.LN10, Math.log(Math.max(hi, lo * 1.01, 1e-12)) / Math.LN10];
+}
+function flowShearMapParams(d){
+  var cp = flowCardPick(d);
+  if (!cp.st) return null;
+  var st = cp.st, tg = cp.cfg.target;
+  if (tg && st.bestU > 0) return { mode: 'bands', a: Math.log(tg[0] / st.bestU) / Math.LN10, b: Math.log(tg[1] / st.bestU) / Math.LN10, cp: cp };
+  var r = flowShearRange(st);
+  if ((typeof getStressNormMode === 'function') && getStressNormMode() === 'shared'){
+    var ds = LAB_STATE.designs;
+    for (var i = 0; i < ds.length && i < 3; i++){ var c2 = flowCardPick(ds[i]); if (c2.st){ var r2 = flowShearRange(c2.st); r[0] = Math.min(r[0], r2[0]); r[1] = Math.max(r[1], r2[1]); } }
+  }
+  return { mode: 'log', a: r[0], b: r[1], cp: cp };
+}
+function buildShearLegend(d){
+  var mp = flowShearMapParams(d);
+  if (!mp) return '';
+  var cfg = mp.cp.cfg, st = mp.cp.st, unit = cfg.unit, along = 'along ' + 'XYZ'[mp.cp.pick.axis] + (mp.cp.pick.best ? ' (best)' : '');
+  if (mp.mode === 'bands'){
+    var tg = cfg.targetInfo;
+    var pc = function (v){ var p = v * 100; return (p >= 10 || p === 0 ? Math.round(p) : p.toFixed(1)) + '%'; };
+    return '<div class="flow-shear-legend">' +
+      '<div class="fsl-h">wall shear \u00b7 ' + along + ' \u00b7 ' + fmtFlowSpeed(st.bestU, unit) + '</div>' +
+      '<div class="fsl-r"><i style="background:#4E7BB5"></i>under ' + fmt3(tg.lo) + ' mPa \u00b7 ' + pc(st.under) + '</div>' +
+      '<div class="fsl-r"><i style="background:#1D9E75"></i>' + tg.label + ' \u00b7 ' + pc(st.inTarget) + '</div>' +
+      '<div class="fsl-r"><i style="background:#E0A33A"></i>over ' + fmt3(tg.hi) + ' mPa \u00b7 ' + pc(st.over) + '</div></div>';
+  }
+  var mode = (typeof getStressNormMode === 'function') ? getStressNormMode() : 'per';
+  return '<div class="stress-colorbar-header">shear</div>' +
+         '<div class="stress-colorbar" style="background:' + flowTurboCss() + '"></div>' +
+         '<div class="stress-colorbar-label-top">' + fmtShear(Math.pow(10, mp.b)) + '<span class="stress-colorbar-suffix">' + flowShearUnit(unit) + ' per ' + flowSpeedUnit(unit) + ' \u00b7 log \u00b7 ' + along + (mode === 'shared' ? ' \u00b7 shared' : '') + '</span></div>' +
+         '<div class="stress-colorbar-label-bot">' + fmtShear(Math.pow(10, mp.a)) + '</div>';
+}
+/* orientation sphere data: wall in the target for every direction of the
+   viewer's sphere, at the card's speed.  Computed on 642 directions and
+   spread to the viewer's 2,562 vertices (three nearest, inverse distance). */
+var FLOW_ORIENT_DIRS = null, FLOW_ORIENT_MAP = null;
+function flowOrientDirs(){
+  if (FLOW_ORIENT_DIRS) return FLOW_ORIENT_DIRS;
+  var ico = (typeof _buildIcosphere === 'function') ? _buildIcosphere(3) : null;
+  if (!ico || typeof LAB_SV_MESH === 'undefined') return null;
+  var D = ico.positions, nd = ico.nVerts, P = LAB_SV_MESH.positions, nv = LAB_SV_MESH.nVerts;
+  for (var a = 0; a < nd; a++){ var l = Math.hypot(D[3*a], D[3*a+1], D[3*a+2]); D[3*a] /= l; D[3*a+1] /= l; D[3*a+2] /= l; }
+  var map = new Int32Array(3 * nv), wts = new Float32Array(3 * nv);
+  for (var v = 0; v < nv; v++){
+    var px = P[3*v], py = P[3*v+1], pz = P[3*v+2], pl = Math.hypot(px, py, pz); px /= pl; py /= pl; pz /= pl;
+    var b = [-2, -2, -2], bi = [0, 0, 0];
+    for (var k = 0; k < nd; k++){
+      var c = px * D[3*k] + py * D[3*k+1] + pz * D[3*k+2];
+      if (c > b[2]){ if (c > b[1]){ if (c > b[0]){ b[2] = b[1]; bi[2] = bi[1]; b[1] = b[0]; bi[1] = bi[0]; b[0] = c; bi[0] = k; } else { b[2] = b[1]; bi[2] = bi[1]; b[1] = c; bi[1] = k; } } else { b[2] = c; bi[2] = k; } }
+    }
+    var ws = 0;
+    for (var m = 0; m < 3; m++){ var ang = Math.acos(Math.min(1, b[m])); var w = 1 / Math.max(ang, 1e-4); wts[3*v+m] = w; map[3*v+m] = bi[m]; ws += w; }
+    for (var m2 = 0; m2 < 3; m2++) wts[3*v+m2] /= ws;
+  }
+  FLOW_ORIENT_DIRS = D; FLOW_ORIENT_MAP = { idx: map, w: wts, nv: nv };
+  return D;
+}
+function flowOrientData(d){
+  var cp = flowCardPick(d);
+  if (!cp.st) return { why: cp.why };
+  if (!cp.cfg.target) return { why: 'Set a shear target in Flow settings to see the best flow direction' };
+  for (var a = 0; a < 3; a++) if (!(cp.fr.perAxis[a] && cp.fr.perAxis[a].open)) return { why: 'No flow along ' + 'XYZ'[a] + ' \u00b7 the orientation map needs pores open along all three axes' };
+  if (!(cp.st.bestU > 0)) return { why: 'No flow speed puts wall in the target' };
+  var dirs = flowOrientDirs();
+  if (!dirs) return { why: 'Orientation map unavailable' };
+  var om = flowOrientMap(cp.fr, cp.cfg, cp.st.bestU, dirs);
+  if (!om) return { why: 'Orientation map unavailable' };
+  if (!om.vtx){
+    var M = FLOW_ORIENT_MAP, vtx = new Float32Array(M.nv);
+    for (var v = 0; v < M.nv; v++) vtx[v] = M.w[3*v] * om.val[M.idx[3*v]] + M.w[3*v+1] * om.val[M.idx[3*v+1]] + M.w[3*v+2] * om.val[M.idx[3*v+2]];
+    var lo = Infinity, hi = -Infinity;
+    for (var q = 0; q < om.val.length; q++){ if (om.val[q] < lo) lo = om.val[q]; if (om.val[q] > hi) hi = om.val[q]; }
+    om.vtx = vtx; om.lo = lo; om.hi = hi;
+  }
+  return { om: om, cp: cp };
+}
+function buildOrientNote(d){
+  var od = flowOrientData(d);
+  if (!od.om) return '';
+  var om = od.om, b = om.best.d.slice(), unit = od.cp.cfg.unit;
+  /* ±d give the same shear: show the end whose largest component is positive */
+  var big = 0; for (var k = 1; k < 3; k++) if (Math.abs(b[k]) > Math.abs(b[big])) big = k;
+  if (b[big] < 0) b = b.map(function (x) { return -x; });
+  var pc = function (v){ return Math.round(v * 100) + '%'; };
+  var bd = '(' + b.map(function (x) { return (Math.abs(x) < 0.005 ? 0 : x).toFixed(2); }).join(', ') + ')';
+  return '<div class="flow-shear-legend flow-orient-note">' +
+    '<div class="fsl-h">wall at ' + od.cp.cfg.targetInfo.label + ' \u00b7 ' + fmtFlowSpeed(od.cp.st.bestU, unit) + '</div>' +
+    '<div class="fsl-r"><i class="mk"></i>best ' + bd + ' \u00b7 ' + pc(om.best.v) + '</div>' +
+    '<div class="fsl-r dim">X ' + pc(om.axes[0]) + ' \u00b7 Y ' + pc(om.axes[1]) + ' \u00b7 Z ' + pc(om.axes[2]) + ' \u00b7 range ' + pc(om.lo) + '\u2013' + pc(om.hi) + '</div></div>';
+}
 function buildFlowColorbar(d){
   var ff = flowVizField(flowData(d), VIEW_STATE.flowDir);
   if (!ff) return '';
@@ -539,9 +659,12 @@ function buildFlowControl(){
     '<div class="th-toggle">' +
       vb('particles', 'flow', 'Tracer particles carried by the flow, coloured by speed') +
       vb('speed', 'speed', 'Speed through the pores on the section plane') +
+      vb('shear', 'shear', 'Wall shear on the surface at the card\u2019s flow direction and speed') +
       vb('surface', 'K(n)', 'Directional permeability surface') +
+      vb('orient', 'orient', 'Wall at the shear target for every flow direction, at the card\u2019s speed') +
+      vb('charts', 'charts', 'All designs on one plot: wall at the target against speed, and the shear distribution') +
     '</div>';
-  if (v !== 'surface') h += '<div class="th-toggle">' + db('x', 'X') + db('y', 'Y') + db('z', 'Z') + db('xyz', 'XYZ') + '</div>';
+  if (v === 'particles' || v === 'speed') h += '<div class="th-toggle">' + db('x', 'X') + db('y', 'Y') + db('z', 'Z') + db('xyz', 'XYZ') + '</div>';
   /* v0.29.1 — play, speed, length, size and count are shared by every
      tile and live in the view strip (#flowAnimToggle) */
   return h + '</div>';
@@ -847,6 +970,20 @@ function renderDesignGrid(){
   // stale hidden grid tile carrying the same data-design-id would make
   // mountRaymarcherTiles() fight over where each shared canvas lands.  The
   // non-curve path below always rebuilds grid.innerHTML, so this is safe.
+  /* v0.31.0 — Flow charts: every design on one plot (24-flow-charts.js) */
+  if (VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView === 'charts' && typeof renderFlowCharts === 'function'){
+    grid.style.display   = 'none';
+    grid.innerHTML       = '';
+    merged.style.display = 'grid';
+    merged.classList.add('flow-charts-on');
+    if (typeof nlvizStop === 'function') nlvizStop();
+    if (typeof pauseAllRaymarchers === 'function') pauseAllRaymarchers();
+    if (typeof pauseAllStiffnessViz === 'function') pauseAllStiffnessViz();
+    renderFlowCharts();
+    return;
+  }
+  merged.classList.remove('flow-charts-on');
+  if (typeof flowChartsRelease === 'function') flowChartsRelease();
   if (VIEW_STATE.mode === 'curve'){
     grid.style.display   = 'none';
     grid.innerHTML       = '';
@@ -886,7 +1023,7 @@ function renderDesignGrid(){
      A.2.2 — gating now considers the active load axis from VIEW_STATE. */
   var rmDesigns = [];   /* [{i, id}, …] */
   var thermMap = (VIEW_STATE.mode === 'thermal' && VIEW_STATE.thermalView !== 'kappa');   /* v0.21.0 */
-  var flowRM = (VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView !== 'surface');   /* v0.29.0 — particles / speed map */
+  var flowRM = (VIEW_STATE.mode === 'flow' && (VIEW_STATE.flowView === 'particles' || VIEW_STATE.flowView === 'speed' || VIEW_STATE.flowView === 'shear'));   /* v0.29.0 — particles / speed map; v0.31.0 — shear map */
   var rmModes = (VIEW_STATE.mode === 'geom' || VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle' || thermMap || flowRM);
   var needsFields = (VIEW_STATE.mode === 'deform' || VIEW_STATE.mode === 'stress' || VIEW_STATE.mode === 'buckle');
   if (rmModes) {
@@ -895,7 +1032,8 @@ function renderDesignGrid(){
       var rcp = (typeof recipeForDesign === 'function') ? recipeForDesign(rd) : null;
       if (!rcp) continue;
       if (thermMap && !thermalMapData(rd)) continue;   /* v0.21.0 — map fields for the shown filler + axis */
-      if (flowRM && !flowVizField(flowData(rd), VIEW_STATE.flowDir)) continue;   /* v0.29.0 */
+      if (flowRM && VIEW_STATE.flowView === 'shear') { if (!flowShearMapParams(rd)) continue; }   /* v0.31.0 */
+      else if (flowRM && !flowVizField(flowData(rd), VIEW_STATE.flowDir)) continue;   /* v0.29.0 */
       if (needsFields) {
         if (!hasActiveFields(rd, VIEW_STATE.mode)) continue;
         var rdAxis = activeAxisFor(rd, VIEW_STATE.mode);
@@ -917,10 +1055,25 @@ function renderDesignGrid(){
   var svDesigns = [];   /* [{i, id}, …] */
   var kappaMode = (VIEW_STATE.mode === 'thermal' && VIEW_STATE.thermalView === 'kappa');   /* v0.21.0 — κ(n) surface */
   var flowMode = (VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView === 'surface');   /* v0.28.0 — K(n) permeability surface */
-  var svMode = (VIEW_STATE.mode === 'stiff') || kappaMode || flowMode;
+  var orientMode = (VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView === 'orient');   /* v0.31.0 — orientation sphere */
+  var svMode = (VIEW_STATE.mode === 'stiff') || kappaMode || flowMode || orientMode;
   if (svMode) {
     for (var si = 0; si < LAB_STATE.designs.length && si < 3; si++) {
       var sd_g = LAB_STATE.designs[si];
+      if (orientMode) {
+        var odt = flowOrientData(sd_g);
+        if (!odt.om) continue;
+        var svO = (typeof getOrCreateStiffnessViz === 'function') ? getOrCreateStiffnessViz(sd_g.id) : null;
+        if (svO && svO.uploadScalar) {
+          var oLo = odt.om.lo, oHi = odt.om.hi;
+          if ((typeof getStressNormMode === 'function') && getStressNormMode() === 'shared'){
+            for (var so = 0; so < LAB_STATE.designs.length && so < 3; so++){ var o2 = flowOrientData(LAB_STATE.designs[so]); if (o2.om){ oLo = Math.min(oLo, o2.om.lo); oHi = Math.max(oHi, o2.om.hi); } }
+          }
+          svO.uploadScalar(odt.om.vtx, oLo, oHi, odt.om.best.d);
+        }
+        svDesigns.push({ i: si, id: sd_g.id });
+        continue;
+      }
       if (flowMode) {
         var fKf = flowSurfaceK(flowData(sd_g));
         if (!fKf) continue;
@@ -1106,7 +1259,8 @@ function renderDesignGrid(){
         (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +
         (showBuckleBar ? buildBuckleColorbar() : '') +
         ((VIEW_STATE.mode === 'thermal' && useRM) ? buildThermalColorbar(d) + buildClipPills() : '') +
-        ((VIEW_STATE.mode === 'flow' && useRM) ? buildFlowColorbar(d) + buildClipPills().replace('class="lab-clip"', 'class="lab-clip lab-clip-top"') : '') +
+        ((VIEW_STATE.mode === 'flow' && useRM) ? (VIEW_STATE.flowView === 'shear' ? buildShearLegend(d) : buildFlowColorbar(d)) + buildClipPills().replace('class="lab-clip"', 'class="lab-clip lab-clip-top"') : '') +
+        ((VIEW_STATE.mode === 'flow' && useSV && VIEW_STATE.flowView === 'orient') ? buildOrientNote(d) : '') +
         ((VIEW_STATE.mode === 'flow' && flowData(d) && !flowData(d).error) ? buildFlowControl() : '') +
         ((VIEW_STATE.mode === 'thermal' && (useRM || useSV || thermalMapData(d) || kappaMode)) ? buildThermalControl() : '') +
         (showControls
@@ -1147,11 +1301,25 @@ function renderDesignGrid(){
     var rkrm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[rkid] : null;
     if (!rkrm || rkrm.failed) continue;
     var rdesign = LAB_STATE.designs[rmDesigns[rk].i];
+    if (VIEW_STATE.mode === 'flow' && VIEW_STATE.flowView === 'shear') {   /* v0.31.0 — wall shear map */
+      var smp = flowShearMapParams(rdesign);
+      if (smp && rkrm.uploadFlowShear) {
+        var svf = flowShearVoxelField(smp.cp.fr, smp.cp.pick.axis, smp.cp.cfg);
+        if (svf && rkrm._shearSrc !== svf) { rkrm.uploadFlowShear(svf.v, svf.M); rkrm._shearSrc = svf; }
+        rkrm.setFlowParams({ plane: false, hi: 1, shear: { mode: smp.mode, a: smp.a, b: smp.b } });
+        rkrm.setFlowParticles(null);
+      }
+      if (rkrm.setBuckleMap)  rkrm.setBuckleMap(false);
+      if (rkrm.setPulse)      rkrm.setPulse(false);
+      if (rkrm.setWarpExpand) rkrm.setWarpExpand(0);
+      if (rkrm.setViewMode)   rkrm.setViewMode('flow');
+      continue;
+    }
     if (VIEW_STATE.mode === 'flow') {   /* v0.29.0 — speed map / particles */
       var ffv = flowVizField(flowData(rdesign), VIEW_STATE.flowDir);
       if (ffv && rkrm.uploadFlowSpeed) {
         if (rkrm._flowSrc !== ffv) { rkrm.uploadFlowSpeed(ffv.spd, ffv.M); rkrm._flowSrc = ffv; }
-        rkrm.setFlowParams({ plane: VIEW_STATE.flowView === 'speed', hi: flowScaleTop(ffv) });
+        rkrm.setFlowParams({ plane: VIEW_STATE.flowView === 'speed', hi: flowScaleTop(ffv), shear: null });
         if (VIEW_STATE.flowView === 'particles') {
           var fps = flowParticlesFor(rdesign.id);
           fps.speed = VIEW_STATE.flowSpeed; fps.playing = VIEW_STATE.flowPlay; fps.count = VIEW_STATE.flowCount;
@@ -1223,6 +1391,7 @@ function renderDesignGrid(){
     var svkSV = (typeof LAB_SV_REGISTRY !== 'undefined') ? LAB_SV_REGISTRY[svkid] : null;
     if (!svkSV || svkSV.failed) continue;
     var svDesign = LAB_STATE.designs[svDesigns[svk].i];
+    if (orientMode) continue;   /* v0.31.0 — the orientation sphere keeps its own colour range */
     if (typeof resolveStiffViz === 'function' && svkSV.setVizParams) {
       var vp = resolveStiffViz(svDesign, LAB_STATE.designs);
       svkSV.setVizParams(vp.REmax, vp.Cmin, vp.Cmax);
@@ -1421,7 +1590,10 @@ function buildSummary(stats, d){
     /* v0.30.1 — a row's warning sits behind a small amber mark next to the
        value (hover for the text; a tap or click shows it under the value),
        so warnings don't add height (Matt, 2026-10-14). */
-    var wtxt = s.warn ? String(s.warn).replace(/"/g, '&quot;') : '';
+    /* v0.31.0 — every tab (Matt, 2026-10-14): a warning-class note moves behind the mark too */
+    var wraw = s.warn || (dcls === 'warn' ? dtxt : '');
+    if (!s.warn && dcls === 'warn') dtxt = '';
+    var wtxt = wraw ? String(wraw).replace(/<[^>]*>/g, '').replace(/"/g, '&quot;') : '';
     var wmark = wtxt ? '<span class="rwm" role="button" tabindex="0" title="' + wtxt + '" aria-label="Warning: ' + wtxt + '" onclick="this.closest(\'.dc-row\').classList.toggle(\'show-warn\'); event.stopPropagation();">' + LAB_WARN_ICON + '</span>' : '';
     rows += '<div class="dc-row' + (s.wide ? ' wide' : '') + '">' +
               '<span class="rl"'+(s.tip ? ' title="'+s.tip+'"' : '')+'>'+s.lbl+'</span>' +

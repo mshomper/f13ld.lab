@@ -36,9 +36,13 @@
      flowShearStats(fr, axis, cfg)  cfg: { mu (Pa·s), rho, cellMm, target: [lo, hi] Pa | null, chamberMm }
      flowShearPick(fr, cfg)          the axis the cards report (Flow direction setting)
      flowShearConfig(d)              the cfg for a design from FLOW_STATE (+ material)
+     flowProbeShears(fr, axis, cfg)  (v0.31.0) shear per probe, Pa per m/s
+     flowShareIn(stats, a, b)        (v0.31.0) wall share with shear per m/s in [a, b]
+     flowShearVoxelField(fr, axis, cfg) (v0.31.0) log10 shear per m/s on a voxel grid for the surface map
+     flowOrientMap(fr, cfg, U, dirs) (v0.31.0) wall share in the target for every flow direction at speed U
    ============================================================ */
 
-var FLOW_WSS_VERSION = 'wss-1';
+var FLOW_WSS_VERSION = 'wss-1';   /* the stored result format (19g); v0.31.0 adds views only */
 var FLOW_PROBE_PAIRS = [[1.25, 2.25], [0.75, 1.5]];
 var FLOW_PROBE_SINGLE = 1.0;
 var FLOW_PROBE_MINW = 0.25;      /* least fluid share of a trilinear stencil */
@@ -153,21 +157,13 @@ function flowShearStats(fr, axis, cfg) {
   var tg = cfg.target;
   var key = (fr.wssKey || '') + '|' + axis + '|' + cfg.mu + '|' + cfg.rho + '|' + cfg.cellMm + '|' + (tg ? tg[0] + ',' + tg[1] : '-') + '|' + cfg.chamberMm;
   if (_FLOW_STATS_CACHE[key]) return _FLOW_STATS_CACHE[key];
-  var ki = flowKinvOpen(fr);
-  if (!ki || ki.open.indexOf(axis) < 0) return null;
-  var coef = [ki.Kinv[0 * 3 + axis], ki.Kinv[1 * 3 + axis], ki.Kinv[2 * 3 + axis]];
-  var dx = cfg.cellMm / 1000 / fr.N, scale = cfg.mu / dx, n = W.n, area = W.area;
+  var ps = flowProbeShears(fr, axis, cfg);
+  if (!ps) return null;
+  var dx = ps.dx, n = W.n, area = W.area;
   var sv = [], av = [], total = 0;
   for (var p = 0; p < n; p++) {
-    var good = 1, vx = 0, vy = 0, vz = 0;
-    for (var j = 0; j < 3; j++) {
-      if (!coef[j]) continue;
-      var Aj = W.axes[j];
-      if (!Aj || !Aj.ok[p]) { good = 0; break; }
-      vx += coef[j] * Aj.tau[3 * p]; vy += coef[j] * Aj.tau[3 * p + 1]; vz += coef[j] * Aj.tau[3 * p + 2];
-    }
-    if (!good) continue;
-    sv.push(scale * Math.sqrt(vx * vx + vy * vy + vz * vz)); av.push(area[p]); total += area[p];
+    if (!(ps.s[p] >= 0)) continue;
+    sv.push(ps.s[p]); av.push(area[p]); total += area[p];
   }
   if (!sv.length || !(total > 0)) return null;
   var order = sv.map(function (_, i) { return i; }).sort(function (a, b) { return sv[a] - sv[b]; });
@@ -178,7 +174,8 @@ function flowShearStats(fr, axis, cfg) {
   function idxGE(v) { var lo = 0, hi = S.length; while (lo < hi) { var mid = (lo + hi) >> 1; if (S[mid] < v) lo = mid + 1; else hi = mid; } return lo; }
   function idxGT(v) { var lo = 0, hi = S.length; while (lo < hi) { var mid = (lo + hi) >> 1; if (S[mid] <= v) lo = mid + 1; else hi = mid; } return lo; }
   function share(a, b) { return C[idxGT(b)] - C[idxGE(a)]; }
-  var res = { axis: axis, nProbes: S.length, median: quant(0.5), p95: quant(0.95), mean: 0, residual: W.axes[axis].residual };
+  var res = { axis: axis, nProbes: S.length, median: quant(0.5), p95: quant(0.95), mean: 0, residual: W.axes[axis].residual,
+              S: S, C: C };   /* v0.31.0 — sorted shears (per m/s) and cumulative wall share, for the charts */
   for (var q3 = 0; q3 < order.length; q3++) res.mean += S[q3] * (av[order[q3]] / total);
   if (tg && tg[1] > tg[0] && tg[0] > 0) {
     var lo = tg[0], hi = tg[1], ratio = hi / lo, best = -1, bi = 0, bj = 0, wins = [];
@@ -225,6 +222,142 @@ function flowShearStats(fr, axis, cfg) {
   }
   _FLOW_STATS_CACHE[key] = res;
   return res;
+}
+
+/* v0.31.0 — wall shear per probe (Pa per m/s of superficial speed) for a
+   mean flow along axis; NaN where a probe has no value.  Cached. */
+var _FLOW_PROBE_CACHE = {};
+function flowProbeShears(fr, axis, cfg) {
+  var W = fr && fr.wss;
+  if (!W || !W.axes || !(cfg.mu > 0) || !(cfg.cellMm > 0)) return null;
+  var key = (fr.wssKey || '') + '|' + axis + '|' + cfg.mu + '|' + cfg.cellMm;
+  if (_FLOW_PROBE_CACHE[key]) return _FLOW_PROBE_CACHE[key];
+  var ki = flowKinvOpen(fr);
+  if (!ki || ki.open.indexOf(axis) < 0) return null;
+  var coef = [ki.Kinv[0 * 3 + axis], ki.Kinv[1 * 3 + axis], ki.Kinv[2 * 3 + axis]];
+  var dx = cfg.cellMm / 1000 / fr.N, scale = cfg.mu / dx, n = W.n, out = new Float64Array(n);
+  for (var p = 0; p < n; p++) {
+    var good = 1, vx = 0, vy = 0, vz = 0;
+    for (var j = 0; j < 3; j++) {
+      if (!coef[j]) continue;
+      var Aj = W.axes[j];
+      if (!Aj || !Aj.ok[p]) { good = 0; break; }
+      vx += coef[j] * Aj.tau[3 * p]; vy += coef[j] * Aj.tau[3 * p + 1]; vz += coef[j] * Aj.tau[3 * p + 2];
+    }
+    out[p] = good ? scale * Math.sqrt(vx * vx + vy * vy + vz * vz) : NaN;
+  }
+  var r = { s: out, dx: dx };
+  _FLOW_PROBE_CACHE[key] = r;
+  return r;
+}
+/* Share of wall with shear (per m/s) in [a, b], from a stats result. */
+function flowShareIn(st, a, b) {
+  var S = st.S, C = st.C;
+  function idx(v, strict) { var lo = 0, hi = S.length; while (lo < hi) { var mid = (lo + hi) >> 1; if (strict ? S[mid] <= v : S[mid] < v) lo = mid + 1; else hi = mid; } return lo; }
+  return C[idx(b, true)] - C[idx(a, false)];
+}
+
+/* v0.31.0 — wall shear on a voxel grid for the surface map (21 view mode 4).
+   Each probe's shear goes into its voxel (area-weighted mean of log10 of the
+   shear per m/s), then two dilation passes spread values into neighbouring
+   empty voxels so the linearly sampled texture reads only real values at the
+   surface.  M = min(N, 64) (128³ probes binned 2×).  Empty voxels hold
+   FLOW_SHEAR_EMPTY.  Solver order (i·M² + j·M + k).  Cached. */
+var FLOW_SHEAR_EMPTY = -30;
+var _FLOW_SHEAR_VOX = {};
+function flowShearVoxelField(fr, axis, cfg) {
+  var ps = flowProbeShears(fr, axis, cfg);
+  if (!ps) return null;
+  var key = (fr.wssKey || '') + '|' + axis + '|' + cfg.mu + '|' + cfg.cellMm;
+  if (_FLOW_SHEAR_VOX[key]) return _FLOW_SHEAR_VOX[key];
+  var N = fr.N, M = Math.min(N, 64), f = N / M, M3 = M * M * M, MM = M * M, W = fr.wss;
+  var sum = new Float64Array(M3), wsum = new Float64Array(M3), lo = Infinity, hi = -Infinity;
+  for (var p = 0; p < W.n; p++) {
+    var v = ps.s[p];
+    if (!(v > 0)) continue;
+    var i = ((Math.floor(W.pos[3 * p] / f) % M) + M) % M, j = ((Math.floor(W.pos[3 * p + 1] / f) % M) + M) % M, k = ((Math.floor(W.pos[3 * p + 2] / f) % M) + M) % M;
+    var c = i * MM + j * M + k, a = W.area[p], lv = Math.log(v) / Math.LN10;
+    sum[c] += a * lv; wsum[c] += a;
+  }
+  var out = new Float32Array(M3);
+  for (var c0 = 0; c0 < M3; c0++) {
+    if (wsum[c0] > 0) { var lv0 = sum[c0] / wsum[c0]; out[c0] = lv0; if (lv0 < lo) lo = lv0; if (lv0 > hi) hi = lv0; }
+    else out[c0] = FLOW_SHEAR_EMPTY;
+  }
+  for (var pass = 0; pass < 2; pass++) {
+    var nxt = Float32Array.from(out);
+    for (var I = 0; I < M; I++) for (var J = 0; J < M; J++) for (var K = 0; K < M; K++) {
+      var cc = I * MM + J * M + K;
+      if (out[cc] > FLOW_SHEAR_EMPTY + 1) continue;
+      var t = 0, nn = 0;
+      for (var a2 = -1; a2 <= 1; a2++) for (var b2 = -1; b2 <= 1; b2++) for (var e2 = -1; e2 <= 1; e2++) {
+        if (!a2 && !b2 && !e2) continue;
+        var q = out[((I + a2 + M) % M) * MM + ((J + b2 + M) % M) * M + ((K + e2 + M) % M)];
+        if (q > FLOW_SHEAR_EMPTY + 1) { t += q; nn++; }
+      }
+      if (nn) nxt[cc] = t / nn;
+    }
+    out = nxt;
+  }
+  var r = { M: M, v: out, lo: lo, hi: hi };
+  _FLOW_SHEAR_VOX[key] = r;
+  return r;
+}
+
+/* v0.31.0 — orientation map: share of wall inside the target for a mean
+   flow along every direction d at superficial speed U (the card's speed).
+   The shear vector of probe p is Σ_j (K⁻¹d)_j τ̂_jp, so |τ|² = dᵀ Q_p d with
+   Q_p = (T_p K⁻¹)ᵀ(T_p K⁻¹) — six numbers per probe, built once.  Needs all
+   three axes open.  dirs: Float32 3·n unit vectors.  → { val (Float32 n), best, axes [x, y, z] } */
+var _FLOW_ORIENT = {};
+function flowOrientMap(fr, cfg, U, dirs) {
+  var W = fr && fr.wss;
+  if (!W || !cfg.target || !(U > 0) || !(cfg.mu > 0) || !(cfg.cellMm > 0)) return null;
+  for (var a0 = 0; a0 < 3; a0++) if (!(fr.perAxis[a0] && fr.perAxis[a0].open && W.axes[a0])) return null;
+  var key = (fr.wssKey || '') + '|' + cfg.mu + '|' + cfg.cellMm + '|' + cfg.target[0] + ',' + cfg.target[1] + '|' + U + '|' + dirs.length;
+  if (_FLOW_ORIENT[key]) return _FLOW_ORIENT[key];
+  var ki = flowKinvOpen(fr);
+  if (!ki || ki.open.length < 3) return null;
+  var Ki = ki.Kinv, dx = cfg.cellMm / 1000 / fr.N, sc = cfg.mu / dx * U, n = W.n;
+  var lo2 = Math.pow(cfg.target[0] / sc, 2), hi2 = Math.pow(cfg.target[1] / sc, 2);
+  /* Q per probe (only probes with all three axes) */
+  var Q = new Float64Array(6 * n), A = new Float64Array(n), tot = 0, B = new Float64Array(9);
+  for (var p = 0; p < n; p++) {
+    if (!W.axes[0].ok[p] || !W.axes[1].ok[p] || !W.axes[2].ok[p]) continue;
+    /* B = T_p K⁻¹ (T_p columns: τ̂_x, τ̂_y, τ̂_z) */
+    for (var r = 0; r < 3; r++) for (var c = 0; c < 3; c++) {
+      var v = 0;
+      for (var j = 0; j < 3; j++) v += W.axes[j].tau[3 * p + r] * Ki[j * 3 + c];
+      B[r * 3 + c] = v;
+    }
+    var o = 6 * p;
+    Q[o] = B[0] * B[0] + B[3] * B[3] + B[6] * B[6];
+    Q[o + 1] = B[1] * B[1] + B[4] * B[4] + B[7] * B[7];
+    Q[o + 2] = B[2] * B[2] + B[5] * B[5] + B[8] * B[8];
+    Q[o + 3] = 2 * (B[0] * B[1] + B[3] * B[4] + B[6] * B[7]);
+    Q[o + 4] = 2 * (B[0] * B[2] + B[3] * B[5] + B[6] * B[8]);
+    Q[o + 5] = 2 * (B[1] * B[2] + B[4] * B[5] + B[7] * B[8]);
+    A[p] = W.area[p]; tot += A[p];
+  }
+  if (!(tot > 0)) return null;
+  function cover(dx0, dy0, dz0) {
+    var xx = dx0 * dx0, yy = dy0 * dy0, zz = dz0 * dz0, xy = dx0 * dy0, xz = dx0 * dz0, yz = dy0 * dz0, in0 = 0;
+    for (var p2 = 0; p2 < n; p2++) {
+      var a = A[p2]; if (!a) continue;
+      var o2 = 6 * p2, s2 = Q[o2] * xx + Q[o2 + 1] * yy + Q[o2 + 2] * zz + Q[o2 + 3] * xy + Q[o2 + 4] * xz + Q[o2 + 5] * yz;
+      if (s2 >= lo2 && s2 <= hi2) in0 += a;
+    }
+    return in0 / tot;
+  }
+  var nd = dirs.length / 3, val = new Float32Array(nd), best = { v: -1, d: null };
+  for (var di = 0; di < nd; di++) {
+    var x = dirs[3 * di], y = dirs[3 * di + 1], z = dirs[3 * di + 2];
+    val[di] = cover(x, y, z);
+    if (val[di] > best.v) best = { v: val[di], d: [x, y, z] };
+  }
+  var out = { val: val, best: best, axes: [cover(1, 0, 0), cover(0, 1, 0), cover(0, 0, 1)], U: U };
+  _FLOW_ORIENT[key] = out;
+  return out;
 }
 
 /* The axis the cards report: the Flow direction setting, or under "All"

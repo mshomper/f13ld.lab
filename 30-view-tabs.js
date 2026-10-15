@@ -20,7 +20,7 @@ var VIEW_STATE = {
   thermalView: 'temp',                      // v0.21.0 — 'temp' | 'dev' | 'flux' | 'kappa' (all thermal tiles)
   thermalAxis: 'x',                         // v0.21.0 — gradient axis of the map (all thermal tiles)
   thermalDT: 10,                            // v0.21.0 — ΔT across one cell, K (Matt: per cell, fixed default)
-  flowView: 'particles',                    // v0.29.0 — 'particles' | 'speed' | 'surface' (all flow tiles)
+  flowView: 'particles',                    // v0.29.0 — 'particles' | 'speed' | 'surface'; v0.31.0 — 'shear' | 'orient' | 'charts' (all flow tiles)
   flowDir: 'x',                             // v0.29.0 — mean flow along 'x' | 'y' | 'z' | 'xyz'
   flowSpeed: 1,                             // v0.29.0 — particle animation speed
   flowCount: 2500,                          // v0.29.0 — particles per tile
@@ -129,7 +129,7 @@ function onViewModeClick(mode){
   var normGroup = document.getElementById('stressNormToggle');
   if (normGroup) {
     var tv = VIEW_STATE.thermalView;
-    normGroup.classList.toggle('show', (mode === 'stress' || mode === 'stiff' || mode === 'flow' ||
+    normGroup.classList.toggle('show', (mode === 'stress' || mode === 'stiff' || (mode === 'flow' && VIEW_STATE.flowView !== 'charts') ||
                                         (mode === 'thermal' && (tv === 'dev' || tv === 'flux' || tv === 'kappa'))));
     updateStressNormToggleVisual();
     /* Push 5 — swap the label text so the user knows what the toggle
@@ -140,7 +140,7 @@ function onViewModeClick(mode){
       if (mode === 'stiff')      labelEl.textContent = 'E surface scale';
       else if (mode === 'stress') labelEl.textContent = 'σ_VM scale';
       else if (mode === 'thermal') labelEl.textContent = 'Map scale';
-      else if (mode === 'flow')    labelEl.textContent = (VIEW_STATE.flowView === 'surface') ? 'K surface scale' : 'Speed scale';   /* v0.28.0 / v0.29.0 */
+      else if (mode === 'flow')    labelEl.textContent = { surface: 'K surface scale', shear: 'Shear scale', orient: 'Map scale' }[VIEW_STATE.flowView] || 'Speed scale';   /* v0.28.0 / v0.29.0 / v0.31.0 */
     }
   }
 

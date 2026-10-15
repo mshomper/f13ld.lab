@@ -633,3 +633,20 @@ The card warns when the force balance is off by more than 5 % (`FLOW_FORCE_WARN`
 **For Matt to check on his GPU:** a Flow run on his designs (the log line now ends with the wall probe summary), then the Flow settings: direction, target presets, custom target, units. `runFlowGPUCheck(i)` should still print `pass: true`.
 
 **Next (Phase 3, viewer):** the wall shear map on the strut surface (the probes keep their positions and normals for the splat), histogram and in-target vs speed curve, orientation sphere.
+
+---
+
+## 16. Phase 3 — wall shear views (2026-10-14, v0.31.0)
+
+**Decisions (Matt, 2026-10-14):** band colours blue / jade / amber for under / at / over the target. Every view follows the card — its direction and, with a target, its best flow speed; no separate speed slider (shear rescales with speed, and the charts show the speed dependence). The orientation map is at the card's speed and is hidden, with a note, until a shear target is set. Card warnings on every tab sit behind a drawn amber mark (hover for the text, tap to show it).
+
+**Built**
+- Flow tab view switch: flow · speed · **shear** · K(n) · **orient** · **charts**.
+- **Shear** (raymarcher view mode 4, `uShear` on TEXTURE6): `19h flowShearVoxelField` bins the probes' log10 shear per m/s onto the flow grid (≤ 64³), two dilation passes; the surface hit samples it. With a target: bands at the card's best speed, legend with the wall share in each. Without: turbo over the 2nd–98th percentile (or the widest range across designs with the shared scale), colour bar in mPa per mm/s (Pa per m/s).
+- **Orient** (22 scalar mode, `uploadScalar`): `19h flowOrientMap` — wall share in the target for any flow direction at the card's speed, from Q_p = (T_p K⁻¹)ᵀ(T_p K⁻¹) per probe (six numbers), on 642 directions spread to the viewer's 2,562 vertices. The best direction is ringed; the note lists it, the three axes and the range. Needs pores open along all three axes.
+- **Charts** (`24-flow-charts.js`, the merged area as crush uses): wall at the target against speed (one line per design, best speed dotted) and the area-weighted shear distribution (at best speed with the target band shaded, or per unit speed).
+- Card warnings on every tab behind the amber mark (40 renderer: any warning-class note).
+
+**Checks (node):** the orientation map at the three axes equals `flowShareIn` of each axis's stats at the same speed (to 4 decimals); legends, the orientation note and the charts markup build on a CPU flow result. GL rendering is for Matt to click-test.
+
+**Next:** Phase 4 — Sweep and Atlas columns (permeability, shear per speed, best flow, wall at target, usable range); F12–F14.

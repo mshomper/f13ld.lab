@@ -157,6 +157,11 @@ var LAB_SV_VS = [
   '#version 300 es',
   'precision highp float;',
   'in vec3 aPos;',                /* unit direction (icosphere vert) */
+  /* v0.31.0 — scalar mode (flow orientation map): a value per vertex on a
+     plain sphere instead of the tensor surface */
+  'in float aVal;',
+  'uniform float uScalar;',
+  'out vec3 vDir;',
   'uniform float uS[36];',         /* row-major Voigt 6×6 compliance */
   /* Push 5.3 — radius and color now use independent normalizations.
      uREmax  — divisor for the radial scale (per-design or shared via
@@ -223,6 +228,14 @@ var LAB_SV_VS = [
        E[100] = 32.35 GPa,  E[111] = 19.04 GPa,  E_max/E_min = 1.70
      Verified on near-isotropic gyroid (Zener ≈ 0.96):
        E_max/E_min ≈ 1.05  (previously read 3.29 with the buggy v) */
+  '  vDir = aPos;',
+  '  if (uScalar > 0.5) {',
+  '    vColor = clamp((aVal - uCmin) / max(uCmax - uCmin, 1e-30), 0.0, 1.0);',
+  '    vec3 wp = uRot * (aPos * 0.92);',
+  '    gl_Position = vec4(wp.x * uZoom / uAspect + uPan.x, wp.y * uZoom + uPan.y, wp.z * 0.5, 1.0);',
+  '    vNormal = uRot * aPos;',
+  '    return;',
+  '  }',
   '  vec3 n = aPos;',              /* aPos is already unit-length from icosphere */
   '  float inv_E = invEdir(n);',
   '  float E = (inv_E > 1e-30) ? (1.0 / inv_E) : 0.0;',
@@ -272,6 +285,10 @@ var LAB_SV_FS = [
   'precision highp float;',
   'in float vColor;',              /* push 5.3 — independent color stretch */
   'in vec3 vNormal;',
+  'in vec3 vDir;',
+  'uniform float uScalar;',
+  'uniform vec3 uMark;',           /* v0.31.0 — best direction (and its opposite) marked in scalar mode */
+  'uniform float uMarkOn;',
   'out vec4 fragColor;',
 
   /* Cividis colormap — same 8-stop piecewise-linear function used by
@@ -311,6 +328,11 @@ var LAB_SV_FS = [
   '  vec3 n = normalize(vNormal);',
   '  float diff = 0.35 + max(dot(n, l1), 0.0) * 0.70 + max(dot(n, l2), 0.0) * 0.25;',
   '  vec3 col = cividis(vColor) * diff;',
+  '  if (uScalar > 0.5 && uMarkOn > 0.5) {',
+  '    float m = abs(dot(normalize(vDir), uMark));',
+  '    if (m > 0.9975) col = vec3(0.784, 0.961, 0.259) * (0.75 + 0.25 * diff);',
+  '    else if (m > 0.9955) col = vec3(0.04, 0.05, 0.06);',
+  '  }',
   '  fragColor = vec4(col, 1.0);',
   '}'
 ].join('\n');
@@ -458,7 +480,7 @@ StiffnessViz.prototype._compileShader = function() {
      returns the location of element 0; subsequent elements are at
      ['uS[1]', 'uS[2]', …].  We bind via uniform1fv with the whole array. */
   var L = {};
-  ['uS[0]','uREmax','uCmin','uCmax','uRot','uZoom','uAspect','uPan'].forEach(function(name){
+  ['uS[0]','uREmax','uCmin','uCmax','uRot','uZoom','uAspect','uPan','uScalar','uMark','uMarkOn'].forEach(function(name){
     L[name] = gl.getUniformLocation(prg, name);
   });
   this._uloc = L;
@@ -504,6 +526,7 @@ StiffnessViz.prototype.uploadDesign = function(S_mpa /*, rho */) {
   /* Convert to Float32Array for the GL uniform.  Even if input is
      already Float32, .set() handles it cleanly. */
   for (var k = 0; k < 36; k++) this._S[k] = S_mpa[k];
+  this._scalar = false;   /* v0.31.0 — back to the tensor surface */
 
   /* Sample E(n̂) at every icosphere vertex to find E_max / E_min.
      Same math as the vertex shader, mirrored on the CPU.
@@ -561,6 +584,22 @@ StiffnessViz.prototype.uploadDesign = function(S_mpa /*, rho */) {
    design's own stats; in 'shared' mode all three come from the global
    E_min/E_max across all designs (so cross-design comparison shows
    weaker designs as both smaller AND darker). */
+/* v0.31.0 — scalar mode: one value per LAB_SV_MESH vertex drawn on a plain
+   sphere, coloured over [cmin, cmax]; mark: a unit direction drawn as a
+   bright ring (both ends — the flow map is symmetric) or null.
+   uploadDesign() switches back to the tensor surface. */
+StiffnessViz.prototype.uploadScalar = function(vals, cmin, cmax, mark) {
+  if (this.failed || !vals || vals.length !== LAB_SV_MESH.nVerts) return;
+  var gl = this.gl;
+  if (!this._vboVal) this._vboVal = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, this._vboVal);
+  gl.bufferData(gl.ARRAY_BUFFER, vals instanceof Float32Array ? vals : Float32Array.from(vals), gl.DYNAMIC_DRAW);
+  this._scalar = true;
+  this._Cmin = cmin; this._Cmax = cmax > cmin ? cmax : cmin + 1e-6;
+  this._mark = mark || null;
+  this._stats = { E_max: cmax, E_min: cmin, aniso: 1, hasData: true };
+  this._dirty = true;
+};
 StiffnessViz.prototype.setVizParams = function(REmax, Cmin, Cmax) {
   if (this.failed) return;
   if (REmax != null && isFinite(REmax) && REmax > 0) this._REmax = REmax;
@@ -669,6 +708,19 @@ StiffnessViz.prototype._render = function() {
   gl.uniform1f (this._uloc.uZoom,    this._u.zoom);
   gl.uniform1f (this._uloc.uAspect,  w / h);
   gl.uniform2f (this._uloc.uPan,     this._u.panX || 0, this._u.panY || 0);
+  /* v0.31.0 — scalar mode */
+  gl.uniform1f (this._uloc.uScalar,  this._scalar ? 1 : 0);
+  var mk = this._scalar && this._mark;
+  gl.uniform1f (this._uloc.uMarkOn,  mk ? 1 : 0);
+  gl.uniform3f (this._uloc.uMark,    mk ? this._mark[0] : 0, mk ? this._mark[1] : 0, mk ? this._mark[2] : 1);
+  var valLoc = gl.getAttribLocation(this._prog, 'aVal');
+  if (valLoc >= 0) {
+    if (this._scalar && this._vboVal) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._vboVal);
+      gl.enableVertexAttribArray(valLoc);
+      gl.vertexAttribPointer(valLoc, 1, gl.FLOAT, false, 0, 0);
+    } else { gl.disableVertexAttribArray(valLoc); gl.vertexAttrib1f(valLoc, 0); }
+  }
 
   /* Mesh attribs are already bound from _uploadMesh; rebind defensively
      in case another GL context (the raymarcher's) was just active. */
@@ -687,6 +739,7 @@ StiffnessViz.prototype.destroy = function() {
   this.setActive(false);
   var gl = this.gl;
   if (this._vboPos)  { gl.deleteBuffer(this._vboPos);   this._vboPos = null; }
+  if (this._vboVal)  { gl.deleteBuffer(this._vboVal);   this._vboVal = null; }
   if (this._iboTris) { gl.deleteBuffer(this._iboTris);  this._iboTris = null; }
   if (this._prog)    { gl.deleteProgram(this._prog);    this._prog = null; }
 };
