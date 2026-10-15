@@ -1,0 +1,1 @@
+{"test":"W5 sweep summary","N":24,"probes":6080,"Q":1000,"cases":45,"kL2":"1.634e-3 / 1.958e-3 / 1.958e-3","worst_median":"0.001 %","worst_p95":"0.141 %","worst_share_pts":"0.262","best_speed_share_loss_pts":"0.321","worst_range_log":"0.0137","same_pick":"15/15","share_limit_pts":"1.0","pass":true,"ms":4036}

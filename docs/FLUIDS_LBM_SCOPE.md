@@ -321,7 +321,7 @@ Exact answers first, then published data, then self-consistency. The CPU referen
 | F10 | GPU vs CPU reference, N = 16–32, every family including foam and STL import | Within 1e-5 relative |
 | F11 | Grid convergence, gyroid / Schwarz P / foam at 32 / 64 / 128 | K and median WSS monotone; the grid rule (§3.8) flags the coarse cases |
 | F12 | Published TPMS permeability (Castro et al. 2019: gyroid vs Schwarz P vs Schwarz D at matched porosity) | Within the scatter between their CFD and experiment; same ranking |
-| F13 | Old FFT Stokes CPU reference at N = 32 (informational only) | Differences explained; not a pass/fail gate |
+| F13 | ~~Old FFT Stokes CPU reference at N = 32 (informational only)~~ | **Retired** (v0.32.0): the Stokes solver was removed in v0.21.0 |
 | F14 | Native designs unchanged | Stiffness, crush, buckling and thermal identical to before |
 
 ---
@@ -334,7 +334,7 @@ Exact answers first, then published data, then self-consistency. The CPU referen
 | **1 — GPU solver** ✓ | `19g`: fused kernel, CLI walls, convergence, mass correction; fluid connectivity; permeability tensor; card rows and flags; F8–F11 (§13). Coarse-to-fine start dropped (Matt, 2026-10-14) | built 2026-10-14 |
 | **2 — Wall shear** | `14e` triangle list, `19h` probes / extrapolation / unit tractions, live rescaling, statistics, window presets, best flow rate, force-balance check | 1 session |
 | **3 — Viewer** | Window-band and continuous WSS maps, speed on the section plane, histogram and flow-rate curve, orientation sphere, K(n) surface | 1 session |
-| **4 — Sweep and cleanup** | Sweep and Atlas columns; F12–F14 | ½ session |
+| **4 — Sweep and cleanup** ✓ | Sweep and Atlas columns; F12–F14 (§17) | built 2026-10-15 (v0.32.0) |
 
 Thermal goes first (`THERMAL_SCOPE.md`). It builds the shared signed-field and section-plane pieces this module needs.
 
@@ -650,3 +650,28 @@ The card warns when the force balance is off by more than 5 % (`FLOW_FORCE_WARN`
 **Checks (node):** the orientation map at the three axes equals `flowShareIn` of each axis's stats at the same speed (to 4 decimals); legends, the orientation note and the charts markup build on a CPU flow result. GL rendering is for Matt to click-test.
 
 **Next:** Phase 4 — Sweep and Atlas columns (permeability, shear per speed, best flow, wall at target, usable range); F12–F14.
+
+---
+
+## 17. Phase 4 — flow in the sweep (2026-10-15, v0.32.0)
+
+**Decisions (Matt, 2026-10-15):** the sweep solves flow on the Configure flow grid (64³ by default, the cards' grid), not each run's elastic grid. Castro et al.'s scaffolds are not stated as sheet or network, so the F12 check builds both.
+
+**Built**
+- Sweep Physics row: *stiffness +* toggles **thermal** and **flow** (`SWEEP_STATE.thermal` / `.flow`; saved sweeps with `physics: 'thermal'` load as thermal on; the snapshot still writes `physics` for older labs). Time estimate adds flow from `RUN_CALIB.flow` / `RUN_REF.flow`. The per-solve stiffness timing no longer counts thermal and flow time (it was inflating the stiffness estimate whenever thermal was on).
+- `62 sweepFlowOne`: `homogenizeFlowGPU` without velocity fields; keeps K/L², tortuosity, porosities, pores, convergence, steps, and `19h flowShearSummary` — 1,000 area quantiles per open axis of the dimensionless shear τ/(μU/Δx), Float32, about 12 KB per axis. `sweepFlowShear` turns it into the card statistics for the current fluid / target / direction and the run's cell size (`flowSummaryStats`, `flowSummaryPick`).
+- `19h` refactor: `flowShearStats` = `flowSortShears` + `flowShearStatsSorted` (shared with the sweep); `flowProbeShears(…, noCache)` so the sweep doesn't grow the probe cache. Card statistics unchanged (288 values compared with v0.31.0, 0 differences).
+- CSV (only when a run has flow; flow-off exports are byte-identical to v0.31.0 — F14): `flow_N`, `flow_tol`, `flow_open_porosity`, `flow_sealed_porosity`, `K_xx/yy/zz_m2`, `kL2_xx/yy/zz`, `perm_anisotropy`, `tortuosity_x/y/z`, `narrowest_pore_vox/_mm`, `median_pore_mm`, `flow_coarse`, `wss_median_Pa_per_m_s_x/y/z`, `wss_p95_Pa_per_m_s_x/y/z` (Pa per m/s = mPa per mm/s), `flow_fluid`, `fluid_mu_mPas`, `flow_dir`, `shear_target_lo/hi_mPa`, `shear_target_basis`, `best_speed_mm_s`, `best_flow_ml_min`, `chamber_mm`, `wall_at_target_pct`, `wall_under_pct`, `wall_over_pct`, `usable_speed_lo/hi_mm_s`, `reynolds_at_best`, `force_balance_pct_x/y/z`, `flow_converged`, `flow_steps`, `flow_wall_time_s`. Run notes: coarse grid, not converged, no open path, force balance > 5 %.
+- Atlas: `perm` (mean of open axes), `perm_x/y/z` (10⁻⁹ m²), `kL2`, `tort`, `wss_med` (mPa per mm/s along the card's direction), `wall_target` (%). Metric lists offer only metrics some run has; non-stiffness metrics print plainly (they printed as MPa with the MPa unit switch on).
+
+**Checks**
+
+| # | Case | Result |
+|---|---|---|
+| W5 | Summary vs every probe, anisotropic sheet gyroid 24³ / 32³, three fluids × cell sizes × five targets × three axes | median within 0.08 %, 95th within 0.14 %; wall at target within 0.26 points (the card's own plateau tolerance is 1 point, §15); usable range within 1.4 %; same reported direction 15 / 15 |
+| F12 | Castro et al. 2019 (70 % porosity, 3.25 mm cells; measured gyroid > P by 27 % > D by 49 %; no level sets or CFD values given) | CPU reference at 24³: sheets rank gyroid > P (1.7 % lower) > D (39.5 % lower) — pass; networks do not (P network 69 % above gyroid, straight channels). GPU check `runFlowCastroCheck()` for Matt. The measured P gap exceeds creeping flow: at their 20–100 mL/min the pore Reynolds number is about 3–15, so their permeability includes inertia (HX-1) |
+| F13 | Old Stokes reference | retired |
+| F14 | Flow off | sweep CSV identical to v0.31.0 (headless); Run All untouched; card statistics identical |
+
+**Next:** HX-1 (inertial pressure drop), then the F13LD.sweep flow port (32³ Fast, 64³ otherwise).
+

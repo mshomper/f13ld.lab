@@ -39,6 +39,13 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (Configure → Crush → Grid, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Load axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.32.0
+
+- **Flow in the parameter sweep.** The sweep's Physics row is now *stiffness +* two toggles, **thermal** and **flow**. Flow solves every run on the Configure flow grid (64³ by default) and adds to the CSV permeability X / Y / Z in m² and as k/L², anisotropy, tortuosity, open and sealed porosity, narrowest and median pore, wall shear per unit speed (median and 95th, every open axis), the flow direction the cards report, and with a shear target the best speed, wall at target, usable speed range and the target used. Force balance, convergence and wall time per run.
+- Each run keeps a 1,000-point summary of its wall shear, so changing the fluid, shear target or direction after a sweep updates the export and the Atlas without a re-solve (`node proto/flow/wss_checks.js W5`).
+- **Atlas:** permeability (mean and per axis), k/L², tortuosity, median wall shear and wall at target on the surface and parameter map; metric lists only offer what the runs have; non-stiffness metrics no longer print as MPa.
+- **Console check F12:** `runFlowCastroCheck()` builds sheet and network gyroid / Schwarz P / Schwarz D at 70 % porosity (Castro et al. 2019) and checks the ranking.
+
 ## What's new in v0.29.1
 - **Streak length and size.** A length slider (0.25–2×) sets how much flow time each streak covers, so changing the animation speed no longer changes how long the streaks are; faster fluid still draws longer streaks. A size slider sets streak width.
 - The particle controls (play / pause, speed, length, size, count) are shared by every tile and sit in the view strip on the Flow tab.

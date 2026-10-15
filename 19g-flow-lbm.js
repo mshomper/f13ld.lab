@@ -575,3 +575,66 @@ async function runFlowGPUCheck(designIndex, N, steps) {
   console.log('[flow check] ' + JSON.stringify(res));
   return res;
 }
+
+/* ---------- console check F12 (v0.32.0): Castro et al. 2019 TPMS ranking ----------
+   runFlowCastroCheck()        flow grid from Configure (64 by default)
+   runFlowCastroCheck(128)     a finer grid
+   Castro et al. (2019, Materials 12:1009) measured permeability of gyroid,
+   Schwarz P and Schwarz D scaffolds at 70 % porosity, 3.25 mm cells, with
+   water: gyroid highest, P 27 % lower on average, D 49 % lower.  The paper
+   gives no level sets and does not say sheet or network, so both are built
+   here at 70 % porosity (30 % voxel solid, exact at the grid).
+   Pass: the sheets rank gyroid > P > D.  The networks are informational: on
+   the Float64 CPU reference at 24³ (2026-10-15) only the sheets reproduce
+   the measured ranking (P 1.7 % and D 39.5 % below gyroid); the P network,
+   with its straight channels, is 69 % more permeable than the gyroid
+   network.  The measured P gap is larger than creeping flow predicts: at
+   20–100 mL/min through a 13 mm cube the pore Reynolds number is about
+   3–15, so their Darcy permeability includes inertia (HX-1, scope §11.2). */
+var FLOW_CASTRO_TERMS = {
+  'Gyroid':    [['sin(x)', 'cos(y)'], ['sin(y)', 'cos(z)'], ['sin(z)', 'cos(x)']],
+  'Schwarz P': [['cos(x)'], ['cos(y)'], ['cos(z)']],
+  'Schwarz D': [['sin(x)', 'sin(y)', 'sin(z)'], ['sin(x)', 'cos(y)', 'cos(z)'], ['cos(x)', 'sin(y)', 'cos(z)'], ['cos(x)', 'cos(y)', 'sin(z)']]
+};
+var FLOW_CASTRO_GAPS = { 'Schwarz P': 0.27, 'Schwarz D': 0.49 };
+async function runFlowCastroCheck(N) {
+  N = N || (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.N) || 64;
+  if (typeof ensureDevice === 'function') await ensureDevice();
+  var cell = 3.25, out = [], t0 = performance.now();
+  for (var mi = 0; mi < 2; mi++) {
+    var mode = mi ? 'solid' : 'shell', kind = mi ? 'network' : 'sheet', byName = {};
+    for (var name in FLOW_CASTRO_TERMS) {
+      var terms = FLOW_CASTRO_TERMS[name].map(function (fs) {
+        return { on: true, coef: 1, factors: fs.map(function (t) { return { trig: t, fx: 1, fy: 1, fz: 1 }; }) };
+      });
+      var rc = { family: 'tpms', name: name + ' ' + kind, surface: { type: 'terms', terms: terms },
+                 geometry: { mode: mode, offset: 0, wallThickness: 0.3, cellSizeMm: cell, cellMult: 1 } };
+      var spec = sweepSpecByKey(rc, mode === 'shell' ? 'wallThickness' : 'offset');
+      var v = spec ? sweepParamsForFractions(rc, spec, N, [0.30])[0] : null;
+      if (v == null) { console.warn('[flow Castro] ' + rc.name + ': 30 % solid not reachable'); continue; }
+      sweepParamSet(rc, spec, v);
+      var FR = await homogenizeFlowGPU(rc, N, Object.assign({}, connOpts(), { tol: (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.tol) || 1e-6, keepFields: false, keepWss: false }));
+      var op = [0, 1, 2].filter(function (a) { return FR.perAxis[a] && FR.perAxis[a].open; });
+      var kL2 = op.length ? op.reduce(function (s0, a) { return s0 + FR.kL2[a]; }, 0) / op.length : 0;
+      byName[name] = { kind: kind, surface: name, level: +v.toPrecision(4), porosity_pct: +(FR.porosity * 100).toFixed(1),
+                       open_pct: +(FR.openPorosity * 100).toFixed(1), kL2: +kL2.toPrecision(4), K_e9_m2: +(kL2 * cell * cell * 1e3).toPrecision(4),
+                       narrowest_pore_vox: FR.throatVox != null ? +FR.throatVox.toFixed(1) : null,
+                       converged: op.every(function (a) { return FR.perAxis[a].converged; }) };
+    }
+    var G = byName['Gyroid'];
+    for (var nm in byName) {
+      var r = byName[nm];
+      if (G && nm !== 'Gyroid') { r.below_gyroid_pct = +((1 - r.kL2 / G.kL2) * 100).toFixed(1); r.castro_below_pct = FLOW_CASTRO_GAPS[nm] * 100; }
+      out.push(r);
+    }
+    var P = byName['Schwarz P'], D = byName['Schwarz D'];
+    var ranked = !!(G && P && D && G.kL2 > P.kL2 && P.kL2 > D.kL2);
+    out.push(mi ? { kind: kind, surface: 'ranking gyroid > P > D (informational)', matches: ranked }
+                : { kind: kind, surface: 'ranking gyroid > P > D', pass: ranked });
+  }
+  console.table(out);
+  var sh = out.filter(function (r) { return r.pass != null; })[0], nw = out.filter(function (r) { return r.matches != null; })[0];
+  console.log('[flow Castro] N=' + N + ' · sheets ' + (sh && sh.pass ? 'pass' : 'FAIL') + ' · networks ' + (nw && nw.matches ? 'match the ranking' : 'do not match the ranking (expected)') +
+              ' · ' + ((performance.now() - t0) / 1000).toFixed(1) + ' s');
+  return out;
+}

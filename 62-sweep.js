@@ -42,7 +42,8 @@ var SWEEP_STATE = {
   results: {},                     /* run_id → result record */
   selected: {},                    /* run_id → bool */
   precision: 'standard',
-  physics: 'stiffness',            /* v0.23.0 — 'stiffness' | 'thermal' (stiffness + thermal κ per filler) */
+  thermal: false,                  /* v0.23.0 — also thermal κ per filler (was physics: 'thermal'; v0.32.0 split into ticks) */
+  flow: false,                     /* v0.32.0 — also flow (19g permeability, 19h wall shear) on the Configure flow grid */
   preview: {},                     /* run_id → geometry stats (14d-voxel-stats.js) */
   builder: {},                     /* last builder settings (kept across redraws and reloads) */
   voidRatio: 1e-6,                 /* void stiffness ÷ solid (Matt, 2026-10-01: 1e-6 for sweeps) */
@@ -75,7 +76,8 @@ function sweepSnapshot() {
     results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
     preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder,
     voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order, timing: SWEEP_STATE.timing,
-    partialVolume: SWEEP_STATE.partialVolume, physics: SWEEP_STATE.physics };
+    partialVolume: SWEEP_STATE.partialVolume, thermal: SWEEP_STATE.thermal, flow: SWEEP_STATE.flow,
+    physics: SWEEP_STATE.thermal ? 'thermal' : 'stiffness' };   /* physics: read by labs before v0.32.0 */
 }
 function sweepSave() {
   if (_swSaveT) return;
@@ -102,7 +104,8 @@ function sweepApplySaved(p) {
   if (p.voidRatio > 0) SWEEP_STATE.voidRatio = p.voidRatio;
   SWEEP_STATE.refine = p.refine || 'off'; SWEEP_STATE.order = p.order || 2;
   SWEEP_STATE.partialVolume = p.partialVolume === true;
-  SWEEP_STATE.physics = p.physics === 'thermal' ? 'thermal' : 'stiffness';
+  SWEEP_STATE.thermal = p.thermal != null ? !!p.thermal : p.physics === 'thermal';
+  SWEEP_STATE.flow = !!p.flow;
   SWEEP_STATE.timing = p.timing || SWEEP_STATE.timing || {};
   return true;
 }
@@ -486,9 +489,13 @@ async function sweepRunOne(run) {
     res.geom.sad_m2m3 = G.area > 0 ? G.area / (cellMm / 1000) : null;
     res.geom.dh_mm = G.area > 0 ? 4 * res.geom.porosity * cellMm / G.area : null;
   }
-  if (SWEEP_STATE.physics === 'thermal') {
+  if (SWEEP_STATE.thermal) {
     try { res.thermal = await sweepThermalOne(run, recipe); res.wall_s += res.thermal.wall_s || 0; }
     catch (e) { res.thermal = { error: (e && e.message) || String(e) }; }
+  }
+  if (SWEEP_STATE.flow) {
+    try { res.flow = await sweepFlowOne(run, recipe); res.wall_s += res.flow.wall_s || 0; }
+    catch (e) { res.flow = { error: (e && e.message) || String(e) }; }
   }
   res.notes = sweepNotesFor(run, res);
   return res;
@@ -522,6 +529,87 @@ async function sweepThermalOne(run, recipe) {
   return out;
 }
 
+/* v0.32.0 — flow for one sweep run: permeability, tortuosity and pores on the
+   Configure flow grid (FLOW_STATE.N, Matt 2026-10-15: same grid as the cards),
+   no velocity fields; the wall shear is kept as a 1,000-point summary per axis
+   (19h flowShearSummary), so fluid, target and cell size can change after the
+   sweep without a re-solve.  kL2 is the permeability ÷ cell edge²: × cell² in
+   m² gives K in m². */
+async function sweepFlowOne(run, recipe) {
+  if (typeof homogenizeFlowGPU !== 'function') throw new Error('flow solver not loaded');
+  var N = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.N) || 64, tol = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.tol) || 1e-6;
+  var t0 = performance.now();
+  var FR = await homogenizeFlowGPU(recipe, N, Object.assign({}, connOpts(), { tol: tol, keepFields: false }));
+  if (!FR) throw new Error('flow solve stopped');
+  var out = { N: N, tol: tol, porosity: FR.porosity, openPorosity: FR.openPorosity, sealedPorosity: FR.sealedPorosity,
+              throatVox: FR.throatVox, medPoreVox: FR.medPoreVox, kL2: FR.kL2.slice(), asym: FR.asym,
+              tort: Array.prototype.slice.call(FR.tort), open: [], converged: [], steps: [], residual: [null, null, null], shear: null };
+  for (var a = 0; a < 3; a++) {
+    var pa = FR.perAxis[a] || {};
+    out.open.push(!!pa.open); out.converged.push(pa.open ? !!pa.converged : null); out.steps.push(pa.open ? pa.steps : null);
+  }
+  if (typeof flowShearSummary === 'function') out.shear = flowShearSummary(FR);
+  if (out.shear) for (var b = 0; b < 3; b++) if (out.shear.axes[b]) out.residual[b] = out.shear.axes[b].residual;
+  out.wall_s = (performance.now() - t0) / 1000;
+  return out;
+}
+/* v0.32.0 — the flow CSV cells of one run */
+function sweepFlowCsvRow(run, F, row) {
+  var rc = null; try { rc = sweepRecipeForRun(run); } catch (e) { rc = null; }
+  var cell = sweepCellMm(rc), L = cell / 1000, ax = ['x', 'y', 'z'], kk = ['xx', 'yy', 'zz'];
+  row.flow_N = F.N; row.flow_tol = F.tol; row.flow_open_porosity = F.openPorosity; row.flow_sealed_porosity = F.sealedPorosity;
+  var open = [0, 1, 2].filter(function (a) { return F.open[a] && F.kL2[a] > 0; });
+  [0, 1, 2].forEach(function (a) {
+    row['K_' + kk[a] + '_m2'] = F.open[a] ? F.kL2[a] * L * L : 0;
+    row['kL2_' + kk[a]] = F.open[a] ? F.kL2[a] : 0;
+    row['tortuosity_' + ax[a]] = F.open[a] && isFinite(F.tort[a]) ? F.tort[a] : null;
+    row['force_balance_pct_' + ax[a]] = F.residual[a] != null ? F.residual[a] * 100 : null;
+  });
+  if (open.length === 3) { var ks = open.map(function (a) { return F.kL2[a]; }); row.perm_anisotropy = Math.max.apply(null, ks) / Math.min.apply(null, ks); }
+  if (F.throatVox != null) { row.narrowest_pore_vox = F.throatVox; row.narrowest_pore_mm = F.throatVox / F.N * cell; }
+  if (F.medPoreVox != null) row.median_pore_mm = F.medPoreVox / F.N * cell;
+  var permMin = (typeof FLOW_THROAT_PERM !== 'undefined') ? FLOW_THROAT_PERM : 8, wssMin = (typeof FLOW_THROAT_WSS !== 'undefined') ? FLOW_THROAT_WSS : 15;
+  row.flow_coarse = F.throatVox == null ? '' : F.throatVox < permMin ? 'permeability' : F.throatVox < wssMin ? 'wall shear' : 'no';
+  row.flow_converged = [0, 1, 2].every(function (a) { return !F.open[a] || F.converged[a]; }) ? 'yes' : 'no';
+  row.flow_steps = F.steps.map(function (v) { return v == null ? '-' : v; }).join('/');
+  row.flow_wall_time_s = F.wall_s;
+  var sh = sweepFlowShear(run, F);
+  if (!sh) return;
+  var cfg = sh.cfg, fl = (typeof flowFluid === 'function') ? flowFluid() : null;
+  row.flow_fluid = fl ? fl.name : ''; row.fluid_mu_mPas = cfg.mu > 0 ? cfg.mu * 1000 : null;
+  sh.byAxis.forEach(function (st, a) {
+    if (!st) return;
+    row['wss_median_Pa_per_m_s_' + ax[a]] = st.median; row['wss_p95_Pa_per_m_s_' + ax[a]] = st.p95;
+  });
+  var pk = sh.pick;
+  if (!pk) return;
+  row.flow_dir = 'XYZ'[pk.axis] + (pk.best ? ' (best)' : '');
+  var tg = cfg.targetInfo;
+  if (!tg) return;
+  row.shear_target_lo_mPa = tg.lo; row.shear_target_hi_mPa = tg.hi; row.shear_target_basis = tg.note || '';
+  var st2 = pk.stats;
+  if (!st2) return;
+  row.wall_at_target_pct = (st2.inTarget || 0) * 100;
+  if (st2.bestU > 0) {
+    row.best_speed_mm_s = st2.bestU * 1000; row.chamber_mm = cfg.chamberMm; row.best_flow_ml_min = st2.mlMin;
+    row.wall_under_pct = st2.under * 100; row.wall_over_pct = st2.over * 100;
+    row.usable_speed_lo_mm_s = st2.rangeLo * 1000; row.usable_speed_hi_mm_s = st2.rangeHi * 1000;
+    row.reynolds_at_best = st2.Re;
+  }
+}
+/* The shear numbers for one run under the current Flow settings (fluid, target,
+   direction) and the run's own cell size: { cfg, pick, byAxis[3] } or null. */
+function sweepFlowShear(run, fl) {
+  if (!fl || fl.error || !fl.shear || typeof flowShearConfig !== 'function') return null;
+  var cfg = flowShearConfig(null), rc = null;
+  try { rc = sweepRecipeForRun(run); } catch (e) { rc = null; }
+  cfg.cellMm = sweepCellMm(rc);
+  if (!(cfg.mu > 0) || !(cfg.cellMm > 0)) return { cfg: cfg, pick: null, byAxis: [null, null, null] };
+  var cfg0 = Object.assign({}, cfg, { target: null });
+  return { cfg: cfg, pick: flowSummaryPick(fl, cfg),
+           byAxis: [0, 1, 2].map(function (a) { return fl.shear.axes[a] ? flowSummaryStats(fl.shear, a, cfg0, fl.medPoreVox) : null; }) };
+}
+
 function sweepNotesFor(run, r) {
   var n = [];
   if (r.vf_check != null && Math.abs(r.vf_check) > SWEEP_VF_TOL)
@@ -536,6 +624,18 @@ function sweepNotesFor(run, r) {
   if (r.thermal && r.thermal.byFiller) {
     var nc = Object.keys(r.thermal.byFiller).filter(function (f) { return !r.thermal.byFiller[f].converged; });
     if (nc.length) n.push('thermal did not converge (' + nc.join(', ') + ')');
+  }
+  if (r.flow && r.flow.error) n.push('flow not computed: ' + r.flow.error);
+  if (r.flow && !r.flow.error) {
+    var F = r.flow, permMin = (typeof FLOW_THROAT_PERM !== 'undefined') ? FLOW_THROAT_PERM : 8, wssMin = (typeof FLOW_THROAT_WSS !== 'undefined') ? FLOW_THROAT_WSS : 15;
+    if (F.throatVox != null && F.throatVox < permMin) n.push('flow coarse for permeability: narrowest pore ' + F.throatVox.toFixed(1) + ' voxels at ' + F.N + '³ (wants ' + permMin + '+) — raise the flow grid');
+    else if (F.throatVox != null && F.throatVox < wssMin) n.push('flow coarse for wall shear: narrowest pore ' + F.throatVox.toFixed(1) + ' voxels at ' + F.N + '³ (wants ' + wssMin + '+)');
+    var fnc = [0, 1, 2].filter(function (a) { return F.open[a] && !F.converged[a]; });
+    if (fnc.length) n.push('flow did not converge along ' + fnc.map(function (a) { return 'XYZ'[a]; }).join(', '));
+    if (!F.open[0] && !F.open[1] && !F.open[2]) n.push('flow: no open pore path');
+    var fw = (typeof FLOW_FORCE_WARN !== 'undefined') ? FLOW_FORCE_WARN : 0.05;
+    var fb = [0, 1, 2].filter(function (a) { return F.residual[a] != null && Math.abs(F.residual[a]) > fw; });
+    if (fb.length) n.push('wall force balance off by more than ' + Math.round(fw * 100) + ' % along ' + fb.map(function (a) { return 'XYZ'[a]; }).join(', ') + ' — wall shear approximate');
   }
   if (r.noLoad) n.push('no load on ' + r.noLoad.map(function (b) { return b.axis; }).join(', ') + ': ' +
     r.noLoad.map(function (b) { return 'E' + b.axis + ' reads ' + b.E.toExponential(1); }).join(', ') +
@@ -669,7 +769,8 @@ async function sweepStart() {
     try {
       var res = await sweepRunOne(run);
       SWEEP_STATE.results[run.id] = res;
-      sweepRecordTiming(run.N, res.wall_s - (res.companion ? res.companion.wall_s : 0));
+      /* v0.32.0 — the per-solve timing is the stiffness solve only (thermal and flow have their own estimates) */
+      sweepRecordTiming(run.N, res.wall_s - (res.companion ? res.companion.wall_s : 0) - ((res.thermal && res.thermal.wall_s) || 0) - ((res.flow && res.flow.wall_s) || 0));
       if (res.companion) sweepRecordTiming(res.companion.N, res.companion.wall_s);
       console.log('[sweep] ' + run.id + ' N=' + run.N + ' vf ' + res.vf_solved.toFixed(2) + '% Ex ' + res.Ex.toExponential(3) +
                   ' Ey ' + res.Ey.toExponential(3) + ' Ez ' + res.Ez.toExponential(3) + ' · ' + res.wall_s.toFixed(1) + ' s');
@@ -718,6 +819,20 @@ function sweepExportCsv() {
     thFillers.forEach(function (f) {
       ['kx_WmK', 'ky_WmK', 'kz_WmK', 'k_rel', 'k_eff_hs', 'rhoc_eff_MJm3K', 'alpha_mm2s', 'k_iters', 'k_converged'].forEach(function (c) { cols.push(c + '_' + f); });
     });
+  }
+  /* v0.32.0 — flow columns (Configure flow grid).  Permeability in m² at the
+     run's cell size and as k/L²; wall shear per unit speed in Pa per m/s
+     (the same number as mPa per mm/s) for every open axis; the target columns
+     follow the Flow settings at export time (direction, fluid, target). */
+  var anyFlow = SWEEP_STATE.runs.some(function (run) { var r = SWEEP_STATE.results[run.id]; return r && r.flow; });
+  if (anyFlow) {
+    cols = cols.concat(['flow_N', 'flow_tol', 'flow_open_porosity', 'flow_sealed_porosity',
+      'K_xx_m2', 'K_yy_m2', 'K_zz_m2', 'kL2_xx', 'kL2_yy', 'kL2_zz', 'perm_anisotropy', 'tortuosity_x', 'tortuosity_y', 'tortuosity_z',
+      'narrowest_pore_vox', 'narrowest_pore_mm', 'median_pore_mm', 'flow_coarse',
+      'wss_median_Pa_per_m_s_x', 'wss_median_Pa_per_m_s_y', 'wss_median_Pa_per_m_s_z', 'wss_p95_Pa_per_m_s_x', 'wss_p95_Pa_per_m_s_y', 'wss_p95_Pa_per_m_s_z',
+      'flow_fluid', 'fluid_mu_mPas', 'flow_dir', 'shear_target_lo_mPa', 'shear_target_hi_mPa', 'shear_target_basis',
+      'best_speed_mm_s', 'best_flow_ml_min', 'chamber_mm', 'wall_at_target_pct', 'wall_under_pct', 'wall_over_pct', 'usable_speed_lo_mm_s', 'usable_speed_hi_mm_s', 'reynolds_at_best',
+      'force_balance_pct_x', 'force_balance_pct_y', 'force_balance_pct_z', 'flow_converged', 'flow_steps', 'flow_wall_time_s']);
   }
   cols = cols.concat(['notes', 'error']);
   var lines = [cols.join(',')];
@@ -776,6 +891,7 @@ function sweepExportCsv() {
           row['k_iters_' + tf] = g.iters; row['k_converged_' + tf] = g.converged ? 'yes' : 'no';
         }
       }
+      if (r.flow && !r.flow.error) sweepFlowCsvRow(run, r.flow, row);
     }
     var st = SWEEP_STATE.preview[run.id];
     if (st && !st.error) {
@@ -1197,11 +1313,17 @@ function sweepEta(todoRuns) {
   return todoRuns.reduce(function (s, run) {
     var N2 = sweepCompanionN(run.N, SWEEP_STATE.refine);
     return s + sweepSecPerSolve(run.N) + (N2 ? sweepSecPerSolve(N2) : 0) + sweepThermalSec(run.N);
-  }, 0);
+  }, 0) + todoRuns.length * sweepFlowSec();
+}
+/* v0.32.0 — flow seconds per run at the Configure flow grid: Run All's measured time (RUN_CALIB) or the default */
+function sweepFlowSec() {
+  if (!SWEEP_STATE.flow || typeof gridScale !== 'function' || typeof FLOW_STATE === 'undefined') return 0;
+  var cal = (typeof RUN_CALIB !== 'undefined') ? RUN_CALIB.flow : null, ref = (typeof RUN_REF !== 'undefined') ? RUN_REF.flow : null;
+  return cal ? cal.sec * gridScale(FLOW_STATE.N, cal.N) : (ref ? ref.sec * gridScale(FLOW_STATE.N, ref.refN) : 1);
 }
 /* v0.23.0 — thermal seconds per run: measured per-filler time (RUN_CALIB) or the default, × ticked fillers */
 function sweepThermalSec(N) {
-  if (SWEEP_STATE.physics !== 'thermal' || typeof thermalFillersOn !== 'function' || typeof gridScale !== 'function') return 0;
+  if (!SWEEP_STATE.thermal || typeof thermalFillersOn !== 'function' || typeof gridScale !== 'function') return 0;
   var cal = (typeof RUN_CALIB !== 'undefined') ? RUN_CALIB.thermal : null, ref = (typeof RUN_REF !== 'undefined') ? RUN_REF.thermal : null;
   var per = cal ? cal.sec * gridScale(N, cal.N) : (ref ? ref.sec * gridScale(N, ref.refN) : 1);
   return per * Math.max(1, thermalFillersOn().length);
@@ -1248,10 +1370,14 @@ function sweepRenderSettings() {
   var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
   var connTxt = { networks: 'all networks · islands removed', largest: 'largest network only', off: 'keep everything' }[conn] || conn;
   var thFill = (typeof thermalFillersOn === 'function') ? thermalFillersOn().map(function (f) { return f.id; }).join(', ') : '';
+  var flN = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.N) || 64;
   el.innerHTML =
-    '<label class="imp-sub" title="Stiffness + thermal also solves thermal conductivity for every run, with the material and pore fillers set in Configure (Model, Thermal κ). About 1–3 s per filler at 64³.">Physics <select onchange="sweepSetOpt(\'physics\', this.value)"' + dis + '>' +
-      '<option value="stiffness"' + (SWEEP_STATE.physics !== 'thermal' ? ' selected' : '') + '>stiffness</option>' +
-      '<option value="thermal"' + (SWEEP_STATE.physics === 'thermal' ? ' selected' : '') + '>stiffness + thermal' + (thFill ? ' (' + thFill + ')' : '') + '</option></select></label>' +
+    '<span class="imp-sub sw-phys">Physics <span class="sw-phys-base">stiffness +</span><span class="at-seg">' +
+      '<button aria-pressed="' + !!SWEEP_STATE.thermal + '" onclick="sweepSetOpt(\'thermal\', ' + !SWEEP_STATE.thermal + ')"' + dis +
+        ' title="Also solve thermal conductivity for every run, with the material and pore fillers set in Configure (Model, Thermal κ). About 1–3 s per filler at 64³.">thermal' + (thFill ? ' · ' + thFill : '') + '</button>' +
+      '<button aria-pressed="' + !!SWEEP_STATE.flow + '" onclick="sweepSetOpt(\'flow\', ' + !SWEEP_STATE.flow + ')"' + dis +
+        ' title="Also solve flow for every run on the Configure flow grid (' + flN + '³): permeability, tortuosity, pore sizes and wall shear. Fluid, shear target and direction come from Configure → Flow and can change after the sweep without a re-solve.">flow · ' + flN + '³</button>' +
+    '</span></span>' +
     '<label class="imp-sub">Precision <select id="swPrec" onchange="sweepSetPrecision(this.value)"' + dis + '>' +
       Object.keys(SWEEP_PRECISION).map(function (k) { return '<option value="' + k + '"' + (k === SWEEP_STATE.precision ? ' selected' : '') + '>' + SWEEP_PRECISION[k].label + '</option>'; }).join('') +
     '</select></label>' +

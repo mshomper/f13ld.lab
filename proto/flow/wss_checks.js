@@ -4,7 +4,8 @@
      W1  circular pipe along x, R = 8 / 16: mean wall shear vs G·R/2, scatter, force balance
      W2  square duct (sharp inside corners): mean wall shear vs G·a/4, force balance
      W3  probe area equals marginSurfaceArea (sheet gyroid, BCC-like spheres)
-     W4  sheet gyroid 32³ (periodic, all three axes): force balance, rescale identity */
+     W4  sheet gyroid 32³ (periodic, all three axes): force balance, rescale identity
+     W5  (v0.32.0) sweep summary: statistics from the 1,000-point summary vs every probe, sheet gyroid 24³ */
 var fs = require('fs'), path = require('path');
 var H = require('./harness.js');
 var S = process.env.SRC || path.resolve(__dirname, '../..');
@@ -126,4 +127,60 @@ if (on('W4')) (function () {
     ti_target: { bestU_mm_s: +(st.bestU * 1000).toPrecision(3), in: H.pct(st.inTarget), under: H.pct(st.under), over: H.pct(st.over),
                  range_mm_s: [+(st.rangeLo * 1000).toPrecision(3), +(st.rangeHi * 1000).toPrecision(3)], mL_min: +st.mlMin.toPrecision(3), Re: +st.Re.toPrecision(2) },
     ms: now() - t0 });
+})();
+
+/* W5 (v0.32.0) — the sweep keeps a 1,000-point summary of each run's wall
+   shear (19h flowShearSummary); its statistics must match the card's
+   (every probe) for any fluid, cell size and target. */
+if (on('W5')) (function () {
+  var N = +(process.env.W5_N || 24), s = 2 * PI / N, G = 1e-6, t0 = now();
+  /* a mildly anisotropic sheet gyroid (y squashed) so the three axes differ */
+  var gy = function (x, y, z) { var X = x * s, Y = y * s, Z = z * s; return 0.4 - Math.abs(Math.sin(X) * Math.cos(Y) + 0.8 * Math.sin(Y) * Math.cos(Z) + Math.sin(Z) * Math.cos(X)); };
+  var L = H.linksFromLat(gy, [N, N, N], false), ck = cornerAndKept(gy, N), dom = H.prepareFlowDomain(L, {});
+  var probes = marginWallProbes(ck.mC, N, ck.kept, ck.kept), axes = [], K = new Float64Array(9);
+  for (var ax = 0; ax < 3; ax++) {
+    var Fv = [0, 0, 0]; Fv[ax] = G;
+    var r = H.solveFlowCPU(dom, { force: Fv, tol: 1e-9, tauPlus: 1.5, fields: true });
+    for (var i = 0; i < 3; i++) K[i * 3 + ax] = r.nu * r.U[i] / G;
+    var cf = cellFields(dom, r, N * N * N);
+    axes.push(flowWallTractions(probes, cf.F, cf.fluid, N, G, ax, N * N * N - probes.solidVol));
+  }
+  var Ks = new Float64Array(9);
+  for (var a = 0; a < 3; a++) for (var b = 0; b < 3; b++) Ks[a * 3 + b] = 0.5 * (K[a * 3 + b] + K[b * 3 + a]);
+  var fr = { N: N, Ksym: Ks, perAxis: [{ open: true }, { open: true }, { open: true }], medPoreVox: 8,
+             wss: { n: probes.n, area: probes.area, axes: axes }, wssKey: 'w5' };
+  var sum = flowShearSummary(fr, +process.env.W5_Q || undefined), worst = { med: 0, p95: 0, share: 0, U: 0, range: 0 }, cases = 0, picks = 0;
+  var rec = { open: [true, true, true], kL2: [Ks[0], Ks[4], Ks[8]].map(function (v) { return v / (N * N); }), shear: sum, medPoreVox: 8 };
+  [[0.69e-3, 993, 2], [1.0e-3, 1000, 5], [0.78e-3, 1007, 0.8]].forEach(function (fl) {
+    [null, [0.005, 0.015], [0.010, 0.030], [0.020, 0.060], [0.5, 1.5]].forEach(function (tg) {
+      var cfg = { mu: fl[0], rho: fl[1], cellMm: fl[2], target: tg, chamberMm: 10, dir: 'all' };
+      for (var ax2 = 0; ax2 < 3; ax2++) {
+        var A = flowShearStats(fr, ax2, cfg), B = flowSummaryStats(sum, ax2, cfg, 8);
+        worst.med = Math.max(worst.med, Math.abs(B.median / A.median - 1)); worst.p95 = Math.max(worst.p95, Math.abs(B.p95 / A.p95 - 1));
+        if (tg) {
+          worst.share = Math.max(worst.share, Math.abs(B.inTarget - A.inTarget));
+          if (A.bestU > 0 && A.inTarget > 0.05) {
+            /* the best speed sits on a plateau of near-equal windows: compare the share
+               the summary's speed gets on the full data, not the speed itself */
+            var sh = flowShareIn(A, tg[0] / B.bestU, tg[1] / B.bestU);
+            worst.U = Math.max(worst.U, A.inTarget - sh);
+            worst.range = Math.max(worst.range, Math.abs(Math.log(B.rangeLo / A.rangeLo)), Math.abs(Math.log(B.rangeHi / A.rangeHi)));
+          }
+        }
+        cases++;
+      }
+      var pc = flowShearPick(fr, cfg), ps = flowSummaryPick(rec, cfg);
+      if (pc && ps && pc.axis === ps.axis) picks++;
+    });
+  });
+  /* the best speed is centred on the plateau of windows within 1 % of wall of the best
+     (19h flowShearStatsSorted), so the reported share is only defined to that 1 %;
+     the summary must land inside it.  The median and 95th are compared directly. */
+  var lim = 0.01;
+  H.emit(null, { test: 'W5 sweep summary', N: N, probes: probes.n, Q: sum.Q, cases: cases,
+    kL2: rec.kL2.map(function (v) { return v.toExponential(3); }).join(' / '),
+    worst_median: H.pct(worst.med), worst_p95: H.pct(worst.p95), worst_share_pts: (worst.share * 100).toFixed(3),
+    best_speed_share_loss_pts: (worst.U * 100).toFixed(3), worst_range_log: worst.range.toFixed(4), same_pick: picks + '/15',
+    share_limit_pts: (lim * 100).toFixed(1),
+    pass: worst.med < 0.01 && worst.p95 < 0.01 && worst.share <= lim && worst.U <= lim && worst.range < 0.02 && picks === 15, ms: now() - t0 });
 })();

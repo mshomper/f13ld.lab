@@ -1,0 +1,9 @@
+node proto/flow/castro_cpu.js 24   (2026-10-15)
+sheet G level 0.4830 fluid 70.0% k/L2 1.667e-3
+sheet P level 0.5412 fluid 70.0% k/L2 1.639e-3
+sheet D level 0.3696 fluid 70.0% k/L2 1.008e-3
+sheet P below G 1.7% D below G 39.5% ranking G>P>D true
+network G level -0.6124 fluid 70.1% k/L2 6.255e-3
+network P level -0.6978 fluid 70.0% k/L2 1.055e-2
+network D level -0.5097 fluid 70.0% k/L2 4.179e-3
+network P below G -68.7% D below G 33.2% ranking G>P>D false

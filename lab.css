@@ -1203,6 +1203,10 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
 .sw-sec .imp-settings { gap:10px; }
 .sw-sec .imp-settings input { width:84px; }
 .sw-sec [hidden], .sw-table-wrap[hidden] { display:none !important; }
+/* v0.32.0 — sweep physics ticks (stiffness always; thermal and flow as toggles) */
+.sw-phys { display:inline-flex; align-items:center; gap:6px; }
+.sw-phys-base { color:var(--ink-2); }
+.sw-phys .at-seg button:disabled { cursor:default; opacity:0.6; }
 .sw-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
 .sw-checking { color:var(--lab); }
 

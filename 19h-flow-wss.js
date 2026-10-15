@@ -40,6 +40,8 @@
      flowShareIn(stats, a, b)        (v0.31.0) wall share with shear per m/s in [a, b]
      flowShearVoxelField(fr, axis, cfg) (v0.31.0) log10 shear per m/s on a voxel grid for the surface map
      flowOrientMap(fr, cfg, U, dirs) (v0.31.0) wall share in the target for every flow direction at speed U
+     flowShearSummary(fr)            (v0.32.0) 1,000-point dimensionless shear quantiles per open axis, for the sweep
+     flowSummaryStats(sum, axis, cfg, medPoreVox) / flowSummaryPick(rec, cfg)  (v0.32.0) the card statistics from a summary
    ============================================================ */
 
 var FLOW_WSS_VERSION = 'wss-1';   /* the stored result format (19g); v0.31.0 adds views only */
@@ -159,24 +161,38 @@ function flowShearStats(fr, axis, cfg) {
   if (_FLOW_STATS_CACHE[key]) return _FLOW_STATS_CACHE[key];
   var ps = flowProbeShears(fr, axis, cfg);
   if (!ps) return null;
-  var dx = ps.dx, n = W.n, area = W.area;
+  var sorted = flowSortShears(ps.s, W.area);
+  if (!sorted) return null;
+  var res = flowShearStatsSorted(sorted.S, sorted.C, cfg, { axis: axis, residual: W.axes[axis].residual, dx: ps.dx, medPoreVox: fr.medPoreVox });
+  _FLOW_STATS_CACHE[key] = res;
+  return res;
+}
+/* v0.32.0 — area-weighted sort: S ascending, C[q] = wall share below S[q] (C has n + 1 entries) */
+function flowSortShears(s, area) {
   var sv = [], av = [], total = 0;
-  for (var p = 0; p < n; p++) {
-    if (!(ps.s[p] >= 0)) continue;
-    sv.push(ps.s[p]); av.push(area[p]); total += area[p];
+  for (var p = 0; p < s.length; p++) {
+    if (!(s[p] >= 0)) continue;
+    sv.push(s[p]); av.push(area[p]); total += area[p];
   }
   if (!sv.length || !(total > 0)) return null;
   var order = sv.map(function (_, i) { return i; }).sort(function (a, b) { return sv[a] - sv[b]; });
   var S = new Float64Array(sv.length), C = new Float64Array(sv.length + 1);
   for (var q = 0; q < order.length; q++) { S[q] = sv[order[q]]; C[q + 1] = C[q] + av[order[q]] / total; }
+  return { S: S, C: C };
+}
+/* v0.32.0 — the statistics on sorted shears (per m/s) with their cumulative wall
+   share; x: { axis, residual, dx (m per voxel), medPoreVox }.  Shared by the cards
+   (every probe) and the sweep (a 1,000-point summary, flowShearSummary). */
+function flowShearStatsSorted(S, C, cfg, x) {
+  var tg = cfg.target;
   function quant(f) { for (var q2 = 0; q2 < S.length; q2++) if (C[q2 + 1] >= f) return S[q2]; return S[S.length - 1]; }
   /* share of area with shear (per m/s) in [a, b] — binary search on S */
   function idxGE(v) { var lo = 0, hi = S.length; while (lo < hi) { var mid = (lo + hi) >> 1; if (S[mid] < v) lo = mid + 1; else hi = mid; } return lo; }
   function idxGT(v) { var lo = 0, hi = S.length; while (lo < hi) { var mid = (lo + hi) >> 1; if (S[mid] <= v) lo = mid + 1; else hi = mid; } return lo; }
   function share(a, b) { return C[idxGT(b)] - C[idxGE(a)]; }
-  var res = { axis: axis, nProbes: S.length, median: quant(0.5), p95: quant(0.95), mean: 0, residual: W.axes[axis].residual,
+  var res = { axis: x.axis, nProbes: S.length, median: quant(0.5), p95: quant(0.95), mean: 0, residual: x.residual,
               S: S, C: C };   /* v0.31.0 — sorted shears (per m/s) and cumulative wall share, for the charts */
-  for (var q3 = 0; q3 < order.length; q3++) res.mean += S[q3] * (av[order[q3]] / total);
+  for (var q3 = 0; q3 < S.length; q3++) res.mean += S[q3] * (C[q3 + 1] - C[q3]);
   if (tg && tg[1] > tg[0] && tg[0] > 0) {
     var lo = tg[0], hi = tg[1], ratio = hi / lo, best = -1, bi = 0, bj = 0, wins = [];
     /* widest window [s_i, s_i·hi/lo] over the sorted shears: at speed U the
@@ -217,21 +233,20 @@ function flowShearStats(fr, axis, cfg) {
       while (F(uH * f) >= half && guard++ < 1500) uH *= f;
       res.rangeHi = edge(uH, uH * f);
       if (cfg.chamberMm > 0) res.mlMin = U * Math.PI * Math.pow(cfg.chamberMm / 2000, 2) * 6e7;
-      if (fr.medPoreVox > 0 && cfg.rho > 0) { res.poreM = fr.medPoreVox * dx; res.Re = cfg.rho * U * res.poreM / cfg.mu; }
+      if (x.medPoreVox > 0 && cfg.rho > 0) { res.poreM = x.medPoreVox * x.dx; res.Re = cfg.rho * U * res.poreM / cfg.mu; }
     } else res.inTarget = 0;
   }
-  _FLOW_STATS_CACHE[key] = res;
   return res;
 }
 
 /* v0.31.0 — wall shear per probe (Pa per m/s of superficial speed) for a
    mean flow along axis; NaN where a probe has no value.  Cached. */
 var _FLOW_PROBE_CACHE = {};
-function flowProbeShears(fr, axis, cfg) {
+function flowProbeShears(fr, axis, cfg, noCache) {
   var W = fr && fr.wss;
   if (!W || !W.axes || !(cfg.mu > 0) || !(cfg.cellMm > 0)) return null;
   var key = (fr.wssKey || '') + '|' + axis + '|' + cfg.mu + '|' + cfg.cellMm;
-  if (_FLOW_PROBE_CACHE[key]) return _FLOW_PROBE_CACHE[key];
+  if (!noCache && _FLOW_PROBE_CACHE[key]) return _FLOW_PROBE_CACHE[key];
   var ki = flowKinvOpen(fr);
   if (!ki || ki.open.indexOf(axis) < 0) return null;
   var coef = [ki.Kinv[0 * 3 + axis], ki.Kinv[1 * 3 + axis], ki.Kinv[2 * 3 + axis]];
@@ -247,7 +262,7 @@ function flowProbeShears(fr, axis, cfg) {
     out[p] = good ? scale * Math.sqrt(vx * vx + vy * vy + vz * vz) : NaN;
   }
   var r = { s: out, dx: dx };
-  _FLOW_PROBE_CACHE[key] = r;
+  if (!noCache) _FLOW_PROBE_CACHE[key] = r;
   return r;
 }
 /* Share of wall with shear (per m/s) in [a, b], from a stats result. */
@@ -378,6 +393,68 @@ function flowShearPick(fr, cfg) {
     var st = flowShearStats(fr, ax, cfg);
     if (!st) return;
     var score = cfg.target ? (st.inTarget || 0) : 0, k = fr.Ksym[4 * ax];
+    if (!best || score > best.score + 1e-9 || (Math.abs(score - best.score) <= 1e-9 && k > best.k)) best = { axis: ax, stats: st, score: score, k: k };
+  });
+  return best ? { axis: best.axis, stats: best.stats, best: true } : null;
+}
+
+/* ── v0.32.0 — compact wall shear summary for the parameter sweep (62) ──
+   A sweep keeps hundreds of runs, so it can't hold every probe.  For each
+   open axis it keeps FLOW_SUMMARY_Q area quantiles of the dimensionless shear
+   φ = τ / (μ U / Δx) — the shear per unit speed in units of μ / Δx — which is
+   independent of fluid and cell size.  Statistics for any fluid, target or
+   cell size then come from the same exact routine the cards use, with the
+   wall share resolved to 1 / Q (0.1 %). */
+var FLOW_SUMMARY_Q = 1000;
+function flowShearSummary(fr, Q) {
+  if (!fr || !fr.wss || !fr.perAxis) return null;
+  Q = Q || FLOW_SUMMARY_Q;
+  var out = { N: fr.N, Q: Q, axes: [null, null, null] }, any = false;
+  for (var a = 0; a < 3; a++) {
+    if (!(fr.perAxis[a] && fr.perAxis[a].open && fr.wss.axes[a])) continue;
+    var ps = flowProbeShears(fr, a, { mu: 1, cellMm: 1 }, true);   /* scale = 1 / Δx = 1000 N */
+    if (!ps) continue;
+    var k = 1 / (1000 * fr.N), phi = new Float64Array(ps.s.length);
+    for (var p = 0; p < phi.length; p++) phi[p] = ps.s[p] * k;
+    var srt = flowSortShears(phi, fr.wss.area);
+    if (!srt) continue;
+    var q = new Float32Array(Q), j = 0;
+    for (var i = 0; i < Q; i++) {
+      var f = (i + 0.5) / Q;
+      while (j < srt.S.length - 1 && srt.C[j + 1] < f) j++;
+      q[i] = srt.S[j];
+    }
+    out.axes[a] = { q: q, residual: fr.wss.axes[a].residual, nProbes: srt.S.length };
+    any = true;
+  }
+  return any ? out : null;
+}
+/* Statistics for one axis from a summary (cfg as flowShearStats; medPoreVox for the Reynolds number). */
+function flowSummaryStats(sum, axis, cfg, medPoreVox) {
+  var A = sum && sum.axes && sum.axes[axis];
+  if (!A || !(cfg.mu > 0) || !(cfg.cellMm > 0)) return null;
+  var q = A.q, Q = q.length != null ? q.length : Object.keys(q).length;
+  if (!Q) return null;
+  var dx = cfg.cellMm / 1000 / sum.N, sc = cfg.mu / dx, S = new Float64Array(Q), C = new Float64Array(Q + 1);
+  for (var i = 0; i < Q; i++) { S[i] = q[i] * sc; C[i + 1] = (i + 1) / Q; }
+  return flowShearStatsSorted(S, C, cfg, { axis: axis, residual: A.residual, dx: dx, medPoreVox: medPoreVox });
+}
+/* The axis a sweep row reports, as flowShearPick does for the cards: the Flow
+   direction setting, or with All the most wall at the target (no target: the
+   most permeable).  rec: the sweep's flow record (62 sweepFlowOne). */
+function flowSummaryPick(rec, cfg) {
+  if (!rec || !rec.shear) return null;
+  var want = { xx: 0, yy: 1, zz: 2 }[cfg.dir], cand = [];
+  for (var a = 0; a < 3; a++) if (rec.open[a] && rec.shear.axes[a]) cand.push(a);
+  if (want != null) {
+    if (cand.indexOf(want) < 0) return { axis: want, stats: null, closed: !rec.open[want] };
+    return { axis: want, stats: flowSummaryStats(rec.shear, want, cfg, rec.medPoreVox) };
+  }
+  var best = null;
+  cand.forEach(function (ax) {
+    var st = flowSummaryStats(rec.shear, ax, cfg, rec.medPoreVox);
+    if (!st) return;
+    var score = cfg.target ? (st.inTarget || 0) : 0, k = rec.kL2[ax];
     if (!best || score > best.score + 1e-9 || (Math.abs(score - best.score) <= 1e-9 && k > best.k)) best = { axis: ax, stats: st, score: score, k: k };
   });
   return best ? { axis: best.axis, stats: best.stats, best: true } : null;

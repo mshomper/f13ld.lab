@@ -98,6 +98,23 @@ function atlasRows() {
     var row = rows[rows.length - 1], G = r.geom, T = r.thermal;
     if (G) { row.porosity = G.porosity; row.sad = G.sad_m2m3; row.dh = G.dh_mm; }
     if (T && T.byFiller) for (var tf in T.byFiller) { row['k_' + tf] = T.byFiller[tf].kMean; row['eff_' + tf] = T.byFiller[tf].eff; }
+    /* v0.32.0 — flow metrics (Configure flow grid); shear under the current Flow settings */
+    var F = r.flow;
+    if (F && !F.error) {
+      var cell = sweepCellMm(sweepRecipeForRun(run)), L2 = cell * cell * 1e-6, op = [0, 1, 2].filter(function (a) { return F.open[a] && F.kL2[a] > 0; });
+      var kxyz = [0, 1, 2].map(function (a) { return F.open[a] ? F.kL2[a] : 0; });
+      row.perm_x = kxyz[0] * L2 * 1e9; row.perm_y = kxyz[1] * L2 * 1e9; row.perm_z = kxyz[2] * L2 * 1e9;
+      row.perm = op.length ? op.reduce(function (s0, a) { return s0 + kxyz[a]; }, 0) / op.length * L2 * 1e9 : 0;
+      row.kL2 = op.length ? op.reduce(function (s0, a) { return s0 + kxyz[a]; }, 0) / op.length : 0;
+      var tt = op.map(function (a) { return F.tort[a]; }).filter(isFinite);
+      row.tort = tt.length ? tt.reduce(function (s0, v) { return s0 + v; }, 0) / tt.length : null;
+      var sh = (typeof sweepFlowShear === 'function') ? sweepFlowShear(run, F) : null;
+      if (sh && sh.pick) {
+        var stA = sh.byAxis[sh.pick.axis];
+        if (stA) row.wss_med = stA.median;            /* Pa per m/s = mPa per mm/s */
+        if (sh.cfg.target && sh.pick.stats) row.wall_target = (sh.pick.stats.inTarget || 0) * 100;
+      }
+    }
   });
   return rows;
 }
@@ -564,7 +581,7 @@ function atlasMap(rows, cur) {
     return;
   }
   title.textContent = 'Parameter map';
-  ctl.innerHTML = '<select onchange="atlasSet(\'mapMetric\', this.value)">' + [['class', 'Connectivity'], ['vf', 'Solid fraction'], ['max', 'Stiffest axis'], ['min', 'Softest axis'], ['z', 'Ez']].concat(ATLAS_GEO_THERMAL_METRICS).map(function (o) {
+  ctl.innerHTML = '<select onchange="atlasSet(\'mapMetric\', this.value)">' + atlasMetricsWithData([['class', 'Connectivity'], ['vf', 'Solid fraction'], ['max', 'Stiffest axis'], ['min', 'Softest axis'], ['z', 'Ez']].concat(ATLAS_GEO_THERMAL_METRICS), rows).map(function (o) {
     return '<option value="' + o[0] + '"' + (ATLAS.mapMetric === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>';
   var a1 = axes[0], a2 = axes[1], n1 = a1.values.length, n2 = a2 ? a2.values.length : 1;
   var byIJ = {}; rows.forEach(function (r) { if (r.run.grid) byIJ[r.run.grid[0] + ',' + r.run.grid[1]] = r; });
@@ -584,6 +601,10 @@ function atlasMap(rows, cur) {
         var v = atlasMapValue(r); cls = r.run.id === cur.run.id ? 'cur' : '';
         bg = isCls ? ATLAS_COL.cls[v] : (isVf ? sweepSeqColor(v) : atlasSeqLog(v, lo, hi));
         tip = r.run.id + ' · ' + ATLAS_CLASS[r.cls] + ' · ' + (r.vf * 100).toFixed(1) + ' % · Ex ' + atlasFmtE(r.Ex) + ' Ey ' + atlasFmtE(r.Ey) + ' Ez ' + atlasFmtE(r.Ez);
+        if (!isCls && !isVf && !ATLAS_STIFF_KEYS[ATLAS.mapMetric]) {   /* v0.32.0 — geometry / thermal / flow metrics read their own value */
+          var mo = ATLAS_GEO_THERMAL_METRICS.filter(function (o) { return o[0] === ATLAS.mapMetric; })[0];
+          tip += ' · ' + (mo ? mo[1] : ATLAS.mapMetric) + ' ' + atlasFmt4(v);
+        }
       } else {
         var run = SWEEP_STATE.runs.filter(function (x) { return x.grid && x.grid[0] === i2 && x.grid[1] === j; })[0];
         tip = run ? (SWEEP_STATE.selected[run.id] === false ? run.id + ' · skipped' : run.id + ' · not solved yet') : 'not in sweep';
@@ -596,7 +617,7 @@ function atlasMap(rows, cur) {
   el.innerHTML = '<div class="at-sub">' + swEsc(a1.label) + atlasAxNote(a1) + ' →</div>' + h + '</table>';
   leg.innerHTML = isCls
     ? ATLAS_CLASS.map(function (n, k) { return '<span class="at-lk"><span class="at-sw sq" style="background:' + ATLAS_COL.cls[k] + '"></span>' + n + '</span>'; }).join('') + '<span class="at-lk"><span class="at-sw sq cur"></span>current</span>'
-    : '<span class="at-lk"><span class="at-ramp ' + (isVf ? 'vf' : 'log') + '"></span>' + (isVf ? '0 → 60 %+' : atlasFmtE(lo) + ' → ' + atlasFmtE(hi) + ' (log)') + '</span><span class="at-lk"><span class="at-sw sq cur"></span>current</span>';
+    : '<span class="at-lk"><span class="at-ramp ' + (isVf ? 'vf' : 'log') + '"></span>' + (isVf ? '0 → 60 %+' : atlasFmtM(ATLAS.mapMetric, lo) + ' → ' + atlasFmtM(ATLAS.mapMetric, hi) + ' (log)') + '</span><span class="at-lk"><span class="at-sw sq cur"></span>current</span>';
 }
 function atlasSeqLog(v, lo, hi) {
   if (!(v > 0) || !(hi > lo)) return '#1a1a2a';
@@ -738,7 +759,20 @@ function atlasScatter(rows, S, cur) {
 /* v0.23.0 — geometry and thermal metrics (Atlas surface and parameter map) */
 var ATLAS_GEO_THERMAL_METRICS = [['porosity', 'Porosity'], ['sad', 'Surface area density (m²/m³)'], ['dh', 'Hydraulic diameter (mm)'],
   ['k_air', 'Conductivity · air (W/m·K)'], ['k_water', 'Conductivity · water (W/m·K)'], ['k_tissue', 'Conductivity · tissue (W/m·K)'],
-  ['eff_air', 'Thermal efficiency · air'], ['eff_water', 'Thermal efficiency · water'], ['eff_tissue', 'Thermal efficiency · tissue']];
+  ['eff_air', 'Thermal efficiency · air'], ['eff_water', 'Thermal efficiency · water'], ['eff_tissue', 'Thermal efficiency · tissue'],
+  /* v0.32.0 — flow */
+  ['perm', 'Permeability · mean of open axes (10⁻⁹ m²)'], ['perm_x', 'Permeability X (10⁻⁹ m²)'], ['perm_y', 'Permeability Y (10⁻⁹ m²)'], ['perm_z', 'Permeability Z (10⁻⁹ m²)'],
+  ['kL2', 'Permeability ÷ cell² (k/L²)'], ['tort', 'Tortuosity · mean'], ['wss_med', 'Median wall shear (mPa per mm/s)'], ['wall_target', 'Wall at shear target (%)']];
+/* v0.32.0 — the Atlas metric list without metrics no run has (flow, thermal fillers not solved) */
+function atlasMetricsWithData(list, rows) {
+  return list.filter(function (o) {
+    if (!ATLAS_GEO_THERMAL_METRICS.some(function (g) { return g[0] === o[0]; })) return true;
+    return rows.some(function (r) { return r[o[0]] != null && isFinite(r[o[0]]); });
+  });
+}
+/* v0.32.0 — values: stiffness keys follow the MPa / ÷ E solid switch; every other metric prints plainly */
+var ATLAS_STIFF_KEYS = { max: 1, min: 1, z: 1, mean: 1, xyz: 1, Ex: 1, Ey: 1, Ez: 1, Gyz: 1, Gxz: 1, Gxy: 1 };
+function atlasFmtM(k, v) { return ATLAS_STIFF_KEYS[k] ? atlasFmtE(v) : atlasFmt4(v); }
 var ATLAS_S3_METRICS = [['max', 'Stiffest axis'], ['min', 'Softest axis'], ['Ex', 'Ex'], ['Ey', 'Ey'], ['Ez', 'Ez'], ['xyz', 'Ex, Ey, Ez together'],
   ['mean', 'Mean of Ex, Ey, Ez'], ['Gyz', 'Gyz'], ['Gxz', 'Gxz'], ['Gxy', 'Gxy'], ['vf', 'Solid fraction']].concat(ATLAS_GEO_THERMAL_METRICS);
 var ATLAS_S3_HOME = atlasM3mul(atlasRotX(0.42), atlasRotY(-0.62));
@@ -779,10 +813,11 @@ function atlasS3(rows, cur) {
   panel.hidden = !ok;
   if (!ok) return;
   var S3 = ATLAS.s3, isVf = S3.metric === 'vf';
-  var sig = [S3.metric, S3.log, S3.color, ATLAS.units].join('#');
+  var s3List = atlasMetricsWithData(ATLAS_S3_METRICS, rows);   /* v0.32.0 — only metrics some run has */
+  var sig = [S3.metric, S3.log, S3.color, ATLAS.units, s3List.length].join('#');
   if (ATLAS._s3Sig !== sig) {
     ATLAS._s3Sig = sig;
-    swEl('atS3Ctl').innerHTML = '<select onchange="atlasS3Set(\'metric\', this.value)">' + ATLAS_S3_METRICS.map(function (o) {
+    swEl('atS3Ctl').innerHTML = '<select onchange="atlasS3Set(\'metric\', this.value)">' + s3List.map(function (o) {
         return '<option value="' + o[0] + '"' + (S3.metric === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
       (isVf ? '' : '<div class="at-seg"><button aria-pressed="' + S3.log + '" onclick="atlasS3Set(\'log\', true)">log</button><button aria-pressed="' + !S3.log + '" onclick="atlasS3Set(\'log\', false)">linear</button></div>') +
       (S3.metric === 'xyz' ? '' : '<div class="at-seg"><button aria-pressed="' + (S3.color === 'value') + '" onclick="atlasS3Set(\'color\', \'value\')">color by value</button><button aria-pressed="' + (S3.color === 'class') + '" onclick="atlasS3Set(\'color\', \'class\')">by connectivity</button></div>') +
@@ -857,7 +892,7 @@ function atlasS3Draw() {
     return atlasNiceTicks(lo, hi, 6).map(function (v) { return { p: -1 + 2 * (v - lo) / (hi - lo), t: sweepFmtVal(v) + atlasAxSuffix(ax) }; });
   }
   var tx = axTicks(D.a1, D.xs), tz = axTicks(D.a2, D.zs);
-  var ty = D.ticks.map(function (t) { return { p: D.Y(t), t: D.useLog ? atlasExpFmt(Math.pow(10, t)) : (D.isVf ? atlasPct(t) : (atlasEs() ? atlasFmtE(t) : String(+t.toPrecision(3)))) }; });
+  var ty = D.ticks.map(function (t) { return { p: D.Y(t), t: D.useLog ? atlasExpFmt(Math.pow(10, t)) : (D.isVf ? atlasPct(t) : (atlasEs() && ATLAS_STIFF_KEYS[ATLAS.s3.metric] ? atlasFmtE(t) : String(+t.toPrecision(3)))) }; });
   /* back walls with grid lines */
   var gridCol = 'rgba(124,138,170,0.16)', wallCol = 'rgba(17,17,24,0.55)', edgeCol = 'rgba(124,138,170,0.35)';
   var floorIsBack = false;
@@ -971,7 +1006,7 @@ function atlasS3Hover(e) {
   var v = atlasS3Val(row, best.k);
   tip.innerHTML = '<b>' + swEsc(row.run.id) + '</b> · ' + ATLAS_CLASS[row.cls] + '<br>' + swEsc(D.a1.label) + ' = ' + swEsc(sweepFmtVal(D.a1.values[best.i])) + atlasAxSuffix(D.a1) +
     '<br>' + swEsc(D.a2.label) + ' = ' + swEsc(sweepFmtVal(D.a2.values[best.j])) + '<br>' + (best.k === 'vf' ? 'Solid ' + (v * 100).toFixed(1) + ' %' :
-    (D.surfaces.length > 1 ? best.k : ATLAS._s3.metricLabel) + ' = ' + atlasFmtE(v) + ' · ' + (row.vf * 100).toFixed(1) + ' % solid');
+    (D.surfaces.length > 1 ? best.k : ATLAS._s3.metricLabel) + ' = ' + atlasFmtM(best.k, v) + ' · ' + (row.vf * 100).toFixed(1) + ' % solid');
   tip.hidden = false;
   var pr = tip.parentNode.getBoundingClientRect(), tw = tip.offsetWidth || 200, lx = e.clientX - pr.left + 14;
   if (lx + tw > pr.width - 8) lx = e.clientX - pr.left - tw - 14;
