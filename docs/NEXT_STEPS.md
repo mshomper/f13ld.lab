@@ -1,5 +1,7 @@
 # F13LD.lab — Next Steps (session handoff)
 
+> **2026-10-15 · v0.33.0** — same branch `flow-sweep`, waiting on Matt's click-test: Atlas Stiffness | Thermal | Flow switch (mockup approved), per-mode panels, fitted 3-D axis, bone band, fillers overlaid, cross-physics design space; sweep keeps full κ and K tensors. Scope §18.
+>
 > **2026-10-15 · v0.32.0** — branch `flow-sweep`, waiting on Matt's click-test: fluids Phase 4 — flow in the parameter sweep (Physics: stiffness + thermal / flow toggles; flow on the Configure flow grid), flow CSV columns, Atlas flow metrics, 1,000-point wall shear summary per run (fluid / target / direction change after a sweep without a re-solve), console check `runFlowCastroCheck()` (F12). Scope §17; recap [`SESSION_RECAP_2026-10-15_flow-sweep.md`](SESSION_RECAP_2026-10-15_flow-sweep.md).
 >
 > **PICK UP HERE (2026-10-15).** (1) Matt: click-test a flow sweep and run `runFlowCastroCheck()`; merge on his go-ahead. (2) F13LD.sweep flow port — 32³ in Fast, 64³ otherwise (Matt, 2026-10-15); copy 14e, the 17c flow job, 19g, 19h (PolyForm, like the other solver files); append columns so F13LD.ingest's validator keeps passing; Vault columns in a later pass. (3) HX-1 inertial pressure drop (scope §11.2) — the Castro gap (§17) is the first motivating case. Items 4–5 of the 2026-10-15 list below are unchanged.

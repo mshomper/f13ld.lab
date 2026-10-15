@@ -675,3 +675,10 @@ The card warns when the force balance is off by more than 5 % (`FLOW_FORCE_WARN`
 
 **Next:** HX-1 (inertial pressure drop), then the F13LD.sweep flow port (32³ Fast, 64³ otherwise).
 
+## 18. Atlas modes (2026-10-15, v0.33.0)
+
+**Decisions (Matt, 2026-10-15, after a mockup):** a prominent Stiffness | Thermal | Flow switch at the top of the Atlas; trabecular bone permeability as a toggled band; every thermal filler overlaid in its own line style; per-mode design-space defaults (E vs solid fraction, conductivity vs stiffness, permeability vs stiffness) with free X / Y pickers; fillers stacked on the conductivity surface.
+
+**Built (`63-sweep-atlas.js`)**: `ATLAS.phys` / `.focus` / `.bone`, per-mode metric memory (`mapBy`, `s3By`, `scBy`); metric catalogue `atlasMetricDefs` + `atlasMetricList(purpose)` (mode metrics + geometry; design space adds stiffness); `atlasFitAxis` (padded data range, auto log past ~1 decade, 1-2-5 ticks); `atlasTensor` (κ for the focused filler, K from `Kl2`) drawn through the cards' `kappaAsCompliance`; `atlasReadoutThermal` / `atlasReadoutFlow`; `atlasLineThermal` (Hashin–Shtrikman bounds via `thermalHSUpper/Lower` when a run predates v0.33.0) / `atlasLineFlow` (bands in `atlasChart`); `atlasScatter` rewritten; `atlasChecksThermal` / `atlasChecksFlow`; drawn icons (`ATLAS_ICON`). Sweep records now keep `byFiller[f].K / hsUp / hsLo / kF` and `flow.Kl2`. Retired: `ATLAS_GEO_THERMAL_METRICS`, `ATLAS_S3_METRICS`, `atlasMetricsWithData`, `atlasS3Val`, `atlasFmtM`.
+
+**Checks:** headless render of the real page with a synthetic 7 × 5 sweep carrying all three physics — every mode draws, no page errors, no Atlas element wider than a 390 px phone (the lab page behind still overflows at phone width, pre-existing). WebGL views and interaction are Matt's click-test.

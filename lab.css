@@ -1034,7 +1034,8 @@ html, body {
   padding:16px 18px 22px; color:var(--ink); font-size:12px;
   box-shadow:0 20px 60px rgba(0,0,0,0.55);
 }
-.at-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px; }
+.at-top { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px; flex-wrap:wrap; }
+.at-tblk { min-width:0; flex:1 1 260px; }
 .at-title { font-family:'JetBrains Mono', monospace; font-size:15px; font-weight:700; letter-spacing:0.06em; color:var(--lab); text-transform:uppercase; }
 .at-ver { word-break:break-all; color:var(--ink-2); text-transform:none; letter-spacing:0; font-weight:500; margin-left:8px; font-size:13px; }
 .at-meta { color:var(--ink-mute); font-size:11px; margin-top:3px; font-family:'JetBrains Mono', monospace; }
@@ -1093,10 +1094,10 @@ html, body {
 .at-sw.cur { background:transparent; outline:1.5px solid var(--ink); outline-offset:-1.5px; }
 .at-divramp { display:inline-block; width:70px; height:8px; border-radius:2px; vertical-align:middle; margin-right:4px;
   background:linear-gradient(90deg, #fb7185, #1a1a2a 50%, #1D9E75 75%, #c8f542); }
-.at-mwrap { overflow-x:auto; }
-.at-mat { border-collapse:separate; border-spacing:2px; width:100%; font-family:'JetBrains Mono', monospace; font-size:10.5px; }
+.at-mwrap { overflow:hidden; }   /* v0.33.0 — never scroll sideways: the tables fit their panel */
+.at-mat { border-collapse:separate; border-spacing:2px; width:100%; table-layout:fixed; font-family:'JetBrains Mono', monospace; font-size:10.5px; }
 .at-mat th { color:var(--ink-head); font-weight:500; padding:2px 4px; font-size:10px; }
-.at-mat td { text-align:center; padding:6px 2px; border-radius:3px; white-space:nowrap; }
+.at-mat td { text-align:center; padding:6px 2px; border-radius:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .at-mat td.lo { opacity:0.55; }
 #atSolve { margin-top:6px; }
 .at-mtab { border-collapse:separate; border-spacing:2px; margin-top:4px; }
@@ -1346,3 +1347,49 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
 .fc-legend { display:flex; gap:14px; flex-wrap:wrap; font:11px 'JetBrains Mono', monospace; color:var(--ink-2) }
 .fc-legend i { display:inline-block; width:14px; height:3px; border-radius:1px; margin-right:6px; vertical-align:middle }
 @media (max-width: 880px) { .fc-plot { height:260px } }
+
+/* ── v0.33.0 — Atlas physics switch (Stiffness | Thermal | Flow) and mode panels ── */
+.at-modes { display:inline-flex; gap:4px; padding:4px; border-radius:11px; background:var(--panel-3); border:0.5px solid var(--line); flex:0 0 auto; }
+.at-modes button { display:inline-flex; align-items:center; gap:8px; padding:5px 13px 5px 6px; border-radius:8px; border:0.5px solid transparent;
+  background:transparent; color:var(--ink-mute); font:inherit; font-size:13px; font-weight:600; letter-spacing:0.03em; cursor:pointer; transition:background .15s, color .15s, border-color .15s; }
+.at-modes button:hover:not(:disabled) { color:var(--ink); background:rgba(255,255,255,0.03); }
+.at-modes button:disabled { opacity:0.35; cursor:not-allowed; }
+.at-modes .ico { width:28px; height:28px; border-radius:7px; display:grid; place-items:center; background:var(--panel-2); border:0.5px solid var(--line); color:var(--ink-dim); }
+.at-modes .ico svg { width:20px; height:20px; }
+.at-modes .ico .acc { fill:transparent; stroke:var(--t3); stroke-width:1.4; }
+.at-modes button[aria-pressed=true] { background:var(--lab-soft); border-color:var(--lab-ring); color:var(--lab-tile); }
+.at-modes button[aria-pressed=true] .ico { background:var(--lab-deep); border-color:var(--lab); color:var(--lab-ink); }
+.at-modes button[aria-pressed=true] .ico .acc { fill:var(--neon); stroke:var(--lab-deep); }
+.at-modes .cnt { font-family:'JetBrains Mono', monospace; font-size:10px; font-weight:500; color:var(--ink-dim); }
+.at-modes button[aria-pressed=true] .cnt { color:var(--lab-ink); }
+.at-close svg { display:block; margin:auto; }
+.at-tag { font-size:9.5px; letter-spacing:0.04em; color:var(--lab); border:0.5px solid var(--lab-ring); border-radius:10px; padding:1px 7px; text-transform:none; font-weight:500; margin-left:6px; vertical-align:1px; }
+.at-fsw { flex:0 0 auto; vertical-align:middle; margin-right:2px; }
+.at-seg button svg { vertical-align:middle; }
+.at-seg button { display:inline-flex; align-items:center; gap:6px; }
+.at-chip svg { flex:0 0 auto; }
+.at-ro .u { color:var(--ink-mute); font-size:10px; margin-left:3px; font-family:'Exo 2', system-ui, sans-serif; }
+.at-mat3 td { padding:7px 2px; }
+.at-tab { width:100%; border-collapse:collapse; font-size:11px; margin-top:10px; table-layout:fixed; }
+.at-tab th { color:var(--ink-head); font-weight:500; text-align:right; font-size:10px; padding:3px 4px; border-bottom:0.5px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.at-tab th:first-child, .at-tab td:first-child { text-align:left; }
+.at-tab td { padding:4px; text-align:right; font-family:'JetBrains Mono', monospace; color:var(--ink-2); border-bottom:0.5px solid var(--line-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.at-tab td:first-child { font-family:'Exo 2', system-ui, sans-serif; }
+.at-tab tr[onclick] { cursor:pointer; }
+.at-tab tr[onclick]:hover td { color:var(--ink); }
+.at-tab tr.on td { color:var(--ink); }
+.at-lkb { background:transparent; border:0; padding:0; font:inherit; color:var(--ink-mute); cursor:pointer; }
+.at-lkb:hover, .at-lkb.on { color:var(--ink); }
+.at-panel > .at-sub + .at-chart { margin-top:6px; }
+@media (max-width:820px) {
+  .at-modes { width:100%; justify-content:space-between; }
+  .at-modes button { flex:1 1 0; justify-content:center; padding:5px 6px; font-size:12px; }
+  .at-modes .cnt { display:none; }
+  .at-top { position:relative; padding-right:34px; }
+  .at-close { position:absolute; top:0; right:0; }
+}
+@media (max-width:420px) { .at-modes .lbl { display:none; } }
+.at-rtwrap { overflow-x:hidden; }
+.at-rtab { table-layout:fixed; }
+.at-rtab td, .at-rtab th { overflow:hidden; text-overflow:ellipsis; }
+.at-svg { max-width:100%; height:auto; }   /* v0.33.0 — charts scale down until the resize redraw lands */

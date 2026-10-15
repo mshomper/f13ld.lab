@@ -39,6 +39,18 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (Configure → Crush → Grid, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Load axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.33.0
+
+- **Atlas: Stiffness | Thermal | Flow switch** in the header (drawn physics icons, Lab red). Cell geometry, series and selection stay shared; every other panel follows the mode:
+  - directional view: E(n), κ(n) for the focused pore filler, or K(n);
+  - readout: stiffness matrix, or the conductivity tensor with a per-filler table, or the permeability tensor with wall shear per axis and the target result;
+  - parameter map, 3-D surface and design space offer that mode's metrics (plus geometry; the design space also stiffness, for cross-physics pairs);
+  - line chart: stiffness vs solid fraction (Voigt), conductivity vs solid fraction with every filler overlaid (line style = filler) and the focused filler's Hashin–Shtrikman bounds, or permeability vs porosity with a trabecular-bone band toggle;
+  - data check per mode.
+- 3-D surface value axis fitted to the data (auto / linear / log; auto goes log past about a decade), units in the axis title; conductivity surfaces stack every filler with the focused one solid.
+- Sweep runs keep the full conductivity and permeability tensors (runs from v0.32.0 fall back to X / Y / Z).
+- No glyph icons left in the Atlas (link, home, close and check chips are drawn).
+
 ## What's new in v0.32.0
 
 - **Flow in the parameter sweep.** The sweep's Physics row is now *stiffness +* two toggles, **thermal** and **flow**. Flow solves every run on the Configure flow grid (64³ by default) and adds to the CSV permeability X / Y / Z in m² and as k/L², anisotropy, tortuosity, open and sealed porosity, narrowest and median pore, wall shear per unit speed (median and 95th, every open axis), the flow direction the cards report, and with a shear target the best speed, wall at target, usable speed range and the target used. Force balance, convergence and wall time per run.

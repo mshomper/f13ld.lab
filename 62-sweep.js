@@ -523,6 +523,7 @@ async function sweepThermalOne(run, recipe) {
     var kMean = (g.kx + g.ky + g.kz) / 3;
     var rc = (cpS > 0 && rhoS > 0) ? TR.rhoPhi * rhoS * cpS + (1 - TR.rhoPhi) * f.rho * f.cp : null;
     out.byFiller[f.id] = { kx: g.kx, ky: g.ky, kz: g.kz, kMean: kMean, kRel: g.kRel, eff: g.eff,
+      K: g.K ? Array.prototype.slice.call(g.K) : null, hsUp: g.hsUp, hsLo: g.hsLo, kF: g.kF,   /* v0.33.0 — full tensor and bounds for the Atlas */
       rhoc: rc, alpha: rc ? kMean / rc : null,
       iters: g.perLC.map(function (q) { return q.iters; }).join('/'), converged: g.converged };
   });
@@ -543,6 +544,7 @@ async function sweepFlowOne(run, recipe) {
   if (!FR) throw new Error('flow solve stopped');
   var out = { N: N, tol: tol, porosity: FR.porosity, openPorosity: FR.openPorosity, sealedPorosity: FR.sealedPorosity,
               throatVox: FR.throatVox, medPoreVox: FR.medPoreVox, kL2: FR.kL2.slice(), asym: FR.asym,
+              Kl2: Array.prototype.map.call(FR.Ksym, function (v) { return v / (N * N); }),   /* v0.33.0 — full tensor ÷ cell², for the Atlas K(n) */
               tort: Array.prototype.slice.call(FR.tort), open: [], converged: [], steps: [], residual: [null, null, null], shear: null };
   for (var a = 0; a < 3; a++) {
     var pa = FR.perAxis[a] || {};

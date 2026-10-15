@@ -1,4 +1,4 @@
-# Session recap — 2026-10-15 · v0.32.0 · fluids Phase 4 (flow in the sweep)
+# Session recap — 2026-10-15 · v0.32.0–v0.33.0 · flow in the sweep, Atlas modes
 
 Branch `flow-sweep`. Scope [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md) §17.
 
@@ -23,3 +23,8 @@ Branch `flow-sweep`. Scope [`FLUIDS_LBM_SCOPE.md`](FLUIDS_LBM_SCOPE.md) §17.
 ## For Matt
 - Click-test: a small sweep with flow on; change the shear target / fluid afterwards and export again; Atlas flow metrics.
 - Console: `runFlowCastroCheck()` (64³, about 10 s) — sheets should pass.
+
+## v0.33.0 — Atlas Stiffness | Thermal | Flow
+- Matt's GPU Castro check: sheets pass at 64³ (P 2.2 %, D 40.9 % below gyroid), networks don't match (expected).
+- Mockup (`atlas-modes-mockup.html`, sent in chat) approved as is: switch prominence, design-space defaults, stacked fillers.
+- Built per scope §18. For Matt: open the Atlas on a sweep with thermal and flow, switch modes, focus fillers, toggle the bone band, try the design-space pickers and the surface's auto / linear / log.
