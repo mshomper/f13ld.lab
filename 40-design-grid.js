@@ -948,6 +948,7 @@ function buckleMagCap(fs){
    load events, run progress, and amp-slider changes.
    ---------------------------------------------------------- */
 function renderDesignGrid(){
+  if (typeof geomViewRowSync === 'function') geomViewRowSync();   /* v0.35.0 */
   /* Import-time buckling-grid prediction — idempotent annotate pass.  This is
      the universal choke point (seed, restore, paste, drop all render here), so
      every design is badged once regardless of script load order (00-mock-data
@@ -1376,6 +1377,8 @@ function renderDesignGrid(){
       if (rkrm.setDeformAmp)  rkrm.setDeformAmp(getDeformAmp(rkid));
     }
   }
+
+  if (VIEW_STATE.mode === 'geom' && typeof geomViewApply === 'function') geomViewApply();   /* v0.35.0 */
 
   /* Push 5 — Push per-design viz params to mounted StiffnessViz instances
      after mount.  Reuses the per/shared toggle from the stress-field tab

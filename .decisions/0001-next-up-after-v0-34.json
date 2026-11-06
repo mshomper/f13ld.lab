@@ -1,0 +1,293 @@
+{
+  "id": 1,
+  "slug": "next-up-after-v0-34",
+  "title": "What should the next Lab session build after v0.34.0?",
+  "date": "2026-11-02",
+  "mode": "quick",
+  "deep": true,
+  "lenses": [
+    "research",
+    "solver",
+    "architecture"
+  ],
+  "status": "decided",
+  "context": "v0.32.0–v0.34.0 (flow in the sweep, Atlas modes, Atlas entry points) merged to main on 2026-10-15. NEXT_STEPS.md names the F13LD.sweep flow port next, then HX-1 inertial pressure drop; scope §17 lists them the other way round. Two older items are still open in the code: buckling and crush voxel prep on the main thread (the 2026-10-08 goal), and a handful of small follow-ups. Nothing has moved in Lab or Sweep since 2026-10-15.",
+  "depends_on": [],
+  "conflicts": [],
+  "log_refs": [
+    {
+      "file": "docs/NEXT_STEPS.md",
+      "entry": "PICK UP HERE (2026-10-15): (2) Sweep flow port, (3) HX-1"
+    },
+    {
+      "file": "docs/FLUIDS_LBM_SCOPE.md",
+      "entry": "§11.7 Reynolds list waits for the user's answer; §17 Next: HX-1, then Sweep port"
+    },
+    {
+      "file": "docs/NEXT_STEPS.md",
+      "entry": "§1 (2026-10-08): Buckling and Crush prep onto background workers"
+    }
+  ],
+  "options": [
+    {
+      "key": "A",
+      "name": "F13LD.sweep flow port",
+      "summary": "Copy 14e, 19g and 19h into Sweep's solver/lab/, flow at 32³ in Fast and 64³ otherwise, append flow columns after the existing ones so F13LD.ingest's validator keeps passing. Vault columns in a later pass.",
+      "sketch": "<svg viewBox='0 0 320 180' xmlns='http://www.w3.org/2000/svg'><rect x='14' y='40' width='92' height='100' rx='8' fill='var(--muted)' opacity='0.35' stroke='currentColor'/><text x='60' y='32' font-size='13' text-anchor='middle' fill='currentColor'>Lab</text><text x='60' y='78' font-size='12' text-anchor='middle' fill='currentColor'>14e 19g 19h</text><rect x='214' y='40' width='92' height='100' rx='8' fill='var(--accent)' opacity='0.35' stroke='currentColor'/><text x='260' y='32' font-size='13' text-anchor='middle' fill='currentColor'>Sweep</text><text x='260' y='78' font-size='12' text-anchor='middle' fill='currentColor'>flow cols</text><line x1='110' y1='90' x2='208' y2='90' stroke='currentColor' stroke-width='2'/><polygon points='208,84 218,90 208,96' fill='currentColor'/><text x='160' y='80' font-size='12' text-anchor='middle' fill='currentColor'>byte copy</text><text x='160' y='165' font-size='12' text-anchor='middle' fill='currentColor'>then Vault</text></svg>",
+      "pros": [
+        "It is the order Matt set on 2026-10-15 and has been queued since 2026-10-14.",
+        "Puts permeability and wall shear into the database that Vault and surrogate work read from, at sweep scale.",
+        "14e, 19g and 19h are close to clean copies: 19g needs only WGPU.device (already in Sweep) and 19h's summary code has no UI ties.",
+        "Porting the Stokes-only solver now gives Sweep a fixed copy before HX-1 changes 19g."
+      ],
+      "cons": [
+        "17c's flow job does not copy cleanly: it pulls in the whole worker pool and kernels 13–14 that Sweep lacks. Use the existing no-worker path (buildFlowLinks) or copy 17c and its imports.",
+        "Work happens in another repo that is not checked out here; Lab itself gains nothing user-visible.",
+        "Once HX-1 lands, 19g changes and Sweep's copy must be re-synced."
+      ],
+      "effort": "About 1–2 sessions, mostly in the Sweep repo.",
+      "source": "claude",
+      "assumptions": [
+        "Sweep's single-thread link build is fast enough at 32³ and 64³ (it runs once per design, before a solve of under a second).",
+        "F13LD.ingest's validator accepts columns appended after the existing ones."
+      ],
+      "risks": [
+        "The 17c dependency grows into copying 13, 13b, 13c, 13d and 14 too, widening the byte-copy contract between the repos.",
+        "Flow at 32³ in Fast may fall below the grid rule (scope §3.8) on thin-pore designs; the coarse flag must travel with the port."
+      ],
+      "estimates": [
+        {
+          "what": "Effort",
+          "value": "1–2 sessions",
+          "basis": "14e, 19g, 19h copy with small guards; Lab's 62-sweep.js:537-554 is a ready template for the caller"
+        },
+        {
+          "what": "Flow time per design in Sweep",
+          "value": "about 0.1–0.4 s solve at 64³ on an RTX, plus link build",
+          "basis": "scope §12–13: 64³ about 0.09 s per direction bench, 0.35–0.41 s per design measured by Matt"
+        }
+      ]
+    },
+    {
+      "key": "B",
+      "name": "HX-1 inertial pressure drop",
+      "summary": "Per-axis flow at a list of Reynolds numbers with a mean-velocity force controller, Darcy–Forchheimer fit, Fanning friction factor, unsteady flag, heat-exchanger fluid presets and a long-format CSV (scope §11.2).",
+      "sketch": "<svg viewBox='0 0 320 180' xmlns='http://www.w3.org/2000/svg'><line x1='40' y1='150' x2='300' y2='150' stroke='currentColor'/><line x1='40' y1='150' x2='40' y2='20' stroke='currentColor'/><text x='170' y='172' font-size='12' text-anchor='middle' fill='currentColor'>speed</text><text x='14' y='90' font-size='12' fill='currentColor' transform='rotate(-90 14 90)'>dp/dx</text><line x1='40' y1='150' x2='290' y2='70' stroke='var(--muted)' stroke-width='2' stroke-dasharray='5 4'/><path d='M40 150 Q180 120 290 30' fill='none' stroke='var(--accent)' stroke-width='3'/><text x='230' y='92' font-size='12' fill='currentColor'>Darcy</text><text x='190' y='50' font-size='12' fill='currentColor'>Forchheimer</text></svg>",
+      "pros": [
+        "The kernel is already fully nonlinear (quadratic equilibrium, Guo forcing); only the driver, cache key and outputs are new.",
+        "A ready pass/fail check now exists: Tupin and Ohta refit Castro's measurements with Forchheimer (k and β for gyroid, P and D), which would close the F12 P-gap question.",
+        "Serves the heat-exchanger database user directly and is the gate for HX-2 convective heat transfer.",
+        "The Reynolds-list blocker is softer than it looks: Castro's experiments span Re 29–145, inside the scope's default 1–200."
+      ],
+      "cons": [
+        "Largest of the options: controller, warm start, per-Re cache and results, presets, cards, sweep and long CSV.",
+        "Breaks the linear-flow assumptions the cards rely on (fields stored per unit force, wall shear rescaled linearly, cache without fluid), so the Stokes path must be kept separate and unchanged.",
+        "64³ is marginal: published TRT runs at Re up to about 200 used about 38 cells per sphere diameter; higher points need 128³ and averaging if unsteady."
+      ],
+      "effort": "About 3–4 sessions.",
+      "source": "claude",
+      "assumptions": [
+        "Matt accepts the scope defaults (1, 10, 50, 100, 200) without the user's operating range, editable later.",
+        "The Stokes path stays byte-identical, so cards, sweep and the Sweep port are unaffected."
+      ],
+      "risks": [
+        "Compressibility error at higher Re (Mach) and τ near ½ make the top Re points noisy at 64³; results need a resolution flag.",
+        "Unsteady onset (Re about 110–250 in periodic packs) forces long time-averaged runs at 128³, tens of seconds per point."
+      ],
+      "estimates": [
+        {
+          "what": "Effort",
+          "value": "3–4 sessions",
+          "basis": "earlier fluids phases took about one session each; no kernel rewrite, but four layers (driver, results, UI and CSV, validation)"
+        },
+        {
+          "what": "Run time per design",
+          "value": "about 5 Re × 3 axes = 15 solves; seconds at 64³, 10–60 s per unsteady point at 128³",
+          "basis": "64³ bench 0.09 s per direction from rest; 128³ 2.9 s per 5,000 steps; unsteady averaging about 10⁵ steps (extrapolated)"
+        }
+      ]
+    },
+    {
+      "key": "C",
+      "name": "Buckling and crush prep off the main thread",
+      "summary": "The 2026-10-08 goal: crush upload async on the 17c pool (0/1 cube), buckling voxelized once and sent to the axis workers, predict probe timed and moved if slow. Bit-identical checks in validate-prep.js.",
+      "sketch": "<svg viewBox='0 0 320 180' xmlns='http://www.w3.org/2000/svg'><rect x='20' y='30' width='130' height='34' rx='6' fill='var(--warn)' opacity='0.45' stroke='currentColor'/><text x='85' y='52' font-size='12' text-anchor='middle' fill='currentColor'>main thread</text><rect x='170' y='30' width='130' height='34' rx='6' fill='var(--good)' opacity='0.45' stroke='currentColor'/><text x='235' y='52' font-size='12' text-anchor='middle' fill='currentColor'>17c pool</text><line x1='85' y1='70' x2='85' y2='120' stroke='currentColor'/><line x1='85' y1='120' x2='225' y2='120' stroke='currentColor'/><polygon points='225,114 235,120 225,126' fill='currentColor'/><text x='160' y='148' font-size='12' text-anchor='middle' fill='currentColor'>no page freeze</text></svg>",
+      "pros": [
+        "Smallest self-contained piece, entirely in Lab; the pattern and pieces already exist (labPrepElasticParallel, _TV_PREP_CACHE, 16b's fallback).",
+        "Removes the last page freeze; buckling stops voxelizing once per axis worker.",
+        "Easy to verify: bit-identical grids, buckling factors unchanged."
+      ],
+      "cons": [
+        "Both features are off by default, so few runs hit the freeze today.",
+        "Moves no research question forward and does not touch the fluids track Matt has been driving."
+      ],
+      "effort": "About 1 session.",
+      "source": "claude",
+      "assumptions": [
+        "Prep, not the solve, is the bulk of the freeze (to profile first, as §1 asks)."
+      ],
+      "risks": [
+        "16g's upload has five call sites; making it async can reorder state in the crush run loop."
+      ],
+      "estimates": [
+        {
+          "what": "Effort",
+          "value": "about 1 session",
+          "basis": "same pattern v0.24.0 used for elastic, with the checks already written"
+        }
+      ]
+    },
+    {
+      "key": "D",
+      "name": "Small follow-ups pass",
+      "summary": "Validators runnable from the repo root, the phone-width header overflow, and Lab → Vault push matching on vault_id (Phase 4 of the round-trip scope).",
+      "sketch": "<svg viewBox='0 0 320 180' xmlns='http://www.w3.org/2000/svg'><rect x='40' y='30' width='22' height='22' rx='4' fill='none' stroke='currentColor'/><text x='76' y='47' font-size='13' fill='currentColor'>validators</text><rect x='40' y='76' width='22' height='22' rx='4' fill='none' stroke='currentColor'/><text x='76' y='93' font-size='13' fill='currentColor'>header width</text><rect x='40' y='122' width='22' height='22' rx='4' fill='none' stroke='currentColor'/><text x='76' y='139' font-size='13' fill='currentColor'>Vault push</text><rect x='220' y='60' width='70' height='60' rx='8' fill='var(--muted)' opacity='0.35'/><text x='255' y='95' font-size='12' text-anchor='middle' fill='currentColor'>tidy</text></svg>",
+      "pros": [
+        "Clears known debt; every validator running from the root makes later sessions' checks cheaper.",
+        "Each item is low risk and independently reversible."
+      ],
+      "cons": [
+        "The Vault push is not small: no push code exists yet, so it is really its own phase.",
+        "Little user-visible value apart from the phone header."
+      ],
+      "effort": "Under 1 session without the Vault push; 1–2 with it.",
+      "source": "claude",
+      "assumptions": [
+        "The Vault push is scoped out or done as a separate phase."
+      ],
+      "risks": [
+        "Scope creep into the round trip, which needs Ingest and Vault changes too."
+      ],
+      "estimates": [
+        {
+          "what": "Effort",
+          "value": "half a session for validators and header",
+          "basis": "two require-path fixes and one CSS breakpoint"
+        }
+      ]
+    },
+    {
+      "key": "E",
+      "name": "Viewer modes on the Geometry tab",
+      "summary": "Look into a curvature view, and other views to swap to on the main page beyond the shaded one.",
+      "pros": [],
+      "cons": [],
+      "source": "human"
+    }
+  ],
+  "criteria": [
+    {
+      "name": "Value of the result",
+      "scores": {
+        "A": 3,
+        "B": 3,
+        "C": 2,
+        "D": 1
+      },
+      "note": "A fills the comparison database; B answers the Castro gap and serves the HX user"
+    },
+    {
+      "name": "Time to first result",
+      "scores": {
+        "A": 3,
+        "B": 1,
+        "C": 3,
+        "D": 3
+      }
+    },
+    {
+      "name": "Risk to existing results",
+      "scores": {
+        "A": 3,
+        "B": 2,
+        "C": 2,
+        "D": 3
+      },
+      "note": "B must keep the Stokes path identical; C touches five crush call sites"
+    },
+    {
+      "name": "Readiness (nothing blocking)",
+      "scores": {
+        "A": 2,
+        "B": 2,
+        "C": 3,
+        "D": 3
+      },
+      "note": "A: 17c copy question and a repo not checked out here; B: Reynolds list waits on the user"
+    },
+    {
+      "name": "Fits Matt's stated order",
+      "scores": {
+        "A": 3,
+        "B": 2,
+        "C": 1,
+        "D": 1
+      }
+    }
+  ],
+  "evidence": [
+    {
+      "claim": "Sweep's solver/lab/ has no flow files (14e, 17c, 19g, 19h absent) and no commits since 2026-10-14, so the port has not started.",
+      "options": [
+        "A"
+      ],
+      "source": "GitHub API, mshomper/f13ld.sweep contents and commits",
+      "url": "https://github.com/mshomper/f13ld.sweep"
+    },
+    {
+      "claim": "17c's flow job depends on the whole worker pool and kernels Sweep lacks; 14e, 19g and 19h copy with small guards, and a no-worker path already exists.",
+      "options": [
+        "A"
+      ],
+      "judgment": true
+    },
+    {
+      "claim": "Lab's flow kernel is D3Q19 TRT with Guo forcing and a full quadratic equilibrium; it runs in the Stokes limit only because the force is tiny (g = 1e-5·(64/N)²).",
+      "options": [
+        "B"
+      ],
+      "judgment": true
+    },
+    {
+      "claim": "Castro's measurements span Re 29–145; a Forchheimer refit gives k and β for D (8.68e-8 m², 5390 /m), gyroid (2.40e-7 m², 3044 /m) and P (1.31e-7 m², 4035 /m), and Darcy underestimated k by 36–85 %.",
+      "options": [
+        "B"
+      ],
+      "source": "Tupin & Ohta, comment on Castro et al. 2019 (Materials)",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7321472"
+    },
+    {
+      "claim": "TRT with CLI walls on a periodic sphere pack: departs from Darcy at Re_p about 20, unsteady at about 180, and used about 38 cells per diameter with Λ = 3/16 up to Re_p about 200.",
+      "options": [
+        "B"
+      ],
+      "source": "Fattahi et al., Pore-scale lattice Boltzmann simulation of laminar and turbulent flow through a sphere pack (arXiv 1508.02960)",
+      "url": "https://arxiv.org/abs/1508.02960"
+    },
+    {
+      "claim": "TPMS lattices leave the Darcy regime early: Re about 4 for Primitive, about 20 for Diamond.",
+      "options": [
+        "B"
+      ],
+      "source": "Rathore et al., Flow Characterization in TPMS based Porous Geometries: Part 1 (arXiv 2205.03591)",
+      "url": "https://arxiv.org/abs/2205.03591"
+    },
+    {
+      "claim": "Buckling and crush prep are still synchronous (16g upload, per-worker voxelization in 16h and 16c); labPrepElasticParallel and _TV_PREP_CACHE exist to reuse.",
+      "options": [
+        "C"
+      ],
+      "judgment": true
+    }
+  ],
+  "recommended": "A",
+  "recommendation": "Port first, as Matt ordered: it is one to two sessions, it lands flow in the comparison database before HX-1 changes 19g, and its one snag (17c) has a ready workaround. Then HX-1, which now has a real validation target in the Tupin and Ohta refit of Castro.",
+  "confidence": "lean",
+  "change_mind": "If the heat-exchanger user is waiting, or Matt wants the Castro P-gap closed before more data goes to Vault, B goes first: the kernel is ready and the Tupin and Ohta β values make it testable now.",
+  "chosen": "E",
+  "reason": "neither, I actually want to look into a curvature visualization toggle for the lab. Which made me think of other visualization toggles we could swap into for the main page of the lab rather than just the \"shader\" view",
+  "decided_on": "2026-11-06",
+  "superseded_by": null,
+  "challenge": null,
+  "settles": []
+}
