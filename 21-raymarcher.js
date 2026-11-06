@@ -47,35 +47,92 @@
    ════════════════════════════════════════════════════════════ */
 var LAB_RM_VS = '#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }';
 
-/* v0.35.0 — Geometry tab data views (31-geom-views.js).  Each is its own program, compiled the
-   first time it is picked: inside the shared shader they took a first compile from 12 s to 66 s
-   on Direct3D (Matt's Windows machine, browser pane), for every tab.  Without a variant the
-   shader is exactly what it was.
+/* v0.35.0 — Geometry tab data views (31-geom-views.js).  Their own small shader, never the main
+   one: Direct3D inlines everything, and a variant of the main shader took 18–30 s to compile
+   where this takes 0.1–0.2 s (1–1.6 s with PI, below).  Linking can succeed and the first draw
+   still fail on Direct3D, so check a change by drawing, not by LINK_STATUS.  Same camera, march and framing as renderPix, without
+   deformation, stress, thermal or flow.  Variants:
      over   overhang (normal only)
      curv   curvature on the field the surface is a level set of, not on the sheet's |a| - t, so
             the stencil cannot cross the midplane; two texels, since a smaller step reads trilinear
             facets (proto/geom-views/curvature_check.js)
-     curvc  PI and normalized shells, which are not level sets of the field: their own distance,
-            one texel
      chord  wall thickness and pore size
-   The stencil is a loop with one call site, because Direct3D inlines every call. */
-function labGeomGLSL(variant) {
+   A trailing c (overc, curvc, chordc) is for PI and normalized shells, which need the field's
+   gradient in the surface and are not level sets of the field: curvature on their own distance,
+   one texel.  The stencil is a loop with one call site, because Direct3D inlines every call. */
+function buildLabGeomFS(variant) {
+  var comp = variant.charAt(variant.length - 1) === 'c' && variant !== 'c';
+  var kind = comp ? variant.slice(0, -1) : variant;
   var L = [
+    '#version 300 es',
+    'precision highp float; precision highp sampler3D;',
+    'out vec4 fragColor;',
+    'uniform vec2 res; uniform mat3 rot; uniform float zoom; uniform vec2 uPan;',
+    'uniform float thickness; uniform float isoLevel; uniform float uTopoMode; uniform float uHalfInvert;',
+    'uniform float uLipschitz; uniform float uTexNG; uniform float uNrmStep;',
+    'uniform highp sampler3D uField; uniform float uFieldMin; uniform float uFieldMax;',
+    'uniform vec3 uBodyColor;',
     'uniform float uGeomView; uniform float uGeomKind; uniform float uGeomRange; uniform float uGeomLimit;',
-    'uniform float uGeomMm; uniform vec3 uGeomBuild;'
+    'uniform float uGeomMm; uniform vec3 uGeomBuild;',
+    'const float H = 3.141593;',
+    'float sampleF(vec3 p) { return texture(uField, fract(p/(2.0*H) + 0.5)).r * (uFieldMax - uFieldMin) + uFieldMin; }'
   ];
-  if (variant === 'curv' || variant === 'curvc') {
+  if (comp) {
+    L.push(
+      'uniform float uPipeR; uniform vec3 uPipeOffset; uniform float uNormMode; uniform float uPairMode;',
+      'uniform highp sampler3D uFieldB; uniform float uFieldBMin; uniform float uFieldBMax;',
+      'float sampleFB(vec3 p) { return texture(uFieldB, fract(p/(2.0*H) + 0.5)).r * (uFieldBMax - uFieldBMin) + uFieldBMin; }',
+      'vec3 gradF(vec3 p) { float e = 0.75*(2.0*H)/max(uTexNG, 8.0);',
+      '  return vec3(sampleF(p+vec3(e,0,0))-sampleF(p-vec3(e,0,0)), sampleF(p+vec3(0,e,0))-sampleF(p-vec3(0,e,0)), sampleF(p+vec3(0,0,e))-sampleF(p-vec3(0,0,e)))/(2.0*e); }',
+      'vec3 gradFB(vec3 p) { float e = 0.75*(2.0*H)/max(uTexNG, 8.0);',
+      '  return vec3(sampleFB(p+vec3(e,0,0))-sampleFB(p-vec3(e,0,0)), sampleFB(p+vec3(0,e,0))-sampleFB(p-vec3(0,e,0)), sampleFB(p+vec3(0,0,e))-sampleFB(p-vec3(0,0,e)))/(2.0*e); }',
+      'float implicit0(vec3 p) {',
+      '  if (uTopoMode > 2.5) {',
+      '    float a = sampleF(p) - isoLevel;',
+      '    float b = uPairMode > 0.5 ? sampleFB(p) : sampleF(p + uPipeOffset) - isoLevel;',
+      '    if (uNormMode > 1.5) {',
+      '      vec3 gA = gradF(p), gB = uPairMode > 0.5 ? gradFB(p) : gradF(p + uPipeOffset);',
+      '      float mA = max(length(gA), 0.08), mB = max(length(gB), 0.08);',
+      '      float dA = a/mA, dB = b/mB;',
+      '      float ca = clamp(dot(gA, gB)/(mA*mB), -0.95, 0.95);',
+      '      return sqrt(max(dA*dA - 2.0*ca*dA*dB + dB*dB, 0.0)/(1.0 - ca*ca)) - uPipeR;',
+      '    }',
+      '    return max(abs(a), abs(b)) - uPipeR;',
+      '  }',
+      '  float adj = sampleF(p) - isoLevel;',
+      '  return abs(adj)/max(length(gradF(p)), 0.08) - thickness;',
+      '}'
+    );
+  } else {
+    L.push(
+      'float implicit0(vec3 p) {',
+      '  float adj = sampleF(p) - isoLevel;',
+      '  if (uTopoMode < 0.5) return abs(adj) - thickness;',
+      '  if (uTopoMode < 1.5) return uHalfInvert < 0.5 ? -adj : adj;',
+      '  return thickness - abs(adj);',
+      '}'
+    );
+  }
+  L.push(
+    'float f13G;',
+    'float f13Map(vec3 p) { vec3 qe = abs(p) - vec3(H); float b = length(max(qe, vec3(0.0))) + min(max(qe.x, max(qe.y, qe.z)), 0.0); return max(implicit0(p)/f13G, b); }',
+    F13_SHADE_GLSL
+  );
+  if (kind === 'curv') {
     L.push(
       'const vec3 GEOM_O[18] = vec3[18](vec3(1,0,0),vec3(-1,0,0),vec3(0,1,0),vec3(0,-1,0),vec3(0,0,1),vec3(0,0,-1),' +
         'vec3(1,1,0),vec3(1,-1,0),vec3(-1,1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(1,0,-1),vec3(-1,0,1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,1,-1),vec3(0,-1,1),vec3(0,-1,-1));',
+      'vec3 ramp8(float x, vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 c4, vec3 c5, vec3 c6, vec3 c7) { float xs = clamp(x, 0.0, 1.0)*7.0; float s = floor(min(xs, 6.999)); float t = xs - s; vec3 a = c0, b = c1;',
+      '  if (s > 5.5) { a = c6; b = c7; } else if (s > 4.5) { a = c5; b = c6; } else if (s > 3.5) { a = c4; b = c5; } else if (s > 2.5) { a = c3; b = c4; } else if (s > 1.5) { a = c2; b = c3; } else if (s > 0.5) { a = c1; b = c2; } return mix(a, b, t); }',
+      'vec3 turbo(float x) { return ramp8(x, vec3(.14,.15,.5), vec3(.15,.4,.95), vec3(.1,.7,.9), vec3(.15,.9,.55), vec3(.55,.98,.25), vec3(.95,.85,.15), vec3(.97,.5,.15), vec3(.88,.13,.08)); }',
+      'vec3 coolwarm(float x) { float xs = clamp(x, 0.0, 1.0)*4.0; float s = floor(min(xs, 3.999)); float t = xs - s; vec3 c0 = vec3(0.2298,0.2987,0.7537), c1 = vec3(0.5543,0.6901,0.9955), c2 = vec3(0.8654), c3 = vec3(0.9567,0.5980,0.4773), c4 = vec3(0.7057,0.0156,0.1502); vec3 a = c0, b = c1;',
+      '  if (s > 2.5) { a = c3; b = c4; } else if (s > 1.5) { a = c2; b = c3; } else if (s > 0.5) { a = c1; b = c2; } return mix(a, b, t); }',
       'vec2 geomCurvature(vec3 p) {',
-      variant === 'curv'
-        ? '  float h = 2.0 * (2.0 * H) / max(uTexNG, 8.0); float f0 = sampleF(p);'
-        : '  float h = (2.0 * H) / max(uTexNG, 8.0); float f0 = implicit0(p);',
+      comp ? '  float h = (2.0*H)/max(uTexNG, 8.0); float f0 = implicit0(p);'
+           : '  float h = 2.0*(2.0*H)/max(uTexNG, 8.0); float f0 = sampleF(p);',
       '  float v[18];',
-      variant === 'curv'
-        ? '  for (int i = 0; i < 18; i++) v[i] = sampleF(p + GEOM_O[i]*h);'
-        : '  for (int i = 0; i < 18; i++) v[i] = implicit0(p + GEOM_O[i]*h);',
+      comp ? '  for (int i = 0; i < 18; i++) v[i] = implicit0(p + GEOM_O[i]*h);'
+           : '  for (int i = 0; i < 18; i++) v[i] = sampleF(p + GEOM_O[i]*h);',
       '  float gx = (v[0]-v[1])/(2.0*h), gy = (v[2]-v[3])/(2.0*h), gz = (v[4]-v[5])/(2.0*h);',
       '  float i2 = 1.0/(h*h), i4 = 0.25*i2;',
       '  float xx = (v[0]-2.0*f0+v[1])*i2, yy = (v[2]-2.0*f0+v[3])*i2, zz = (v[4]-2.0*f0+v[5])*i2;',
@@ -85,9 +142,8 @@ function labGeomGLSL(variant) {
       '  float Hm = (g2*(xx+yy+zz)-gHg)/(2.0*g2*g);',
       '  float K = (gx*gx*(yy*zz-yz*yz)+gy*gy*(xx*zz-xz*xz)+gz*gz*(xx*yy-xy*xy)+2.0*(gx*gy*(xz*yz-xy*zz)+gy*gz*(xy*xz-yz*xx)+gx*gz*(xy*yz-xz*yy)))/(g2*g2);',
       /* outward = out of the solid, so convex solid reads positive */
-      variant === 'curv'
-        ? '  float side = (f0 - isoLevel) >= 0.0 ? 1.0 : -1.0; float s = uTopoMode < 0.5 ? side : (uTopoMode < 1.5 ? (uHalfInvert < 0.5 ? -1.0 : 1.0) : -side);'
-        : '  float s = 1.0;',
+      comp ? '  float s = 1.0;'
+           : '  float side = (f0 - isoLevel) >= 0.0 ? 1.0 : -1.0; float s = uTopoMode < 0.5 ? side : (uTopoMode < 1.5 ? (uHalfInvert < 0.5 ? -1.0 : 1.0) : -side);',
       '  return vec2(s*Hm, K);',
       '}',
       'vec3 geomColor(vec3 pos, vec3 n) {',
@@ -97,7 +153,7 @@ function labGeomGLSL(variant) {
       '  return turbo((abs(Hm) + sqrt(max(Hm*Hm-K, 0.0)))/uGeomRange);',
       '}'
     );
-  } else if (variant === 'over') {
+  } else if (kind === 'over') {
     L.push(
       'vec3 geomColor(vec3 pos, vec3 n) {',
       '  float th = degrees(acos(clamp(-dot(n, uGeomBuild), -1.0, 1.0)));',
@@ -106,6 +162,10 @@ function labGeomGLSL(variant) {
     );
   } else {
     L.push(
+      'vec3 cividis(float x) { float xs = clamp(x, 0.0, 1.0)*7.0; float s = floor(min(xs, 6.999)); float t = xs - s;',
+      '  vec3 a = vec3(0.0,0.1255,0.302), b = vec3(0.1098,0.2431,0.3961);',
+      '  if (s > 5.5) { a = vec3(0.8471,0.7569,0.298); b = vec3(1.0,0.9176,0.2745); } else if (s > 4.5) { a = vec3(0.6667,0.6353,0.3882); b = vec3(0.8471,0.7569,0.298); } else if (s > 3.5) { a = vec3(0.498,0.5373,0.4588); b = vec3(0.6667,0.6353,0.3882); } else if (s > 2.5) { a = vec3(0.3569,0.4471,0.4863); b = vec3(0.498,0.5373,0.4588); } else if (s > 1.5) { a = vec3(0.2353,0.3451,0.4706); b = vec3(0.3569,0.4471,0.4863); } else if (s > 0.5) { a = vec3(0.1098,0.2431,0.3961); b = vec3(0.2353,0.3451,0.4706); }',
+      '  return mix(a, b, t); }',
       /* distance along dir to where the ray crosses the surface; periodic, may leave the cell */
       'float geomChord(vec3 p, vec3 dir, float sgn) {',
       '  float t = 0.03, tp = 0.0, vp = -0.002;',
@@ -119,16 +179,66 @@ function labGeomGLSL(variant) {
       '  return -1.0;',
       '}',
       'vec3 geomColor(vec3 pos, vec3 n) {',
-      '  float ch = uGeomView < 3.5 ? geomChord(pos - n*0.002, -n, 1.0) : geomChord(pos + n*0.002, n, -1.0);',
+      '  float wall = uGeomView < 3.5 ? 1.0 : -1.0;',
+      '  float ch = geomChord(pos - wall*n*0.002, -wall*n, wall);',
       '  float v = ch < 0.0 ? uGeomRange : ch*uGeomMm;',
       '  return v < uGeomLimit ? vec3(0.85,0.25,0.25) : cividis(v/uGeomRange);',
       '}'
     );
   }
+  L.push(
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - res*0.5)/min(res.x, res.y);',
+    '  vec3 ro = rot*vec3(uPan.x, uPan.y, zoom);',
+    '  vec3 rd = normalize(rot*vec3(uv.x, uv.y, -1.6));',
+    '  float r = clamp(length(uv)*1.1, 0.0, 1.0);',
+    '  vec3 bgCol = mix(vec3(0.467,0.478,0.439), vec3(0.373,0.384,0.345), r*r);',
+    '  vec3 iv = vec3(1.0)/rd;',
+    '  vec3 tb = (-vec3(H) - ro)*iv, tt = (vec3(H) - ro)*iv;',
+    '  vec3 tmi = min(tb, tt), tma = max(tb, tt);',
+    '  float tEn = max(max(tmi.x, tmi.y), tmi.z), tEx = min(min(tma.x, tma.y), tma.z);',
+    '  fragColor = vec4(bgCol, 1.0);',
+    '  if (tEn > tEx || tEx < 0.0) return;',
+    '  float t = max(tEn, 0.001);',
+    '  bool hit = false, nearCap = false;',
+    '  float thresh = max(-(thickness*0.08), -0.008);',
+    '  float maxStep = H/14.0;',
+    '  if (implicit0(ro + rd*t) < thresh) nearCap = true;',
+    '  if (!nearCap) {',
+    '    for (int i = 0; i < 192; i++) {',
+    '      if (t > tEx) break;',
+    '      float d = implicit0(ro + rd*t);',
+    '      if (d < thresh) { hit = true; break; }',
+    '      t += clamp(d/uLipschitz*0.85, abs(thresh)*0.5, maxStep);',
+    '    }',
+    '  }',
+    '  vec3 pos, n;',
+    '  if (hit) {',
+    '    pos = ro + rd*t;',
+    '    float e = uNrmStep;',
+    '    vec3 gg = vec3(implicit0(pos+vec3(e,0,0))-implicit0(pos-vec3(e,0,0)), implicit0(pos+vec3(0,e,0))-implicit0(pos-vec3(0,e,0)), implicit0(pos+vec3(0,0,e))-implicit0(pos-vec3(0,0,e)))/(2.0*e);',
+    '    n = normalize(gg); if (dot(n, -rd) < 0.0) n = -n;',
+    '    f13G = clamp(length(gg), 0.05, max(uLipschitz, 0.05));',
+    '  } else {',
+    '    if (nearCap) t = tEn; else { if (implicit0(ro + rd*tEx) >= thresh) return; t = tEx; }',
+    '    pos = ro + rd*t;',
+    '    vec3 q = abs(pos);',
+    '    if (q.x > q.y && q.x > q.z) n = vec3(sign(pos.x),0.0,0.0); else if (q.y > q.z) n = vec3(0.0,sign(pos.y),0.0); else n = vec3(0.0,0.0,sign(pos.z));',
+    '    if (dot(n, -rd) < 0.0) n = -n;',
+    '    f13G = max(uLipschitz, 0.05);',
+    '  }',
+    '  float tMax = 1.6*H;',
+    /* neutral cut faces, so they are not read as data */
+    '  vec3 col;',
+    '  if (hit) col = f13ShadeData(geomColor(pos, n), pos, n, rd, rot, H*0.3, uNrmStep, tMax);',
+    '  else col = f13Shade(vec3(0.34,0.35,0.38), pos, n, rd, rot, true, H*0.3, uNrmStep, tMax);',
+    '  fragColor = vec4(clamp(mix(bgCol, col, exp(-t*0.010)), 0.0, 1.0), 1.0);',
+    '}'
+  );
   return L.join('\n');
 }
 
-function buildLabRaymarcherFS(stepCount, geomVariant) {
+function buildLabRaymarcherFS(stepCount) {
   var STEPS = String(stepCount || 192);
   return [
     '#version 300 es',
@@ -578,7 +688,6 @@ function buildLabRaymarcherFS(stepCount, geomVariant) {
     '  return max(implicit(p) / f13G, b);',
     '}',
     F13_SHADE_GLSL,
-    geomVariant ? labGeomGLSL(geomVariant) : '',
 
     'vec4 renderPix() {',
     '  vec2 uv = (gl_FragCoord.xy - res*0.5) / min(res.x, res.y);',
@@ -721,8 +830,6 @@ function buildLabRaymarcherFS(stepCount, geomVariant) {
     '    vec3 dataCol = (uBuckleMap > 0.5) ? turbo(sv) : cividis(sv);',
     '    col = f13ShadeData(dataCol, pos, n, rd, rot, H*0.3, uNrmStep, f13TMax);',
     '  } else {',
-    /* v0.35.0 — Geometry data views: neutral cut faces, so they are not read as data */
-    geomVariant ? '    if (uViewMode < 0.5 && uGeomView > 0.5) { if (hit) col = f13ShadeData(geomColor(pos, n), pos, n, rd, rot, H*0.3, uNrmStep, f13TMax); else col = f13Shade(vec3(0.34,0.35,0.38), pos, n, rd, rot, true, H*0.3, uNrmStep, f13TMax); } else' : '',
     /* Geometry / deformed views: family body color; cap hits are cut faces. */
     '    col = f13Shade(uBodyColor, pos, n, rd, rot, !hit, H*0.3, uNrmStep, f13TMax);',
     '  }',
@@ -748,7 +855,7 @@ function buildLabRaymarcherFS(stepCount, geomVariant) {
     '  fragColor = c;',
     '  gl_FragDepth = gDepth;',
     '}'
-  ].filter(function(l){ return l !== ''; }).join('\n');
+  ].join('\n');
 }
 
 
@@ -1088,16 +1195,14 @@ function labRmLocations(gl, prg) {
 LabRaymarcher.prototype._geomVariant = function() {
   var S = this._u;
   if (!S.geomView) return '';
-  if (S.geomView === 2) return 'over';
-  if (S.geomView > 2) return 'chord';
   var plain = S.topoMode < 2.5 && !(S.topoMode < 0.5 && S.normMode > 0.5 && S.normMode < 1.5);
-  return plain ? 'curv' : 'curvc';
+  return (S.geomView === 1 ? 'curv' : (S.geomView === 2 ? 'over' : 'chord')) + (plain ? '' : 'c');
 };
 LabRaymarcher.prototype._geomSet = function(variant) {
   var gl = this.gl, sets = this._geomSets || (this._geomSets = {}), V = sets[variant];
   if (!V) {
     var vs = gl.createShader(gl.VERTEX_SHADER);   gl.shaderSource(vs, LAB_RM_VS);                           gl.compileShader(vs);
-    var fs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs, buildLabRaymarcherFS(192, variant));  gl.compileShader(fs);
+    var fs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs, buildLabGeomFS(variant));             gl.compileShader(fs);
     var prg = gl.createProgram();
     gl.attachShader(prg, vs); gl.attachShader(prg, fs); gl.linkProgram(prg);
     V = sets[variant] = { prg: prg, vs: vs, fs: fs, ready: false, failed: false };

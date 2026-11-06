@@ -89,7 +89,7 @@ function geomBusyWatch(){
 }
 
 function geomSlider(key, label, min, max, step, fmt, tip){
-  return '<span class="fa-sl" title="' + tip + '"><span class="fa-l">' + label + '</span>' +
+  return '<span class="fa-sl geom-sl" title="' + tip + '"><span class="fa-l">' + label + '</span>' +
     '<input type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + VIEW_STATE.geom[key] + '"' +
     ' data-key="' + key + '" data-fmt="' + fmt + '" oninput="onGeomSlider(this)">' +
     '<span class="fa-v">' + geomFmt(fmt, VIEW_STATE.geom[key]) + '</span></span>';
@@ -102,10 +102,11 @@ function geomFmt(fmt, v){
   if (fmt === 'curv') return '±' + v.toFixed(1) + (VIEW_STATE.geom.kind === 'gauss' ? ' /mm²' : ' /mm');
   return String(v);
 }
-function geomPickBtns(items, cur, fn){
-  var h = '<div class="th-toggle">';
+function geomPickBtns(label, items, cur, fn){
+  var h = '<div class="cp-seg" role="group" aria-label="' + label + '"><span class="lbl">' + label + '</span>';
   for (var i = 0; i < items.length; i++){
-    h += '<button class="th-btn' + (items[i].id === cur ? ' active' : '') + '" title="' + (items[i].tip || '') + '" onclick="' + fn + '(\'' + items[i].id + '\')">' + items[i].label + '</button>';
+    var on = items[i].id === cur;
+    h += '<button type="button"' + (on ? ' class="on"' : '') + ' aria-pressed="' + on + '" title="' + (items[i].tip || '') + '" onclick="' + fn + '(\'' + items[i].id + '\')">' + items[i].label + '</button>';
   }
   return h + '</div>';
 }
@@ -113,21 +114,21 @@ function geomPickBtns(items, cur, fn){
 function geomViewRowBuild(){
   var row = document.getElementById('geomViewRow');
   if (!row) return;
-  var g = VIEW_STATE.geom, h = geomPickBtns(GEOM_VIEWS, g.view, 'onGeomViewPick');
+  var g = VIEW_STATE.geom, h = geomPickBtns('View', GEOM_VIEWS, g.view, 'onGeomViewPick');
   if (g.view === 'curvature'){
-    h += geomPickBtns(GEOM_KINDS, g.kind, 'onGeomKindPick');
+    h += geomPickBtns('Measure', GEOM_KINDS, g.kind, 'onGeomKindPick');
     h += g.kind === 'tightest'
       ? geomSlider('tightest', 'tightest', 1, 8, 0.1, 'r', 'The radius at the top of the colour scale')
       : geomSlider('curvRange', 'range', 0.5, 6, 0.1, 'curv', 'The value at each end of the colour scale');
   } else if (g.view === 'overhang'){
-    h += '<span class="stress-norm-label">Build</span>' + geomPickBtns([{ id: 'x', label: 'X', tip: 'Build direction X' }, { id: 'y', label: 'Y', tip: 'Build direction Y' }, { id: 'z', label: 'Z', tip: 'Build direction Z' }], g.build, 'onGeomBuildPick');
+    h += geomPickBtns('Build', [{ id: 'x', label: 'X', tip: 'Build direction X' }, { id: 'y', label: 'Y', tip: 'Build direction Y' }, { id: 'z', label: 'Z', tip: 'Build direction Z' }], g.build, 'onGeomBuildPick');
     h += geomSlider('overhang', 'limit', 30, 60, 1, 'deg', 'Steepest self-supporting face, measured from the build plate');
   } else if (g.view === 'wall'){
     h += geomSlider('wallMin', 'minimum', 0.1, 1.5, 0.05, 'mm', 'Thinner walls turn red') + geomSlider('wallScale', 'scale', 1, 5, 0.1, 'mm1', 'The thickness at the top of the colour scale');
   } else if (g.view === 'pore'){
     h += geomSlider('poreMin', 'minimum', 0.1, 2, 0.05, 'mm', 'Tighter gaps turn red') + geomSlider('poreScale', 'scale', 1, 6, 0.1, 'mm1', 'The gap at the top of the colour scale');
   }
-  row.innerHTML = h + '<span class="gl-n" id="geomBusy" style="display:none">preparing this view; the first time can take up to a minute</span><span class="geom-legend" id="geomLegend"></span>';
+  row.innerHTML = h + '<span class="gl-n" id="geomBusy" style="display:none">preparing this view</span><span class="geom-legend" id="geomLegend"></span>';
   geomLegendPaint();
 }
 
