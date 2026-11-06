@@ -8,7 +8,7 @@
    ============================================================ */
 
 var GEOM_VIEWS = [
-  { id: 'shaded',    label: 'Shaded',         tip: 'The shaded view; turns by itself' },
+  { id: 'shaded',    label: 'Shaded',         tip: 'The shaded view; turns until you grab it' },
   { id: 'curvature', label: 'Curvature',      tip: 'How the surface bends' },
   { id: 'overhang',  label: 'Overhang',       tip: 'Faces that need support for a build direction' },
   { id: 'wall',      label: 'Wall thickness', tip: 'Thickness through the solid, measured along the surface normal' },
@@ -72,7 +72,7 @@ function geomViewApply(){
     rm.setGeomView({ view: view, kind: kind, range: geomViewRange(), limit: geomViewLimit(), mm: cell / (2 * Math.PI), build: build });
     if (!first) first = rm;
   }
-  if (view && first && typeof labGeomLinkPose === 'function') labGeomLinkPose(first);   /* tiles line up on entering a data view */
+  if ((view || LAB_GEOM_HELD) && first && typeof labGeomLinkPose === 'function') labGeomLinkPose(first);   /* tiles line up on entering a data view, or when a design joins */
   geomBusyWatch();
 }
 /* A view's shader compiles the first time it is picked; the tiles stay shaded until then. */

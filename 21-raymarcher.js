@@ -2008,14 +2008,21 @@ LabRaymarcher.prototype.setViewMode = function(mode) {
 };
 
 /* v0.35.0 — Geometry tab data view (31-geom-views.js): view 0 shaded, 1 curvature, 2 overhang,
-   3 wall thickness, 4 pore size; mm = mm per world unit.  Data views hold still and take the
-   drag and wheel, so a spot can be inspected; the shaded view keeps its turntable. */
+   3 wall thickness, 4 pore size; mm = mm per world unit.  Data views hold still, so a spot can
+   be inspected; Shaded turns until a tile is first grabbed, then every tile stays put (Matt,
+   2026-11-06, as the Stiffness surface does).  All Geometry tiles share one pose once held. */
 LabRaymarcher.prototype.setGeomView = function(p) {
   var S = this._u;
   S.geomView = p.view; S.geomKind = p.kind; S.geomRange = p.range; S.geomLimit = p.limit; S.geomMm = p.mm; S.geomBuild = p.build;
   this._dirty = true;
 };
-LabRaymarcher.prototype._geomSpins = function() { return this._viewMode === 'geom' && !this._u.geomView; };
+var LAB_GEOM_HELD = false;
+LabRaymarcher.prototype._geomSpins = function() { return this._viewMode === 'geom' && !this._u.geomView && !LAB_GEOM_HELD; };
+LabRaymarcher.prototype._geomHold = function() {
+  if (this._viewMode !== 'geom') return;
+  LAB_GEOM_HELD = true;
+  labGeomLinkPose(this);
+};
 
 /* setDeformAmp(sliderValue) — push the amp slider to the shader,
    scaled into world units.
@@ -2162,16 +2169,16 @@ LabRaymarcher.prototype._updateGimbal = function() {
 
 /* ════════════════════════════════════════════════════════════
    A.2 — Pointer/wheel handlers for user-controlled rotation
-   in deform/stress modes.  Geom mode keeps auto-rotation.
+   in every mode.  v0.35.0 — Geometry too (_geomHold).
    ════════════════════════════════════════════════════════════ */
 LabRaymarcher.prototype._attachInteractionHandlers = function() {
   if (!this.canvas) return;
   var self = this;
 
-  /* Pointer drag — rotate _rotY (horizontal drag) and _rotX (vertical
-     drag).  Active only in deform/stress modes; geom mode auto-rotates. */
+  /* Pointer drag — rotate _rotY (horizontal drag) and _rotX (vertical drag). */
   this.canvas.addEventListener('pointerdown', function(e) {
-    if (self._extControl || self._geomSpins()) return;
+    if (self._extControl) return;
+    self._geomHold();   /* v0.35.0 */
     /* v0.21.0 — grabbing the section-plane handle scrubs the plane (F13LD.tpms) */
     var hs = self._clipScreen;
     if (hs && (self._viewMode === 'thermal' || self._viewMode === 'flow')) {
@@ -2185,7 +2192,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     self.canvas.style.cursor = 'grabbing';
   });
   this.canvas.addEventListener('pointermove', function(e) {
-    if (!self._pointerDown || self._geomSpins()) return;
+    if (!self._pointerDown) return;
     var dx = e.clientX - self._lastPointerX;
     var dy = e.clientY - self._lastPointerY;
     self._lastPointerX = e.clientX;
@@ -2208,7 +2215,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     var lim = Math.PI * 0.49;
     if (self._rotX >  lim) self._rotX =  lim;
     if (self._rotX < -lim) self._rotX = -lim;
-    if (self._u.geomView) labGeomLinkPose(self);   /* v0.35.0 — all tiles turn together */
+    if (self._viewMode === 'geom') labGeomLinkPose(self);   /* v0.35.0 — all tiles turn together */
     self._dirty = true;
   });
   var onPointerUp = function(e) {
@@ -2221,9 +2228,10 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
   this.canvas.addEventListener('pointerup', onPointerUp);
   this.canvas.addEventListener('pointercancel', onPointerUp);
 
-  /* Wheel zoom — active only in deform/stress.  Clamp [8, 40]. */
+  /* Wheel zoom.  Clamp [8, 40]. */
   this.canvas.addEventListener('wheel', function(e) {
-    if (self._extControl || self._geomSpins()) return;
+    if (self._extControl) return;
+    self._geomHold();   /* v0.35.0 */
     e.preventDefault();
     var z = self._u.zoom;
     /* Scroll up (negative deltaY) → zoom in (smaller z) */
@@ -2231,7 +2239,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     if (z < 8)  z = 8;
     if (z > 40) z = 40;
     self._u.zoom = z;
-    if (self._u.geomView) labGeomLinkPose(self);
+    if (self._viewMode === 'geom') labGeomLinkPose(self);
     self._dirty = true;
   }, { passive: false });
 };
