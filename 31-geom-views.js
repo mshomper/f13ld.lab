@@ -73,19 +73,6 @@ function geomViewApply(){
     if (!first) first = rm;
   }
   if ((view || LAB_GEOM_HELD) && first && typeof labGeomLinkPose === 'function') labGeomLinkPose(first);   /* tiles line up on entering a data view, or when a design joins */
-  geomBusyWatch();
-}
-/* A view's shader compiles the first time it is picked; the tiles stay shaded until then. */
-var _geomBusyTimer = null;
-function geomBusyWatch(){
-  if (_geomBusyTimer) return;
-  _geomBusyTimer = setTimeout(function(){
-    _geomBusyTimer = null;
-    var busy = false, el = document.getElementById('geomBusy');
-    for (var id in LAB_RM_REGISTRY){ var r = LAB_RM_REGISTRY[id]; if (r && r._geomWaiting && r._running) busy = true; }
-    if (el) el.style.display = (busy && VIEW_STATE.mode === 'geom') ? '' : 'none';
-    if (busy) geomBusyWatch();
-  }, 300);
 }
 
 function geomSlider(key, label, min, max, step, fmt, tip){
@@ -128,7 +115,7 @@ function geomViewRowBuild(){
   } else if (g.view === 'pore'){
     h += geomSlider('poreMin', 'minimum', 0.1, 2, 0.05, 'mm', 'Tighter gaps turn red') + geomSlider('poreScale', 'scale', 1, 6, 0.1, 'mm1', 'The gap at the top of the colour scale');
   }
-  row.innerHTML = h + '<span class="gl-n" id="geomBusy" style="display:none">preparing this view</span><span class="geom-legend" id="geomLegend"></span>';
+  row.innerHTML = h + '<span class="geom-legend" id="geomLegend"></span>';
   geomLegendPaint();
 }
 

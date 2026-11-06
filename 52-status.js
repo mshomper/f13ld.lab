@@ -102,6 +102,27 @@ function labStatusProgress(p) {
   if (txt) txt.textContent = 'solving · ' + pct + '%';
 }
 
+/* v0.35.0 — a tile waiting for a shader stays Shaded; the chip ripples and says why. */
+var LAB_VIEW_BUSY = { timer: 0, on: false, prev: '' };
+function labViewBusyPoke() {
+  if (!LAB_VIEW_BUSY.timer) LAB_VIEW_BUSY.timer = setTimeout(labViewBusyCheck, 200);
+}
+function labViewBusyCheck() {
+  LAB_VIEW_BUSY.timer = 0;
+  var busy = false, txt = document.getElementById('solverPill');
+  if (typeof LAB_RM_REGISTRY !== 'undefined') for (var id in LAB_RM_REGISTRY) { var r = LAB_RM_REGISTRY[id]; if (r && r._running && r._viewWaiting) busy = true; }
+  if (busy && !LAB_VIEW_BUSY.on && LAB_STATUS.state !== 'solving' && txt) {
+    LAB_VIEW_BUSY.on = true; LAB_VIEW_BUSY.prev = txt.textContent;
+    txt.textContent = 'preparing view';
+    labStatusSpin(true);
+  } else if (!busy && LAB_VIEW_BUSY.on) {
+    LAB_VIEW_BUSY.on = false;
+    if (txt && txt.textContent === 'preparing view') txt.textContent = LAB_VIEW_BUSY.prev;
+    if (LAB_STATUS.state !== 'solving') labStatusSpin(false);
+  }
+  if (busy || LAB_VIEW_BUSY.on) labViewBusyPoke();
+}
+
 /* ── Splash ──────────────────────────────────────────────────── */
 function labSplashHide() {
   var sp = document.getElementById('labSplash');

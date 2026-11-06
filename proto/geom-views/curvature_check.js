@@ -1,26 +1,28 @@
-// F13LD.lab · Geometry tab curvature check (v0.35.0): is curvature read from the viewer's
-// stored field accurate?  Same storage as 21-raymarcher.js: N³, normalized to 0–1, half float,
-// trilinear; same finite differences as geomCurvature.  Run: node proto/geom-views/curvature_check.js
+// F13LD.lab · Geometry tab curvature check (v0.35.0): is curvature baked from the viewer's field
+// accurate?  Runs the real labBakeCurvature from 21-raymarcher.js, then reads it as the shader does
+// (trilinear at the surface point).  Run from the repo root: node proto/geom-views/curvature_check.js
+const fs = require('fs');
+const rm = fs.readFileSync('21-raymarcher.js', 'utf8').replace(/\r\n/g, '\n');
+const at = rm.indexOf('function labBakeCurvature');
+const labBakeCurvature = new Function(rm.slice(at, rm.indexOf('\n}\n', at) + 2) + ';return labBakeCurvature;')();
 const TAU = 2 * Math.PI;
-const half = x => { if (x === 0) return 0; const e = Math.floor(Math.log2(Math.abs(x))); const s = Math.pow(2, Math.max(e, -14) - 10); return Math.round(x / s) * s; };
 
-function storedField(f, N) {
-  const d = new Float64Array(N * N * N); let lo = 1e9, hi = -1e9;
-  for (let k = 0, o = 0; k < N; k++) for (let j = 0; j < N; j++) for (let i = 0; i < N; i++, o++) {
-    const v = f((i + .5) / N * TAU - Math.PI, (j + .5) / N * TAU - Math.PI, (k + .5) / N * TAU - Math.PI);
-    d[o] = v; lo = Math.min(lo, v); hi = Math.max(hi, v);
-  }
-  const r = hi - lo;
-  for (let n = 0; n < d.length; n++) d[n] = half((d[n] - lo) / r);
-  const m = n => ((n % N) + N) % N, g = (I, J, K) => d[m(I) + m(J) * N + m(K) * N * N], l = (p, q, t) => p + (q - p) * t;
+function grid(f, N) {
+  const d = new Float32Array(N * N * N);
+  for (let k = 0, o = 0; k < N; k++) for (let j = 0; j < N; j++) for (let i = 0; i < N; i++, o++) d[o] = f((i + .5) / N * TAU - Math.PI, (j + .5) / N * TAU - Math.PI, (k + .5) / N * TAU - Math.PI);
+  return d;
+}
+/* read channel c (0 mean, 1 Gaussian) of the bake, trilinear */
+function reader(bake, N, c) {
+  const m = n => ((n % N) + N) % N, g = (I, J, K) => bake[2 * (m(I) + m(J) * N + m(K) * N * N) + c], l = (p, q, t) => p + (q - p) * t;
   return (x, y, z) => {
     const u = (x + Math.PI) / TAU * N - .5, v = (y + Math.PI) / TAU * N - .5, w = (z + Math.PI) / TAU * N - .5;
-    const i = Math.floor(u), j = Math.floor(v), k = Math.floor(w), a = u - i, b = v - j, c = w - k;
-    return lo + r * l(l(l(g(i, j, k), g(i + 1, j, k), a), l(g(i, j + 1, k), g(i + 1, j + 1, k), a), b),
-      l(l(g(i, j, k + 1), g(i + 1, j, k + 1), a), l(g(i, j + 1, k + 1), g(i + 1, j + 1, k + 1), a), b), c);
+    const i = Math.floor(u), j = Math.floor(v), k = Math.floor(w), a = u - i, b = v - j, e = w - k;
+    return l(l(l(g(i, j, k), g(i + 1, j, k), a), l(g(i, j + 1, k), g(i + 1, j + 1, k), a), b), l(l(g(i, j, k + 1), g(i + 1, j, k + 1), a), l(g(i, j + 1, k + 1), g(i + 1, j + 1, k + 1), a), b), e);
   };
 }
 
+/* the formula on an analytic field: the truth */
 function curvature(F, x, y, z, h) {
   const s = (a, b, c) => F(x + a * h, y + b * h, z + c * h), f0 = F(x, y, z);
   const xp = s(1, 0, 0), xm = s(-1, 0, 0), yp = s(0, 1, 0), ym = s(0, -1, 0), zp = s(0, 0, 1), zm = s(0, 0, -1);
@@ -59,34 +61,30 @@ const check = (name, value, limit, unit) => { const ok = value <= limit; if (!ok
 const gyroid = (x, y, z) => Math.sin(x) * Math.cos(y) + Math.sin(y) * Math.cos(z) + Math.sin(z) * Math.cos(x);
 const schwarzP = (x, y, z) => Math.cos(x) + Math.cos(y) + Math.cos(z);
 
-// C1 — TPMS at the viewer's 48³, step two texels.  Errors as RMS, on the surface's curvature scale.
+// C1 — TPMS at the viewer's 48³.  Errors as RMS, on the surface's curvature scale.
 for (const [name, f, c] of [['gyroid level 0', gyroid, 0], ['gyroid level 0.6', gyroid, .6], ['Schwarz P level 0', schwarzP, 0]]) {
   const pts = surfacePoints(f, c, 1500), truth = pts.map(p => curvature(f, ...p, 2e-3));
   const scale = Math.sqrt(truth.reduce((a, t) => a + Math.max(t.H * t.H - t.K, 0) + t.H * t.H, 0) / pts.length);
   const Krms = Math.sqrt(truth.reduce((a, t) => a + t.K * t.K, 0) / pts.length);
-  const F = storedField(f, 48), h = 2 * TAU / 48; let eH = 0, eK = 0;
-  pts.forEach((p, i) => { const d = curvature(F, ...p, h); eH += (d.H - truth[i].H) ** 2; eK += (d.K - truth[i].K) ** 2; });
-  check('C1 ' + name + ' mean', 100 * Math.sqrt(eH / pts.length) / scale, 3, ' %');
-  check('C1 ' + name + ' Gaussian', 100 * Math.sqrt(eK / pts.length) / Krms, 3, ' %');
+  const bake = labBakeCurvature(grid(f, 48), 48), RH = reader(bake, 48, 0), RK = reader(bake, 48, 1); let eH = 0, eK = 0;
+  pts.forEach((p, i) => { eH += (RH(...p) - truth[i].H) ** 2; eK += (RK(...p) - truth[i].K) ** 2; });
+  check('C1 ' + name + ' mean', 100 * Math.sqrt(eH / pts.length) / scale, 1, ' %');
+  check('C1 ' + name + ' Gaussian', 100 * Math.sqrt(eK / pts.length) / Krms, 2, ' %');
 }
 
 // C2 — strut (cylinder distance field), mean curvature 1/(2r), at 48³ and the 96³ fine grid.
-// The step stays two texels on both: at 96³ a fixed cell-relative step (four texels) read 125 % on r = 2 texels.
 for (const N of [48, 96]) for (const rv of [2, 4, 8]) {
-  const vx = TAU / N, r = rv * vx, F = storedField((x, y) => Math.hypot(x, y) - r, N); let s = 0, s2 = 0; const n = 300;
-  for (let i = 0; i < n; i++) { const a = i * 2.4, d = curvature(F, r * Math.cos(a), r * Math.sin(a), (i / n - .5) * 2, 2 * vx); s += d.H; s2 += d.H * d.H; }
+  const r = rv * TAU / N, R = reader(labBakeCurvature(grid((x, y) => Math.hypot(x, y) - r, N), N), N, 0); let s = 0, s2 = 0; const n = 300;
+  for (let i = 0; i < n; i++) { const a = i * 2.4, H = R(r * Math.cos(a), r * Math.sin(a), (i / n - .5) * 2); s += H; s2 += H * H; }
   const m = s / n;
-  check('C2 strut N=' + N + ' r=' + rv + ' texels, bias', Math.abs(100 * m * 2 * r - 100), 3, ' %');
+  check('C2 strut N=' + N + ' r=' + rv + ' texels, bias', Math.abs(100 * m * 2 * r - 100), 4, ' %');
   check('C2 strut N=' + N + ' r=' + rv + ' texels, scatter', 100 * Math.sqrt(Math.max(s2 / n - m * m, 0)) * 2 * r, 6, ' %');
 }
 
-// C3 — a smaller step fails, which is why the normals' half-texel step is not reused.
+// C3 — the bake's speed on the 96³ fine grid (it runs on the page, the first time curvature is shown).
 {
-  const f = schwarzP, pts = surfacePoints(f, 0, 800), truth = pts.map(p => curvature(f, ...p, 2e-3));
-  const Krms = Math.sqrt(truth.reduce((a, t) => a + t.K * t.K, 0) / pts.length), F = storedField(f, 48); let e = 0;
-  pts.forEach((p, i) => { e += (curvature(F, ...p, .5 * TAU / 48).K - truth[i].K) ** 2; });
-  const err = 100 * Math.sqrt(e / pts.length) / Krms; const ok = err > 30; if (!ok) fails++;
-  console.log((ok ? 'pass  ' : 'FAIL  ') + 'C3 half-texel step is unusable: Gaussian error ' + err.toFixed(0) + ' %');
+  const d = grid(gyroid, 96), t0 = Date.now(); labBakeCurvature(d, 96); const ms = Date.now() - t0;
+  check('C3 bake at 96³', ms, 150, ' ms');
 }
 
 console.log(fails ? fails + ' failed' : 'all passed');

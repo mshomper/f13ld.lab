@@ -47,19 +47,56 @@
    ════════════════════════════════════════════════════════════ */
 var LAB_RM_VS = '#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }';
 
-/* v0.35.0 — Geometry tab data views (31-geom-views.js).  Their own small shader, never the main
-   one: Direct3D inlines everything, and a variant of the main shader took 18–30 s to compile
-   where this takes 0.1–0.2 s (1–1.6 s with PI, below).  Linking can succeed and the first draw
-   still fail on Direct3D, so check a change by drawing, not by LINK_STATUS.  Same camera, march and framing as renderPix, without
-   deformation, stress, thermal or flow.  Variants:
+/* v0.35.0 — the small shader: the Geometry tab, Shaded and data views (31-geom-views.js).  Direct3D
+   inlines everything, and the main shader takes 12–40 s to compile cold (browser pane, Windows);
+   this takes 0.1–0.2 s (1–2.5 s with PI, below).  Linking can succeed and the first draw
+   still fail on Direct3D, so check a change by drawing, not by LINK_STATUS.  Same camera, march and
+   framing as renderPix, without deformation, stress, thermal or flow.  Never add view code to the
+   main shader.  Variants:
+     shade  the Shaded view
      over   overhang (normal only)
-     curv   curvature on the field the surface is a level set of, not on the sheet's |a| - t, so
-            the stencil cannot cross the midplane; two texels, since a smaller step reads trilinear
-            facets (proto/geom-views/curvature_check.js)
+     curv   curvature, read from a texture baked from the exact field (labBakeCurvature)
      chord  wall thickness and pore size
-   A trailing c (overc, curvc, chordc) is for PI and normalized shells, which need the field's
-   gradient in the surface and are not level sets of the field: curvature on their own distance,
-   one texel.  The stencil is a loop with one call site, because Direct3D inlines every call. */
+   A trailing c (shadec, overc, curvc, chordc) is for PI and normalized shells, which need the field's
+   gradient in the surface and are not level sets of the field: curvature by a stencil on their own
+   distance, one texel, so it still shows the sampling noise labBakeCurvature removes elsewhere.  The
+   stencil is a loop with one call site, because Direct3D inlines every call. */
+
+/* Mean and Gaussian curvature of the level set through each voxel (world units), from the 32-bit
+   field, with one-texel periodic differences.  Differencing the stored texture in the shader speckles:
+   a filtered R16F sample is off by about 0.0006 field units (measured, Matt's GPU) and a second
+   difference magnifies that to about 5 % of a ±0.5 /mm scale.  Not smoothed: one texel is the sharpest
+   stencil the grid has.  Clamped at what the grid can show, so a saddle of the field (zero gradient)
+   does not bleed into its neighbours.  proto/geom-views/curvature_check.js */
+function labBakeCurvature(d, N) {
+  var out = new Float32Array(2 * N * N * N), h = 2 * Math.PI / N, N2 = N * N;
+  var i2 = 1 / (h * h), i4 = 0.25 * i2, i1 = 0.5 / h, capH = 1 / h, capK = 1 / (h * h);
+  var ip = new Int32Array(N), im = new Int32Array(N), o = 0;
+  for (var a = 0; a < N; a++) { ip[a] = (a + 1) % N; im[a] = (a + N - 1) % N; }
+  for (var k = 0; k < N; k++) {
+    var kp = ip[k] * N2, km = im[k] * N2, k0 = k * N2;
+    for (var j = 0; j < N; j++) {
+      var jp = ip[j] * N, jm = im[j] * N, j0 = j * N;
+      for (var i = 0; i < N; i++, o += 2) {
+        var xp = ip[i], xm = im[i], f0 = d[i + j0 + k0];
+        var vxp = d[xp + j0 + k0], vxm = d[xm + j0 + k0], vyp = d[i + jp + k0], vym = d[i + jm + k0], vzp = d[i + j0 + kp], vzm = d[i + j0 + km];
+        var gx = (vxp - vxm) * i1, gy = (vyp - vym) * i1, gz = (vzp - vzm) * i1;
+        var xx = (vxp - 2 * f0 + vxm) * i2, yy = (vyp - 2 * f0 + vym) * i2, zz = (vzp - 2 * f0 + vzm) * i2;
+        var xy = (d[xp + jp + k0] - d[xp + jm + k0] - d[xm + jp + k0] + d[xm + jm + k0]) * i4;
+        var xz = (d[xp + j0 + kp] - d[xp + j0 + km] - d[xm + j0 + kp] + d[xm + j0 + km]) * i4;
+        var yz = (d[i + jp + kp] - d[i + jp + km] - d[i + jm + kp] + d[i + jm + km]) * i4;
+        var g2 = Math.max(gx * gx + gy * gy + gz * gz, 1e-6), g = Math.sqrt(g2);
+        var gHg = gx * gx * xx + gy * gy * yy + gz * gz * zz + 2 * (gx * gy * xy + gx * gz * xz + gy * gz * yz);
+        var Hm = (g2 * (xx + yy + zz) - gHg) / (2 * g2 * g);
+        var K = (gx * gx * (yy * zz - yz * yz) + gy * gy * (xx * zz - xz * xz) + gz * gz * (xx * yy - xy * xy) + 2 * (gx * gy * (xz * yz - xy * zz) + gy * gz * (xy * xz - yz * xx) + gx * gz * (xy * yz - xz * yy))) / (g2 * g2);
+        out[o] = Math.max(-capH, Math.min(capH, Hm));
+        out[o + 1] = Math.max(-capK, Math.min(capK, K));
+      }
+    }
+  }
+  return out;
+}
+
 function buildLabGeomFS(variant) {
   var comp = variant.charAt(variant.length - 1) === 'c' && variant !== 'c';
   var kind = comp ? variant.slice(0, -1) : variant;
@@ -120,32 +157,44 @@ function buildLabGeomFS(variant) {
   );
   if (kind === 'curv') {
     L.push(
-      'const vec3 GEOM_O[18] = vec3[18](vec3(1,0,0),vec3(-1,0,0),vec3(0,1,0),vec3(0,-1,0),vec3(0,0,1),vec3(0,0,-1),' +
-        'vec3(1,1,0),vec3(1,-1,0),vec3(-1,1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(1,0,-1),vec3(-1,0,1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,1,-1),vec3(0,-1,1),vec3(0,-1,-1));',
       'vec3 ramp8(float x, vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 c4, vec3 c5, vec3 c6, vec3 c7) { float xs = clamp(x, 0.0, 1.0)*7.0; float s = floor(min(xs, 6.999)); float t = xs - s; vec3 a = c0, b = c1;',
       '  if (s > 5.5) { a = c6; b = c7; } else if (s > 4.5) { a = c5; b = c6; } else if (s > 3.5) { a = c4; b = c5; } else if (s > 2.5) { a = c3; b = c4; } else if (s > 1.5) { a = c2; b = c3; } else if (s > 0.5) { a = c1; b = c2; } return mix(a, b, t); }',
       'vec3 turbo(float x) { return ramp8(x, vec3(.14,.15,.5), vec3(.15,.4,.95), vec3(.1,.7,.9), vec3(.15,.9,.55), vec3(.55,.98,.25), vec3(.95,.85,.15), vec3(.97,.5,.15), vec3(.88,.13,.08)); }',
       'vec3 coolwarm(float x) { float xs = clamp(x, 0.0, 1.0)*4.0; float s = floor(min(xs, 3.999)); float t = xs - s; vec3 c0 = vec3(0.2298,0.2987,0.7537), c1 = vec3(0.5543,0.6901,0.9955), c2 = vec3(0.8654), c3 = vec3(0.9567,0.5980,0.4773), c4 = vec3(0.7057,0.0156,0.1502); vec3 a = c0, b = c1;',
       '  if (s > 2.5) { a = c3; b = c4; } else if (s > 1.5) { a = c2; b = c3; } else if (s > 0.5) { a = c1; b = c2; } return mix(a, b, t); }',
-      'vec2 geomCurvature(vec3 p) {',
-      comp ? '  float h = (2.0*H)/max(uTexNG, 8.0); float f0 = implicit0(p);'
-           : '  float h = 2.0*(2.0*H)/max(uTexNG, 8.0); float f0 = sampleF(p);',
-      '  float v[18];',
-      comp ? '  for (int i = 0; i < 18; i++) v[i] = implicit0(p + GEOM_O[i]*h);'
-           : '  for (int i = 0; i < 18; i++) v[i] = sampleF(p + GEOM_O[i]*h);',
-      '  float gx = (v[0]-v[1])/(2.0*h), gy = (v[2]-v[3])/(2.0*h), gz = (v[4]-v[5])/(2.0*h);',
-      '  float i2 = 1.0/(h*h), i4 = 0.25*i2;',
-      '  float xx = (v[0]-2.0*f0+v[1])*i2, yy = (v[2]-2.0*f0+v[3])*i2, zz = (v[4]-2.0*f0+v[5])*i2;',
-      '  float xy = (v[6]-v[7]-v[8]+v[9])*i4, xz = (v[10]-v[11]-v[12]+v[13])*i4, yz = (v[14]-v[15]-v[16]+v[17])*i4;',
-      '  float g2 = max(gx*gx+gy*gy+gz*gz, 1e-6), g = sqrt(g2);',
-      '  float gHg = gx*gx*xx+gy*gy*yy+gz*gz*zz+2.0*(gx*gy*xy+gx*gz*xz+gy*gz*yz);',
-      '  float Hm = (g2*(xx+yy+zz)-gHg)/(2.0*g2*g);',
-      '  float K = (gx*gx*(yy*zz-yz*yz)+gy*gy*(xx*zz-xz*xz)+gz*gz*(xx*yy-xy*xy)+2.0*(gx*gy*(xz*yz-xy*zz)+gy*gz*(xy*xz-yz*xx)+gx*gz*(xy*yz-xz*yy)))/(g2*g2);',
-      /* outward = out of the solid, so convex solid reads positive */
-      comp ? '  float s = 1.0;'
-           : '  float side = (f0 - isoLevel) >= 0.0 ? 1.0 : -1.0; float s = uTopoMode < 0.5 ? side : (uTopoMode < 1.5 ? (uHalfInvert < 0.5 ? -1.0 : 1.0) : -side);',
-      '  return vec2(s*Hm, K);',
-      '}',
+      ''
+    );
+    if (comp) {
+      L.push(
+        'const vec3 GEOM_O[18] = vec3[18](vec3(1,0,0),vec3(-1,0,0),vec3(0,1,0),vec3(0,-1,0),vec3(0,0,1),vec3(0,0,-1),' +
+          'vec3(1,1,0),vec3(1,-1,0),vec3(-1,1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(1,0,-1),vec3(-1,0,1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,1,-1),vec3(0,-1,1),vec3(0,-1,-1));',
+        'vec2 geomCurvature(vec3 p) {',
+        '  float h = (2.0*H)/max(uTexNG, 8.0); float f0 = implicit0(p);',
+        '  float v[18];',
+        '  for (int i = 0; i < 18; i++) v[i] = implicit0(p + GEOM_O[i]*h);',
+        '  float gx = (v[0]-v[1])/(2.0*h), gy = (v[2]-v[3])/(2.0*h), gz = (v[4]-v[5])/(2.0*h);',
+        '  float i2 = 1.0/(h*h), i4 = 0.25*i2;',
+        '  float xx = (v[0]-2.0*f0+v[1])*i2, yy = (v[2]-2.0*f0+v[3])*i2, zz = (v[4]-2.0*f0+v[5])*i2;',
+        '  float xy = (v[6]-v[7]-v[8]+v[9])*i4, xz = (v[10]-v[11]-v[12]+v[13])*i4, yz = (v[14]-v[15]-v[16]+v[17])*i4;',
+        '  float g2 = max(gx*gx+gy*gy+gz*gz, 1e-6), g = sqrt(g2);',
+        '  float gHg = gx*gx*xx+gy*gy*yy+gz*gz*zz+2.0*(gx*gy*xy+gx*gz*xz+gy*gz*yz);',
+        '  float K = (gx*gx*(yy*zz-yz*yz)+gy*gy*(xx*zz-xz*xz)+gz*gz*(xx*yy-xy*xy)+2.0*(gx*gy*(xz*yz-xy*zz)+gy*gz*(xy*xz-yz*xx)+gx*gz*(xy*yz-xz*yy)))/(g2*g2);',
+        '  return vec2((g2*(xx+yy+zz)-gHg)/(2.0*g2*g), K);',
+        '}'
+      );
+    } else {
+      L.push(
+        'uniform highp sampler3D uCurv;',
+        'vec2 geomCurvature(vec3 p) {',
+        '  vec2 c = texture(uCurv, fract(p/(2.0*H) + 0.5)).rg;',
+        /* outward = out of the solid, so convex solid reads positive */
+        '  float side = (sampleF(p) - isoLevel) >= 0.0 ? 1.0 : -1.0;',
+        '  float s = uTopoMode < 0.5 ? side : (uTopoMode < 1.5 ? (uHalfInvert < 0.5 ? -1.0 : 1.0) : -side);',
+        '  return vec2(s*c.x, c.y);',
+        '}'
+      );
+    }
+    L.push(
       'vec3 geomColor(vec3 pos, vec3 n) {',
       '  vec2 c = geomCurvature(pos); float Hm = c.x/uGeomMm, K = c.y/(uGeomMm*uGeomMm);',
       '  if (uGeomKind < 0.5) return coolwarm(0.5 + 0.5*Hm/uGeomRange);',
@@ -153,6 +202,8 @@ function buildLabGeomFS(variant) {
       '  return turbo((abs(Hm) + sqrt(max(Hm*Hm-K, 0.0)))/uGeomRange);',
       '}'
     );
+  } else if (kind === 'shade') {
+    /* no data colour */
   } else if (kind === 'over') {
     L.push(
       'vec3 geomColor(vec3 pos, vec3 n) {',
@@ -230,8 +281,8 @@ function buildLabGeomFS(variant) {
     '  float tMax = 1.6*H;',
     /* neutral cut faces, so they are not read as data */
     '  vec3 col;',
-    '  if (hit) col = f13ShadeData(geomColor(pos, n), pos, n, rd, rot, H*0.3, uNrmStep, tMax);',
-    '  else col = f13Shade(vec3(0.34,0.35,0.38), pos, n, rd, rot, true, H*0.3, uNrmStep, tMax);',
+    kind === 'shade' ? '  col = f13Shade(uBodyColor, pos, n, rd, rot, !hit, H*0.3, uNrmStep, tMax);' :
+      '  if (hit) col = f13ShadeData(geomColor(pos, n), pos, n, rd, rot, H*0.3, uNrmStep, tMax); else col = f13Shade(vec3(0.34,0.35,0.38), pos, n, rd, rot, true, H*0.3, uNrmStep, tMax);',
     '  fragColor = vec4(clamp(mix(bgCol, col, exp(-t*0.010)), 0.0, 1.0), 1.0);',
     '}'
   );
@@ -1000,10 +1051,9 @@ function LabRaymarcher() {
   }
 
   this._setupGL();
-  if (!this._compileShader()) {
-    this.failed = true;
-    return;
-  }
+  /* v0.35.0 — compiled when needed: the small shader on first draw, the main one from a queue */
+  this._pcExt = this.gl.getExtension('KHR_parallel_shader_compile');
+  labMainEnqueue(this);
 
   this._dirty = true;
   this._running = false;
@@ -1105,10 +1155,11 @@ LabRaymarcher.prototype._mkShader = function(type, src) {
 };
 
 /* v0.24.0 — non-blocking compile.  With KHR_parallel_shader_compile the
-   driver compiles and links in the background; _render polls
-   COMPLETION_STATUS_KHR and only then reads the status and uniform
-   locations (reading them earlier would block the page until it is done).
-   Without the extension it finishes at once, as before. */
+   driver compiles and links in the background; polling COMPLETION_STATUS_KHR
+   and only then reading the status and uniform locations (reading them
+   earlier would block the page until it is done).  Without the extension it
+   finishes at once, as before.
+   v0.35.0 — the main shader comes from labMainPump, one tile at a time. */
 LabRaymarcher.prototype._compileShader = function() {
   var gl = this.gl;
   var vs = gl.createShader(gl.VERTEX_SHADER);   gl.shaderSource(vs, LAB_RM_VS);                  gl.compileShader(vs);
@@ -1118,21 +1169,20 @@ LabRaymarcher.prototype._compileShader = function() {
   gl.attachShader(prg, fs);
   gl.linkProgram(prg);
   this._pending = { prg: prg, vs: vs, fs: fs };
-  this._pcExt = gl.getExtension('KHR_parallel_shader_compile');
-  if (!this._pcExt) return this._finishProgram();
-  return true;
 };
-/* true once the program is linked (polls without blocking when it can) */
-LabRaymarcher.prototype._programReady = function() {
-  if (this._prog) return true;
-  if (!this._pending || this.failed) return false;
+/* true once the main shader is linked (polls without blocking when it can) */
+LabRaymarcher.prototype._mainReady = function() {
+  if (this._baseProg) return true;
+  if (!this._pending) return false;
   if (this._pcExt && !this.gl.getProgramParameter(this._pending.prg, this._pcExt.COMPLETION_STATUS_KHR)) return false;
-  if (!this._finishProgram()) { this.failed = true; return false; }
+  if (!this._finishProgram()) { this._mainFailed = true; return false; }
   return true;
 };
+/* true if this tile has something it can draw now */
+LabRaymarcher.prototype._programReady = function() { return !!this._viewSet(); };
 LabRaymarcher.prototype._finishProgram = function() {
   var gl = this.gl, P = this._pending;
-  if (!P) return !!this._prog;
+  if (!P) return !!this._baseProg;
   this._pending = null;
   var prg = P.prg;
   if (!gl.getProgramParameter(prg, gl.LINK_STATUS)) {
@@ -1144,16 +1194,8 @@ LabRaymarcher.prototype._finishProgram = function() {
   }
   gl.deleteShader(P.vs);
   gl.deleteShader(P.fs);
-  this._prog = prg;
-  gl.useProgram(prg);
-  /* Bind quad attribute */
-  gl.bindBuffer(gl.ARRAY_BUFFER, this._quadBuf);
-  var loc = gl.getAttribLocation(prg, 'p');
-  gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  /* Cache uniform locations */
-  this._uloc = labRmLocations(gl, prg);
-  this._baseProg = prg; this._baseLoc = this._uloc;
+  this._baseProg = prg;
+  this._baseLoc = labRmLocations(gl, prg);
   return true;
 };
 
@@ -1183,20 +1225,34 @@ var LAB_RM_UNIFORMS = ['res','rot','zoom','uPan','thickness','isoLevel','uTopoMo
    /* v0.31.0 — wall shear map */
    'uShearOn','uShearMode','uShearA','uShearB','uShear',
    /* v0.35.0 — Geometry data views */
-   'uGeomView','uGeomKind','uGeomRange','uGeomLimit','uGeomMm','uGeomBuild'];
+   'uGeomView','uGeomKind','uGeomRange','uGeomLimit','uGeomMm','uGeomBuild','uCurv'];
 function labRmLocations(gl, prg) {
   var L = {};
   LAB_RM_UNIFORMS.forEach(function(name){ L[name] = gl.getUniformLocation(prg, name); });
   return L;
 }
 
-/* v0.35.0 — the program for the current Geometry view: its own once compiled (without blocking
-   the page, as _compileShader), the plain shader until then. */
-LabRaymarcher.prototype._geomVariant = function() {
-  var S = this._u;
-  if (!S.geomView) return '';
-  var plain = S.topoMode < 2.5 && !(S.topoMode < 0.5 && S.normMode > 0.5 && S.normMode < 1.5);
-  return (S.geomView === 1 ? 'curv' : (S.geomView === 2 ? 'over' : 'chord')) + (plain ? '' : 'c');
+/* v0.35.0 — which program draws this frame.  Geometry uses the small shader (the Atlas too, unless it
+   tiles the cell); everything else the main one.  Until a view's own program is ready the tile stays
+   Shaded and the status chip says so (52-status).  Null = nothing to draw yet. */
+LabRaymarcher.prototype._viewSet = function() {
+  var S = this._u, plain = S.topoMode < 2.5 && !(S.topoMode < 0.5 && S.normMode > 0.5 && S.normMode < 1.5);
+  var c = plain ? '' : 'c', shade = 'shade' + c, V = null, want = '';
+  if (this._viewMode === 'geom' && !(S.tile > 1)) want = (S.geomView === 1 ? 'curv' : (S.geomView === 2 ? 'over' : (S.geomView > 2 ? 'chord' : 'shade'))) + c;
+  this._viewWaiting = false;
+  if (want) { V = this._geomSet(want); if (V) return V; }
+  var smallFailed = want && this._geomSets[want].failed;
+  if (!want || smallFailed) {
+    if (this._mainReady()) return this._mainSet || (this._mainSet = { prg: this._baseProg, loc: this._baseLoc, drawn: true });
+    if (!this._mainFailed) this._mainWanted = true;
+  }
+  if (want === shade && !smallFailed) return null;
+  V = this._geomSet(shade);
+  if (V || !smallFailed) {
+    this._viewWaiting = !this._mainFailed;
+    if (typeof labViewBusyPoke === 'function') labViewBusyPoke();
+  }
+  return V;
 };
 LabRaymarcher.prototype._geomSet = function(variant) {
   var gl = this.gl, sets = this._geomSets || (this._geomSets = {}), V = sets[variant];
@@ -1205,13 +1261,13 @@ LabRaymarcher.prototype._geomSet = function(variant) {
     var fs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs, buildLabGeomFS(variant));             gl.compileShader(fs);
     var prg = gl.createProgram();
     gl.attachShader(prg, vs); gl.attachShader(prg, fs); gl.linkProgram(prg);
-    V = sets[variant] = { prg: prg, vs: vs, fs: fs, ready: false, failed: false };
+    V = sets[variant] = { prg: prg, vs: vs, fs: fs, variant: variant, ready: false, failed: false, drawn: false };
   }
   if (V.failed) return null;
   if (!V.ready) {
     if (this._pcExt && !gl.getProgramParameter(V.prg, this._pcExt.COMPLETION_STATUS_KHR)) return null;
     if (!gl.getProgramParameter(V.prg, gl.LINK_STATUS)) {
-      console.error('[LabRaymarcher] Geometry view ' + variant + ' failed:\n' + gl.getShaderInfoLog(V.fs));
+      console.error('[LabRaymarcher] small shader ' + variant + ' failed:\n' + gl.getShaderInfoLog(V.fs));
       V.failed = true;
     } else { V.ready = true; V.loc = labRmLocations(gl, V.prg); }
     gl.deleteShader(V.vs); gl.deleteShader(V.fs);
@@ -1220,18 +1276,62 @@ LabRaymarcher.prototype._geomSet = function(variant) {
   return V;
 };
 LabRaymarcher.prototype._useViewProgram = function() {
-  var gl = this.gl, variant = this._geomVariant(), V = variant ? this._geomSet(variant) : null;
-  this._geomWaiting = !!variant && !V && !(this._geomSets[variant] && this._geomSets[variant].failed);
-  var prg = V ? V.prg : this._baseProg;
-  if (this._prog === prg) return;
-  this._prog = prg;
-  this._uloc = V ? V.loc : this._baseLoc;
-  gl.useProgram(prg);
-  gl.bindBuffer(gl.ARRAY_BUFFER, this._quadBuf);
-  var loc = gl.getAttribLocation(prg, 'p');
-  gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  var gl = this.gl, V = this._viewSet();
+  if (!V) return null;
+  if (this._prog !== V.prg) {
+    this._prog = V.prg;
+    this._uloc = V.loc;
+    gl.useProgram(V.prg);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._quadBuf);
+    var loc = gl.getAttribLocation(V.prg, 'p');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  }
+  return V;
 };
+/* The baked curvature for the current field, on TEXTURE7; built the first time it is shown. */
+LabRaymarcher.prototype._bindCurvature = function() {
+  var gl = this.gl;
+  gl.activeTexture(gl.TEXTURE7);
+  if (this._curvN !== this._geomN) {
+    if (!this._curvTex) this._curvTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_3D, this._curvTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RG16F, this._geomN, this._geomN, this._geomN, 0, gl.RG, gl.FLOAT, labBakeCurvature(this._geomData, this._geomN));
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+    this._curvN = this._geomN;
+  } else gl.bindTexture(gl.TEXTURE_3D, this._curvTex);
+};
+
+/* v0.35.0 — the main shader, one tile at a time, in the background: after the first (12–40 s cold)
+   the others reuse the browser's compiled copy (about 1.6 s each).  It starts when the first view
+   is up, or at once if a tab needs it. */
+var LAB_MAIN_QUEUE = [], LAB_MAIN_CUR = null, LAB_MAIN_TIMER = null, LAB_MAIN_T0 = 0;
+function labMainEnqueue(rm) {
+  if (!LAB_MAIN_T0) LAB_MAIN_T0 = Date.now();
+  LAB_MAIN_QUEUE.push(rm);
+  if (!LAB_MAIN_TIMER) LAB_MAIN_TIMER = setTimeout(labMainPump, 200);
+}
+function labMainPump() {
+  LAB_MAIN_TIMER = null;
+  if (LAB_MAIN_CUR && (LAB_MAIN_CUR._destroyed || LAB_MAIN_CUR.failed || LAB_MAIN_CUR._mainReady() || LAB_MAIN_CUR._mainFailed)) LAB_MAIN_CUR = null;
+  if (!LAB_MAIN_CUR) {
+    LAB_MAIN_QUEUE = LAB_MAIN_QUEUE.filter(function(r) { return !r._destroyed && !r.failed; });
+    var next = null;
+    for (var i = 0; i < LAB_MAIN_QUEUE.length && !next; i++) if (LAB_MAIN_QUEUE[i]._mainWanted) next = LAB_MAIN_QUEUE[i];
+    if (!next && LAB_MAIN_QUEUE.length && (labViewersPending() === 0 || Date.now() - LAB_MAIN_T0 > 8000)) next = LAB_MAIN_QUEUE[0];
+    if (next) {
+      LAB_MAIN_QUEUE.splice(LAB_MAIN_QUEUE.indexOf(next), 1);
+      LAB_MAIN_CUR = next;
+      next._compileShader();
+    }
+  }
+  if (LAB_MAIN_CUR || LAB_MAIN_QUEUE.length) LAB_MAIN_TIMER = setTimeout(labMainPump, 200);
+}
 
 
 /* ─── Topology uniform translation ─────────────────────────── */
@@ -1421,6 +1521,7 @@ LabRaymarcher.prototype._uploadGeomField = function(fr, N) {
     }
   }
   this._u.lipschitz = Math.max(maxG * 1.1, 0.05);
+  this._geomData = fr.data; this._geomN = N; this._curvN = 0;   /* v0.35.0 — labBakeCurvature */
   this._u.fieldMin  = fr.fieldMin;
   this._u.fieldMax  = fr.fieldMax;
   this._u.nrmStep   = step * 0.5;
@@ -2298,9 +2399,11 @@ LabRaymarcher.prototype._render = function(t) {
   gl.viewport(0, 0, w, h);
 
   /* Draw */
-  this._useViewProgram();   /* v0.35.0 */
+  var viewSet = this._useViewProgram();   /* v0.35.0 */
+  if (!viewSet) return;
   gl.useProgram(this._prog);
   var u = this._uloc, S = this._u;
+  if (viewSet.variant === 'curv') { this._bindCurvature(); gl.uniform1i(u.uCurv, 7); }
   gl.uniform2f(u.res, w, h);
   gl.uniformMatrix3fv(u.rot, false, rot);
   gl.uniform1f(u.zoom,        S.zoom);
@@ -2441,7 +2544,13 @@ LabRaymarcher.prototype._render = function(t) {
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.ALWAYS); gl.depthMask(true);
     gl.clearDepth(1.0); gl.clear(gl.DEPTH_BUFFER_BIT);
   } else gl.disable(gl.DEPTH_TEST);
+  /* v0.35.0 — on Direct3D a shader can link and fail here; a small shader that does gives way to the main one */
+  if (!viewSet.drawn) gl.getError();
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  if (!viewSet.drawn) {
+    viewSet.drawn = true;
+    if (gl.getError() === gl.INVALID_OPERATION) { viewSet.failed = true; console.error('[LabRaymarcher] small shader ' + viewSet.variant + ' failed at first draw'); }
+  }
   if (streaks) this._drawFlowStreaks(rot, S, w, h, dpr, dt);
 };
 
@@ -2477,7 +2586,8 @@ LabRaymarcher.prototype.destroy = function() {
   if (this._prog)      gl.deleteProgram(this._prog);
   if (this._baseProg && this._baseProg !== this._prog) gl.deleteProgram(this._baseProg);   /* v0.35.0 */
   for (var gv in (this._geomSets || {})) { if (this._geomSets[gv].prg !== this._prog) gl.deleteProgram(this._geomSets[gv].prg); }
-  this._geomSets = null; this._baseProg = null;
+  if (this._curvTex) gl.deleteTexture(this._curvTex);
+  this._geomSets = null; this._baseProg = null; this._mainSet = null; this._curvTex = null; this._geomData = null;
   if (this._pending)   { gl.deleteProgram(this._pending.prg); gl.deleteShader(this._pending.vs); gl.deleteShader(this._pending.fs); this._pending = null; }   /* v0.24.0 */
   if (this._quadBuf)   gl.deleteBuffer(this._quadBuf);
   /* Force-lose context to free GPU memory immediately */

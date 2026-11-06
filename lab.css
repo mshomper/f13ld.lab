@@ -1234,6 +1234,13 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
   transition:opacity 0.45s ease;
 }
 .lab-splash.out { opacity:0; pointer-events:none }
+/* v0.35.0 — keeps moving after the wordmark has resolved, on the compositor (transform and opacity
+   only), so it runs even if the page is busy; fades in late so a quick start never shows it */
+.lsp-pulse { width:120px; height:2px; overflow:hidden; border-radius:1px; background:var(--hair2); opacity:0; animation:lspPulseIn 0.4s ease 1.9s forwards }
+.lsp-pulse i { display:block; width:40%; height:100%; background:var(--neon); animation:lspPulse 1.4s ease-in-out infinite; will-change:transform }
+@keyframes lspPulseIn { to { opacity:1 } }
+@keyframes lspPulse { 0% { transform:translateX(-100%) } 100% { transform:translateX(250%) } }
+@media (prefers-reduced-motion: reduce) { .lsp-pulse i { animation:none; width:100% } }
 .lsp-wm { font:700 58px 'Exo 2', sans-serif; letter-spacing:0.1em; display:flex; line-height:1 }
 .lsp-wm span { display:inline-block; min-width:0.62em; text-align:center }
 .lsp-wm .g { color:var(--green) }
