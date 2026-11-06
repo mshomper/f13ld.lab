@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%23a2aab7' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%238ea8ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%238ea8ff'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%238ea8ff'/%3E%3C/svg%3E">
+<title>Crux · Decisions</title>
+<style>
+:root{--bg:#0b0d11;--panel:#10141a;--lane:#12161c;--surface:#191e26;--surface2:#1e242d;--raised:#1b2029;--line:rgba(255,255,255,.075);--line2:rgba(255,255,255,.12);--text:#e7eaf0;--muted:#a2aab7;--faint:#6c7584;--accent:#8ea8ff;--accent-ink:#0d1530;--accent-bg:rgba(142,168,255,.14);--good:#5fd3ae;--good-bg:rgba(95,211,174,.13);--warn:#f3b955;--warn-bg:rgba(243,185,85,.13);--bad:#f2727a;--bad-bg:rgba(242,114,122,.13);--chosen:#5fd3ae;--hist:#8792ad;--radius:10px;--font:"Segoe UI Variable Text","Segoe UI",Inter,system-ui,-apple-system,sans-serif;--mono:"Cascadia Mono",Consolas,ui-monospace,monospace;--good-fill:#5fd3ae;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--font);overflow-wrap:anywhere;-webkit-font-smoothing:antialiased}
+main{max-width:1240px;margin:0 auto;padding:18px 18px 48px}
+h1{font-size:21px;font-weight:600;margin:4px 0 8px;line-height:1.3}
+h2{font-size:14px;font-weight:600;margin:26px 0 10px;color:var(--text);letter-spacing:.1px}
+h3{font-size:14.5px;font-weight:600;margin:0}
+p{margin:0 0 10px}
+a{color:var(--accent)}
+.muted{color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:1px 8px;border-radius:999px;background:transparent;color:var(--muted);border:1px solid var(--line2);white-space:nowrap}
+.chip.open{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.chip.decided{background:var(--good-bg);color:var(--good);border-color:transparent}
+.chip.found{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.chip.superseded,.chip.rejected{text-decoration:line-through}
+.icon{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-width:0}
+.btn{font:inherit;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:7px;border:1px solid var(--line2);background:transparent;color:var(--text);cursor:pointer}
+.btn:hover{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.18)}
+.btn.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink);font-weight:600}
+input,textarea{font:inherit;width:100%;max-width:100%;padding:8px 11px;border-radius:7px;border:1px solid var(--line2);background:var(--panel);color:var(--text)}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+svg{max-width:100%}
+
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px;color:var(--text);font-weight:600;font-size:16px}
+.brand .mark{width:24px;height:24px}
+.brand .repo{color:var(--muted);font-weight:400}
+.search{position:relative;flex:0 1 280px;min-width:180px}
+.search .icon{position:absolute;left:10px;top:9px;color:var(--faint)}
+.search input{padding-left:32px}
+.sub{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding:9px 0 4px;font-size:12.5px;color:var(--muted)}
+.sub .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px}
+.glance{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;margin-top:10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-width:0}
+.ptitle{font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:10px;display:flex;gap:7px;align-items:center}
+.bar{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--lane);gap:2px}
+.bar span{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:12.5px;color:var(--muted)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px}
+.tile{display:grid;place-items:center;aspect-ratio:1.35;border-radius:8px;background:var(--surface);border:1px solid var(--line);text-decoration:none;color:var(--text);font-family:var(--mono);font-size:12.5px;position:relative;border-top:3px solid var(--c)}
+.tile:hover{background:var(--surface2)}
+.tile small{position:absolute;bottom:4px;left:0;right:0;text-align:center;font-family:var(--font);font-size:10.5px;color:var(--faint);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:0 4px}
+.areas{display:grid;gap:8px}
+.area{display:grid;grid-template-columns:110px 1fr auto;gap:10px;align-items:center;font-size:13px}
+.area .pips{display:flex;flex-wrap:wrap;gap:3px}
+.area .pips a{width:16px;height:16px;border-radius:4px;background:var(--c);opacity:.85;display:block}
+.area .pips a:hover{opacity:1;outline:1px solid var(--text)}
+.area .n{color:var(--faint);font-size:12px}
+.lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px;align-items:start}
+.lane{background:var(--lane);border:1px solid var(--line);border-radius:var(--radius);padding:10px;border-top:3px solid var(--c);min-width:0}
+.lhead{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13.5px;padding:2px 2px 10px}
+.lhead .icon{color:var(--c)}
+.lhead .count{color:var(--faint);font-weight:400}
+.lhint{font-size:12px;color:var(--faint);padding:0 2px 8px;margin-top:-6px}
+.cards{display:grid;gap:8px}
+.dcard{display:grid;gap:5px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 11px;text-decoration:none;color:var(--text)}
+.dcard:hover{background:var(--surface2);border-color:var(--line2)}
+.dcard .t{font-weight:500;font-size:13.5px;line-height:1.35}
+.dcard .num{font-family:var(--mono);color:var(--faint);font-size:11.5px}
+.dcard .line{font-size:12.5px;color:var(--muted);line-height:1.4}
+.dcard .line.warn{color:var(--warn)}
+.dcard .line.ok{color:var(--good)}
+.dcard .chips{display:flex;flex-wrap:wrap;gap:4px}
+.dcard .chip{font-size:11px;padding:0 7px}
+.map svg{width:100%;height:auto;display:block}
+.map a text{fill:var(--text)}
+.map a:hover rect{stroke:var(--text)}
+.empty{padding:30px;text-align:center;color:var(--faint)}
+
+.more{all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:center;gap:6px;width:100%;margin-top:8px;padding:7px 10px;border-radius:8px;font-size:12.5px;color:var(--muted);border:1px dashed var(--line2)}
+.more:hover{color:var(--text);border-color:var(--muted)}
+.more .chev{transform:rotate(90deg)}
+.more.less .chev{transform:rotate(-90deg)}
+.dcard .line{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+</style>
+</head>
+<body>
+<main>
+<div class="top">
+  <div class="brand"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg>Crux <span class="repo" id="repo"></span></div>
+  <label class="search"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="q" type="search" placeholder="Search decisions" aria-label="Search decisions"></label>
+</div>
+<div class="sub" id="sub"></div>
+<div id="out"></div>
+</main>
+<script id="data" type="application/json">[{"id":1,"slug":"next-up-after-v0-34","title":"What should the next Lab session build after v0.34.0?","date":"2026-11-02","mode":"quick","deep":true,"lenses":["research","solver","architecture"],"status":"decided","context":"v0.32.0–v0.34.0 (flow in the sweep, Atlas modes, Atlas entry points) merged to main on 2026-10-15. NEXT_STEPS.md names the F13LD.sweep flow port next, then HX-1 inertial pressure drop; scope §17 lists them the other way round. Two older items are still open in the code: buckling and crush voxel prep on the main thread (the 2026-10-08 goal), and a handful of small follow-ups. Nothing has moved in Lab or Sweep since 2026-10-15.","depends_on":[],"conflicts":[],"log_refs":[{"file":"docs/NEXT_STEPS.md","entry":"PICK UP HERE (2026-10-15): (2) Sweep flow port, (3) HX-1"},{"file":"docs/FLUIDS_LBM_SCOPE.md","entry":"§11.7 Reynolds list waits for the user's answer; §17 Next: HX-1, then Sweep port"},{"file":"docs/NEXT_STEPS.md","entry":"§1 (2026-10-08): Buckling and Crush prep onto background workers"}],"options":[{"key":"A","name":"F13LD.sweep flow port","summary":"Copy 14e, 19g and 19h into Sweep's solver/lab/, flow at 32³ in Fast and 64³ otherwise, append flow columns after the existing ones so F13LD.ingest's validator keeps passing. Vault columns in a later pass.","pros":["It is the order Matt set on 2026-10-15 and has been queued since 2026-10-14.","Puts permeability and wall shear into the database that Vault and surrogate work read from, at sweep scale.","14e, 19g and 19h are close to clean copies: 19g needs only WGPU.device (already in Sweep) and 19h's summary code has no UI ties.","Porting the Stokes-only solver now gives Sweep a fixed copy before HX-1 changes 19g."],"cons":["17c's flow job does not copy cleanly: it pulls in the whole worker pool and kernels 13–14 that Sweep lacks. Use the existing no-worker path (buildFlowLinks) or copy 17c and its imports.","Work happens in another repo that is not checked out here; Lab itself gains nothing user-visible.","Once HX-1 lands, 19g changes and Sweep's copy must be re-synced."],"effort":"About 1–2 sessions, mostly in the Sweep repo.","source":"claude","assumptions":["Sweep's single-thread link build is fast enough at 32³ and 64³ (it runs once per design, before a solve of under a second).","F13LD.ingest's validator accepts columns appended after the existing ones."],"risks":["The 17c dependency grows into copying 13, 13b, 13c, 13d and 14 too, widening the byte-copy contract between the repos.","Flow at 32³ in Fast may fall below the grid rule (scope §3.8) on thin-pore designs; the coarse flag must travel with the port."],"estimates":[{"what":"Effort","value":"1–2 sessions","basis":"14e, 19g, 19h copy with small guards; Lab's 62-sweep.js:537-554 is a ready template for the caller"},{"what":"Flow time per design in Sweep","value":"about 0.1–0.4 s solve at 64³ on an RTX, plus link build","basis":"scope §12–13: 64³ about 0.09 s per direction bench, 0.35–0.41 s per design measured by Matt"}]},{"key":"B","name":"HX-1 inertial pressure drop","summary":"Per-axis flow at a list of Reynolds numbers with a mean-velocity force controller, Darcy–Forchheimer fit, Fanning friction factor, unsteady flag, heat-exchanger fluid presets and a long-format CSV (scope §11.2).","pros":["The kernel is already fully nonlinear (quadratic equilibrium, Guo forcing); only the driver, cache key and outputs are new.","A ready pass/fail check now exists: Tupin and Ohta refit Castro's measurements with Forchheimer (k and β for gyroid, P and D), which would close the F12 P-gap question.","Serves the heat-exchanger database user directly and is the gate for HX-2 convective heat transfer.","The Reynolds-list blocker is softer than it looks: Castro's experiments span Re 29–145, inside the scope's default 1–200."],"cons":["Largest of the options: controller, warm start, per-Re cache and results, presets, cards, sweep and long CSV.","Breaks the linear-flow assumptions the cards rely on (fields stored per unit force, wall shear rescaled linearly, cache without fluid), so the Stokes path must be kept separate and unchanged.","64³ is marginal: published TRT runs at Re up to about 200 used about 38 cells per sphere diameter; higher points need 128³ and averaging if unsteady."],"effort":"About 3–4 sessions.","source":"claude","assumptions":["Matt accepts the scope defaults (1, 10, 50, 100, 200) without the user's operating range, editable later.","The Stokes path stays byte-identical, so cards, sweep and the Sweep port are unaffected."],"risks":["Compressibility error at higher Re (Mach) and τ near ½ make the top Re points noisy at 64³; results need a resolution flag.","Unsteady onset (Re about 110–250 in periodic packs) forces long time-averaged runs at 128³, tens of seconds per point."],"estimates":[{"what":"Effort","value":"3–4 sessions","basis":"earlier fluids phases took about one session each; no kernel rewrite, but four layers (driver, results, UI and CSV, validation)"},{"what":"Run time per design","value":"about 5 Re × 3 axes = 15 solves; seconds at 64³, 10–60 s per unsteady point at 128³","basis":"64³ bench 0.09 s per direction from rest; 128³ 2.9 s per 5,000 steps; unsteady averaging about 10⁵ steps (extrapolated)"}]},{"key":"C","name":"Buckling and crush prep off the main thread","summary":"The 2026-10-08 goal: crush upload async on the 17c pool (0/1 cube), buckling voxelized once and sent to the axis workers, predict probe timed and moved if slow. Bit-identical checks in validate-prep.js.","pros":["Smallest self-contained piece, entirely in Lab; the pattern and pieces already exist (labPrepElasticParallel, _TV_PREP_CACHE, 16b's fallback).","Removes the last page freeze; buckling stops voxelizing once per axis worker.","Easy to verify: bit-identical grids, buckling factors unchanged."],"cons":["Both features are off by default, so few runs hit the freeze today.","Moves no research question forward and does not touch the fluids track Matt has been driving."],"effort":"About 1 session.","source":"claude","assumptions":["Prep, not the solve, is the bulk of the freeze (to profile first, as §1 asks)."],"risks":["16g's upload has five call sites; making it async can reorder state in the crush run loop."],"estimates":[{"what":"Effort","value":"about 1 session","basis":"same pattern v0.24.0 used for elastic, with the checks already written"}]},{"key":"D","name":"Small follow-ups pass","summary":"Validators runnable from the repo root, the phone-width header overflow, and Lab → Vault push matching on vault_id (Phase 4 of the round-trip scope).","pros":["Clears known debt; every validator running from the root makes later sessions' checks cheaper.","Each item is low risk and independently reversible."],"cons":["The Vault push is not small: no push code exists yet, so it is really its own phase.","Little user-visible value apart from the phone header."],"effort":"Under 1 session without the Vault push; 1–2 with it.","source":"claude","assumptions":["The Vault push is scoped out or done as a separate phase."],"risks":["Scope creep into the round trip, which needs Ingest and Vault changes too."],"estimates":[{"what":"Effort","value":"half a session for validators and header","basis":"two require-path fixes and one CSS breakpoint"}]},{"key":"E","name":"Viewer modes on the Geometry tab","summary":"Look into a curvature view, and other views to swap to on the main page beyond the shaded one.","pros":[],"cons":[],"source":"human"}],"criteria":[{"name":"Value of the result","scores":{"A":3,"B":3,"C":2,"D":1},"note":"A fills the comparison database; B answers the Castro gap and serves the HX user"},{"name":"Time to first result","scores":{"A":3,"B":1,"C":3,"D":3}},{"name":"Risk to existing results","scores":{"A":3,"B":2,"C":2,"D":3},"note":"B must keep the Stokes path identical; C touches five crush call sites"},{"name":"Readiness (nothing blocking)","scores":{"A":2,"B":2,"C":3,"D":3},"note":"A: 17c copy question and a repo not checked out here; B: Reynolds list waits on the user"},{"name":"Fits Matt's stated order","scores":{"A":3,"B":2,"C":1,"D":1}}],"evidence":[{"claim":"Sweep's solver/lab/ has no flow files (14e, 17c, 19g, 19h absent) and no commits since 2026-10-14, so the port has not started.","options":["A"],"source":"GitHub API, mshomper/f13ld.sweep contents and commits","url":"https://github.com/mshomper/f13ld.sweep"},{"claim":"17c's flow job depends on the whole worker pool and kernels Sweep lacks; 14e, 19g and 19h copy with small guards, and a no-worker path already exists.","options":["A"],"judgment":true},{"claim":"Lab's flow kernel is D3Q19 TRT with Guo forcing and a full quadratic equilibrium; it runs in the Stokes limit only because the force is tiny (g = 1e-5·(64/N)²).","options":["B"],"judgment":true},{"claim":"Castro's measurements span Re 29–145; a Forchheimer refit gives k and β for D (8.68e-8 m², 5390 /m), gyroid (2.40e-7 m², 3044 /m) and P (1.31e-7 m², 4035 /m), and Darcy underestimated k by 36–85 %.","options":["B"],"source":"Tupin & Ohta, comment on Castro et al. 2019 (Materials)","url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC7321472"},{"claim":"TRT with CLI walls on a periodic sphere pack: departs from Darcy at Re_p about 20, unsteady at about 180, and used about 38 cells per diameter with Λ = 3/16 up to Re_p about 200.","options":["B"],"source":"Fattahi et al., Pore-scale lattice Boltzmann simulation of laminar and turbulent flow through a sphere pack (arXiv 1508.02960)","url":"https://arxiv.org/abs/1508.02960"},{"claim":"TPMS lattices leave the Darcy regime early: Re about 4 for Primitive, about 20 for Diamond.","options":["B"],"source":"Rathore et al., Flow Characterization in TPMS based Porous Geometries: Part 1 (arXiv 2205.03591)","url":"https://arxiv.org/abs/2205.03591"},{"claim":"Buckling and crush prep are still synchronous (16g upload, per-worker voxelization in 16h and 16c); labPrepElasticParallel and _TV_PREP_CACHE exist to reuse.","options":["C"],"judgment":true}],"recommended":"A","recommendation":"Port first, as Matt ordered: it is one to two sessions, it lands flow in the comparison database before HX-1 changes 19g, and its one snag (17c) has a ready workaround. Then HX-1, which now has a real validation target in the Tupin and Ohta refit of Castro.","confidence":"lean","change_mind":"If the heat-exchanger user is waiting, or Matt wants the Castro P-gap closed before more data goes to Vault, B goes first: the kernel is ready and the Tupin and Ohta β values make it testable now.","chosen":"E","reason":"neither, I actually want to look into a curvature visualization toggle for the lab. Which made me think of other visualization toggles we could swap into for the main page of the lab rather than just the \"shader\" view","decided_on":"2026-11-06","superseded_by":null,"challenge":null,"settles":[],"_file":"0001-next-up-after-v0-34.html"},{"id":2,"slug":"geometry-view-picker-scope","title":"Which views should the Geometry tab's picker offer first?","date":"2026-11-06","mode":"quick","lenses":["ui","solver"],"status":"decided","context":"The Geometry tab only shows the shaded view. A scratch test showed curvature can be read from the viewer's stored field to 1–2 % at 48³ with a two-voxel sampling step, so geometry readouts need no solver or re-bake.","depends_on":[1],"conflicts":[],"options":[{"key":"A","name":"Four-view picker","summary":"Shaded plus Curvature, Overhang, Wall thickness and Pore size, sharing one colour bar and control row. About 1–2 sessions.","pros":["All four concern printability and pore geometry and are built the same way."],"cons":["Thickness and pore size add a shader loop, which needs a compile check on Windows."],"source":"claude"},{"key":"B","name":"Curvature only","summary":"The smallest version, under a session.","pros":["Quickest answer to a curvature question."],"cons":["The picker work gets revisited as soon as a second view arrives."],"source":"claude"},{"key":"C","name":"All seven views","summary":"Also Surface direction, X-ray and Networks. About 3–4 sessions.","pros":["Most complete."],"cons":["X-ray and Networks each need their own mechanism."],"source":"claude"}],"recommended":"A","recommendation":"All four share one purpose and one mechanism.","confidence":"lean","chosen":"A","reason":"","decided_on":"2026-11-06","superseded_by":null,"challenge":null,"settles":[{"key":"curvature sign","value":"positive = convex solid, outward normal out of the solid"}],"_file":"0002-geometry-view-picker-scope.html"}]</script>
+<script>
+const ALL = JSON.parse(document.getElementById('data').textContent);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pad = n => String(n).padStart(4,'0');
+const ic = d => `<svg class="icon" viewBox="0 0 24 24">${d}</svg>`;
+const I = {
+  flag: ic('<path d="M6 21V4M6 4h11l-2 4 2 4H6"/>'),
+  alert: ic('<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/>'),
+  eye: ic('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>'),
+  split: ic('<path d="M12 21v-7M12 14L6 6M12 14l6-8M6 6V3M18 6V3"/>'),
+  check: ic('<circle cx="12" cy="12" r="8.5"/><path d="M8.3 12.2l2.6 2.6 4.9-5.2"/>'),
+  archive: ic('<rect x="3.5" y="4.5" width="17" height="4" rx="1"/><path d="M5 8.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8.5M10 12.5h4"/>'),
+  grid: ic('<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>'),
+  layers: ic('<path d="M12 4l8.5 4.5L12 13 3.5 8.5z"/><path d="M3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5"/>'),
+  tree: ic('<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="12" r="2.2"/><path d="M8.2 6.6C13 8 13 11 15.8 11.6M8.2 17.4C13 16 13 13 15.8 12.4"/>'),
+  clock: ic('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  bars: ic('<path d="M4 20h16M7 20v-7M12 20V6M17 20v-10"/>')
+};
+// One state per decision drives every colour on the page.
+const STATES = [
+  { k:'openitem', name:'Open item', hint:'Flagged for review in the repo’s own log', c:'var(--bad)', icon:I.flag, test:d => d.open_item && (d.status==='found'||d.status==='open') },
+  { k:'strained', name:'Strained', hint:'Deliberate, but now causing cost or risk', c:'var(--warn)', icon:I.alert, test:d => d.holding_up==='strained' && d.status!=='superseded' && d.status!=='rejected' },
+  { k:'open', name:'Needs your call', hint:'Open decisions waiting for a pick', c:'var(--accent)', icon:I.split, test:d => d.status==='open' || (d.status==='parked' && due(d)) },
+  { k:'review', name:'Needs review', hint:'Found in the code, waiting to be confirmed', c:'#b49cff', icon:I.eye, test:d => d.status==='found' },
+  { k:'parked', name:'Parked', hint:'Set aside until a date or a trigger', c:'#7f8aa3', icon:I.clock, test:d => d.status==='parked' },
+  { k:'decided', name:'Decided', hint:'Confirmed or picked', c:'var(--good)', icon:I.check, test:d => d.status==='decided' },
+  { k:'history', name:'History', hint:'Superseded or rejected', c:'var(--hist)', icon:I.archive, test:d => d.status==='superseded' || d.status==='rejected' }
+];
+const today = new Date().toISOString().slice(0,10);
+function due(d){ return !!(d.revisit && d.revisit.date && d.revisit.date <= today); }
+const stateOf = d => STATES.find(s => s.test(d)) || STATES[3];
+ALL.forEach(d => d._s = stateOf(d));
+const repoName = (location.pathname.split('/').slice(-3,-2)[0] || '');
+document.getElementById('repo').textContent = repoName ? '· ' + decodeURIComponent(repoName) : '';
+
+function sub(){
+  const counts = STATES.map(s => [s, ALL.filter(d => d._s===s).length]).filter(([,n]) => n);
+  document.getElementById('sub').innerHTML = `<span>${ALL.length} decision${ALL.length===1?'':'s'}</span>` + counts.map(([s,n]) => `<span><span class="dot" style="background:${s.c}"></span>${n} ${s.name.toLowerCase()}</span>`).join('');
+}
+
+function glance(list){
+  const total = list.length || 1;
+  const counts = STATES.map(s => [s, list.filter(d => d._s===s).length]).filter(([,n]) => n);
+  const bar = `<div class="bar">${counts.map(([s,n]) => `<span style="width:${n/total*100}%;background:${s.c}" title="${n} ${esc(s.name)}"></span>`).join('')}</div>
+    <div class="legend">${counts.map(([s,n]) => `<span><i style="background:${s.c}"></i>${n} ${esc(s.name.toLowerCase())}</span>`).join('')}</div>`;
+  const tiles = `<div class="tiles">${[...list].sort((a,b)=>a.id-b.id).map(d => `<a class="tile" style="--c:${d._s.c}" href="${esc(d._file)}" title="${pad(d.id)} ${esc(d.title)} · ${esc(d._s.name)}">${pad(d.id).replace(/^0+(?=\d{2})/,'')}<small>${esc(shortTitle(d))}</small></a>`).join('')}</div>`;
+  const lenses = [...new Set(list.flatMap(d => d.lenses||[]))].sort();
+  const areas = `<div class="areas">${lenses.map(l => { const ds = list.filter(d => (d.lenses||[]).includes(l)).sort((a,b)=>STATES.indexOf(a._s)-STATES.indexOf(b._s)); return `<div class="area"><span>${esc(l)}</span><span class="pips">${ds.map(d => `<a style="--c:${d._s.c}" href="${esc(d._file)}" title="${pad(d.id)} ${esc(d.title)}"></a>`).join('')}</span><span class="n">${ds.length}</span></div>`; }).join('')}</div>`;
+  return `<div class="glance">
+    <div class="panel"><div class="ptitle">${I.bars}Where things stand</div>${bar}<div style="margin-top:14px">${tiles}</div></div>
+    <div class="panel"><div class="ptitle">${I.layers}By area</div>${areas || '<div class="muted">No areas tagged</div>'}</div>
+  </div>`;
+}
+function shortTitle(d){
+  const o = (d.options||[]).find(x => x.key === (d.chosen || d.recommended));
+  return (o ? o.name : d.title).split(/[;,:(]/)[0];
+}
+
+function card(d){
+  const o = (d.options||[]).find(x => x.key === d.chosen);
+  let line = '';
+  if (d.holding_up==='strained' && d.strain) line = `<div class="line warn">${esc(d.strain)}</div>`;
+  else if (d.status==='decided' && o) line = `<div class="line ok">${esc(d.chosen)}: ${esc(o.name)}${d.reason?` <span class="muted">· ${esc(d.reason)}</span>`:''}</div>`;
+  else if (d.status==='superseded') line = `<div class="line">Replaced by ${pad(d.superseded_by)}</div>`;
+  else if (d.status==='parked') { const rv = d.revisit||{}; line = `<div class="line${due(d)?' warn':''}">${due(d)?'Revisit due':'Back'} ${rv.date?esc(rv.date):''}${rv.date&&rv.trigger?' or ':''}${rv.trigger?esc(rv.trigger):''}</div>`; }
+  else if (d.status==='rejected') line = `<div class="line">Dropped${d.reason?`: ${esc(d.reason)}`:''}</div>`;
+  else { const r = (d.options||[]).find(x => x.key === d.recommended); if (r) line = `<div class="line">${d.status==='found'?'In the code':'Leaning'}: ${esc(r.name)}</div>`; }
+  return `<a class="dcard" href="${esc(d._file)}"><div class="row" style="gap:6px"><span class="num">${pad(d.id)}</span>${d.open_item?`<span class="chip bad">open item</span>`:''}${d.status==='parked'&&due(d)?'<span class="chip found">revisit due</span>':''}${d.deep?'<span class="chip open">deep</span>':''}</div><div class="t">${esc(d.title)}</div>${line}<div class="chips">${(d.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div></a>`;
+}
+
+const store = {
+  get(k){ try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+};
+const CHEV = '<svg class="icon chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+const laneKey = 'crux.repo.' + (repoName || 'repo') + '.openLanes';
+let openLanes = new Set(store.get(laneKey) || []);
+const CAP = { decided: 3, history: 3 };
+function lanes(list, searching){
+  const ls = STATES.map(s => [s, list.filter(d => d._s===s).sort((a,b)=>b.id-a.id)]).filter(([,ds]) => ds.length);
+  return `<div class="lanes">${ls.map(([s,ds]) => {
+    const cap = CAP[s.k] || 5;
+    const all = searching || openLanes.has(s.k);
+    const shown = all ? ds : ds.slice(0, cap);
+    const more = ds.length - shown.length;
+    return `<section class="lane" style="--c:${s.c}"><div class="lhead">${s.icon}${esc(s.name)} <span class="count">${ds.length}</span></div><div class="lhint">${esc(s.hint)}</div><div class="cards">${shown.map(card).join('')}</div>${more>0?`<button class="more" data-lane="${s.k}">${CHEV}Show ${more} more</button>`:(!searching && ds.length > cap ? `<button class="more less" data-lane="${s.k}">${CHEV}Show fewer</button>` : '')}</section>`;
+  }).join('')}</div>`;
+}
+document.getElementById('out').addEventListener('click', e => {
+  const lb = e.target.closest('[data-lane]');
+  if (lb){ const k = lb.dataset.lane; openLanes.has(k) ? openLanes.delete(k) : openLanes.add(k); store.set(laneKey, [...openLanes]); render(); }
+});
+
+function depMap(all){
+  let list = all;
+  const ids = new Set(all.map(d => d.id));
+  const byId = new Map(all.map(d => [d.id, d]));
+  const deps = d => (d.depends_on||[]).filter(n => ids.has(n));
+  const linked = new Set(list.flatMap(d => deps(d).length ? [d.id, ...deps(d)] : []));
+  if (!linked.size) return '';
+  const loose = list.filter(d => !linked.has(d.id)).length;
+  list = list.filter(d => linked.has(d.id));
+  const depth = new Map();
+  const dep = (d, seen = new Set()) => { if (depth.has(d.id)) return depth.get(d.id); if (seen.has(d.id)) return 0; seen.add(d.id); const v = deps(d).length ? 1 + Math.max(...deps(d).map(n => dep(byId.get(n), seen))) : 0; depth.set(d.id, v); return v; };
+  list.forEach(d => dep(d));
+  const cols = Math.max(...depth.values()) + 1;
+  const colItems = [];
+  const rowOf = new Map();
+  for (let c = 0; c < cols; c++) {
+    const items = list.filter(d => depth.get(d.id) === c);
+    const key = d => { const ps = deps(d).map(n => rowOf.get(n)).filter(v => v != null); return ps.length ? ps.reduce((a,b)=>a+b,0)/ps.length : d.id/1000; };
+    items.sort((a,b) => key(a) - key(b) || a.id - b.id);
+    items.forEach((d, i) => rowOf.set(d.id, i));
+    colItems.push(items);
+  }
+  const W = 190, H = 46, GX = 70, GY = 14, PAD = 6;
+  const rows = Math.max(...colItems.map(c => c.length));
+  const pos = new Map();
+  colItems.forEach((c, ci) => c.forEach((d, ri) => pos.set(d.id, { x: PAD + ci*(W+GX), y: PAD + ri*(H+GY) })));
+  const vw = PAD*2 + cols*W + (cols-1)*GX, vh = PAD*2 + rows*H + (rows-1)*GY;
+  let edges = '', nodes = '';
+  for (const d of list) for (const n of deps(d)) {
+    const a = pos.get(n), b = pos.get(d.id);
+    const x1 = a.x+W, y1 = a.y+H/2, x2 = b.x, y2 = b.y+H/2;
+    let path;
+    if (b.x - a.x <= W + GX) { const mx = (x1+x2)/2; path = `M${x1} ${y1}C${mx} ${y1} ${mx} ${y2} ${x2-6} ${y2}`; }
+    else {
+      // Long edge: drop into the gap between rows so it never runs behind a box.
+      const yg = b.y > PAD ? b.y - GY/2 : b.y + H + GY/2;
+      const g1 = x1 + GX/2, g2 = x2 - GX/2;
+      path = `M${x1} ${y1}C${g1} ${y1} ${x1} ${yg} ${g1} ${yg}L${g2} ${yg}C${x2} ${yg} ${g2} ${y2} ${x2-6} ${y2}`;
+    }
+    edges += `<path d="${path}" fill="none" stroke="var(--faint)" stroke-width="1.3" marker-end="url(#ah)"/>`;
+  }
+  for (const d of list) { const p = pos.get(d.id); const t = shortTitle(d); nodes += `<a href="${esc(d._file)}"><title>${pad(d.id)} ${esc(d.title)}</title><rect x="${p.x}" y="${p.y}" width="${W}" height="${H}" rx="8" fill="var(--surface)" stroke="var(--line2)"/><rect x="${p.x}" y="${p.y+8}" width="3" height="${H-16}" rx="1.5" fill="${d._s.c}"/><text x="${p.x+12}" y="${p.y+19}" font-size="11" font-family="var(--mono)" fill="var(--faint)">${pad(d.id)}</text><text x="${p.x+12}" y="${p.y+35}" font-size="12.5">${esc(t.length > 26 ? t.slice(0,25)+'…' : t)}</text></a>`; }
+  return `<h2 class="row" style="gap:7px">${I.tree}What builds on what</h2><div class="panel map"><svg viewBox="0 0 ${vw} ${vh}" style="max-width:${vw}px" role="img" aria-label="Dependency map of decisions"><defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--faint)" stroke-width="1.5"/></marker></defs>${edges}${nodes}</svg><div class="legend" style="margin-top:8px">Left to right: foundations first. ${loose ? `${loose} decision${loose===1?' stands':'s stand'} on ${loose===1?'its':'their'} own and ${loose===1?'is':'are'} not shown here.` : ''}</div></div>`;
+}
+
+function render(){
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const list = ALL.filter(d => !q || JSON.stringify([d.title,d.context,d.reason,d.strain,(d.lenses||[]),(d.options||[]).map(o=>o.name+' '+o.summary)]).toLowerCase().includes(q));
+  if (!list.length){ document.getElementById('out').innerHTML = `<div class="empty">${ALL.length ? 'No matches' : 'No decisions yet'}</div>`; return; }
+  document.getElementById('out').innerHTML = glance(list) + `<h2 class="row" style="gap:7px">${I.grid}Board</h2>` + lanes(list, !!q) + depMap(list);
+}
+sub();
+document.getElementById('q').addEventListener('input', render);
+render();
+</script>
+</body>
+</html>

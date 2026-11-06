@@ -47,7 +47,88 @@
    ════════════════════════════════════════════════════════════ */
 var LAB_RM_VS = '#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }';
 
-function buildLabRaymarcherFS(stepCount) {
+/* v0.35.0 — Geometry tab data views (31-geom-views.js).  Each is its own program, compiled the
+   first time it is picked: inside the shared shader they took a first compile from 12 s to 66 s
+   on Direct3D (Matt's Windows machine, browser pane), for every tab.  Without a variant the
+   shader is exactly what it was.
+     over   overhang (normal only)
+     curv   curvature on the field the surface is a level set of, not on the sheet's |a| - t, so
+            the stencil cannot cross the midplane; two texels, since a smaller step reads trilinear
+            facets (proto/geom-views/curvature_check.js)
+     curvc  PI and normalized shells, which are not level sets of the field: their own distance,
+            one texel
+     chord  wall thickness and pore size
+   The stencil is a loop with one call site, because Direct3D inlines every call. */
+function labGeomGLSL(variant) {
+  var L = [
+    'uniform float uGeomView; uniform float uGeomKind; uniform float uGeomRange; uniform float uGeomLimit;',
+    'uniform float uGeomMm; uniform vec3 uGeomBuild;'
+  ];
+  if (variant === 'curv' || variant === 'curvc') {
+    L.push(
+      'const vec3 GEOM_O[18] = vec3[18](vec3(1,0,0),vec3(-1,0,0),vec3(0,1,0),vec3(0,-1,0),vec3(0,0,1),vec3(0,0,-1),' +
+        'vec3(1,1,0),vec3(1,-1,0),vec3(-1,1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(1,0,-1),vec3(-1,0,1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,1,-1),vec3(0,-1,1),vec3(0,-1,-1));',
+      'vec2 geomCurvature(vec3 p) {',
+      variant === 'curv'
+        ? '  float h = 2.0 * (2.0 * H) / max(uTexNG, 8.0); float f0 = sampleF(p);'
+        : '  float h = (2.0 * H) / max(uTexNG, 8.0); float f0 = implicit0(p);',
+      '  float v[18];',
+      variant === 'curv'
+        ? '  for (int i = 0; i < 18; i++) v[i] = sampleF(p + GEOM_O[i]*h);'
+        : '  for (int i = 0; i < 18; i++) v[i] = implicit0(p + GEOM_O[i]*h);',
+      '  float gx = (v[0]-v[1])/(2.0*h), gy = (v[2]-v[3])/(2.0*h), gz = (v[4]-v[5])/(2.0*h);',
+      '  float i2 = 1.0/(h*h), i4 = 0.25*i2;',
+      '  float xx = (v[0]-2.0*f0+v[1])*i2, yy = (v[2]-2.0*f0+v[3])*i2, zz = (v[4]-2.0*f0+v[5])*i2;',
+      '  float xy = (v[6]-v[7]-v[8]+v[9])*i4, xz = (v[10]-v[11]-v[12]+v[13])*i4, yz = (v[14]-v[15]-v[16]+v[17])*i4;',
+      '  float g2 = max(gx*gx+gy*gy+gz*gz, 1e-6), g = sqrt(g2);',
+      '  float gHg = gx*gx*xx+gy*gy*yy+gz*gz*zz+2.0*(gx*gy*xy+gx*gz*xz+gy*gz*yz);',
+      '  float Hm = (g2*(xx+yy+zz)-gHg)/(2.0*g2*g);',
+      '  float K = (gx*gx*(yy*zz-yz*yz)+gy*gy*(xx*zz-xz*xz)+gz*gz*(xx*yy-xy*xy)+2.0*(gx*gy*(xz*yz-xy*zz)+gy*gz*(xy*xz-yz*xx)+gx*gz*(xy*yz-xz*yy)))/(g2*g2);',
+      /* outward = out of the solid, so convex solid reads positive */
+      variant === 'curv'
+        ? '  float side = (f0 - isoLevel) >= 0.0 ? 1.0 : -1.0; float s = uTopoMode < 0.5 ? side : (uTopoMode < 1.5 ? (uHalfInvert < 0.5 ? -1.0 : 1.0) : -side);'
+        : '  float s = 1.0;',
+      '  return vec2(s*Hm, K);',
+      '}',
+      'vec3 geomColor(vec3 pos, vec3 n) {',
+      '  vec2 c = geomCurvature(pos); float Hm = c.x/uGeomMm, K = c.y/(uGeomMm*uGeomMm);',
+      '  if (uGeomKind < 0.5) return coolwarm(0.5 + 0.5*Hm/uGeomRange);',
+      '  if (uGeomKind < 1.5) return coolwarm(0.5 + 0.5*K/(uGeomRange*uGeomRange));',
+      '  return turbo((abs(Hm) + sqrt(max(Hm*Hm-K, 0.0)))/uGeomRange);',
+      '}'
+    );
+  } else if (variant === 'over') {
+    L.push(
+      'vec3 geomColor(vec3 pos, vec3 n) {',
+      '  float th = degrees(acos(clamp(-dot(n, uGeomBuild), -1.0, 1.0)));',
+      '  return th < uGeomLimit ? vec3(0.85,0.25,0.25) : (th < uGeomLimit + 10.0 ? vec3(0.878,0.639,0.227) : vec3(0.114,0.620,0.459));',
+      '}'
+    );
+  } else {
+    L.push(
+      /* distance along dir to where the ray crosses the surface; periodic, may leave the cell */
+      'float geomChord(vec3 p, vec3 dir, float sgn) {',
+      '  float t = 0.03, tp = 0.0, vp = -0.002;',
+      '  for (int i = 0; i < 64; i++) {',
+      '    float v = sgn * implicit0(p + dir*t);',
+      '    if (v > 0.0) return tp + (t - tp) * (-vp) / max(v - vp, 1e-6);',
+      '    tp = t; vp = v;',
+      '    t += max(-v/max(uLipschitz,0.05)*0.9, 0.03);',
+      '    if (t > 2.0*H) break;',
+      '  }',
+      '  return -1.0;',
+      '}',
+      'vec3 geomColor(vec3 pos, vec3 n) {',
+      '  float ch = uGeomView < 3.5 ? geomChord(pos - n*0.002, -n, 1.0) : geomChord(pos + n*0.002, n, -1.0);',
+      '  float v = ch < 0.0 ? uGeomRange : ch*uGeomMm;',
+      '  return v < uGeomLimit ? vec3(0.85,0.25,0.25) : cividis(v/uGeomRange);',
+      '}'
+    );
+  }
+  return L.join('\n');
+}
+
+function buildLabRaymarcherFS(stepCount, geomVariant) {
   var STEPS = String(stepCount || 192);
   return [
     '#version 300 es',
@@ -497,6 +578,7 @@ function buildLabRaymarcherFS(stepCount) {
     '  return max(implicit(p) / f13G, b);',
     '}',
     F13_SHADE_GLSL,
+    geomVariant ? labGeomGLSL(geomVariant) : '',
 
     'vec4 renderPix() {',
     '  vec2 uv = (gl_FragCoord.xy - res*0.5) / min(res.x, res.y);',
@@ -639,6 +721,8 @@ function buildLabRaymarcherFS(stepCount) {
     '    vec3 dataCol = (uBuckleMap > 0.5) ? turbo(sv) : cividis(sv);',
     '    col = f13ShadeData(dataCol, pos, n, rd, rot, H*0.3, uNrmStep, f13TMax);',
     '  } else {',
+    /* v0.35.0 — Geometry data views: neutral cut faces, so they are not read as data */
+    geomVariant ? '    if (uViewMode < 0.5 && uGeomView > 0.5) { if (hit) col = f13ShadeData(geomColor(pos, n), pos, n, rd, rot, H*0.3, uNrmStep, f13TMax); else col = f13Shade(vec3(0.34,0.35,0.38), pos, n, rd, rot, true, H*0.3, uNrmStep, f13TMax); } else' : '',
     /* Geometry / deformed views: family body color; cap hits are cut faces. */
     '    col = f13Shade(uBodyColor, pos, n, rd, rot, !hit, H*0.3, uNrmStep, f13TMax);',
     '  }',
@@ -664,7 +748,7 @@ function buildLabRaymarcherFS(stepCount) {
     '  fragColor = c;',
     '  gl_FragDepth = gDepth;',
     '}'
-  ].join('\n');
+  ].filter(function(l){ return l !== ''; }).join('\n');
 }
 
 
@@ -961,8 +1045,12 @@ LabRaymarcher.prototype._finishProgram = function() {
   gl.enableVertexAttribArray(loc);
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   /* Cache uniform locations */
-  var L = {};
-  ['res','rot','zoom','uPan','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset','uNormMode','uTexNG',
+  this._uloc = labRmLocations(gl, prg);
+  this._baseProg = prg; this._baseLoc = this._uloc;
+  return true;
+};
+
+var LAB_RM_UNIFORMS = ['res','rot','zoom','uPan','thickness','isoLevel','uTopoMode','uHalfInvert','uPipeR','uPipeOffset','uNormMode','uTexNG',
    'uLipschitz','uField','uFieldMin','uFieldMax','uTile','uNrmStep',
    /* v0.13.0 — field-pair PI-TPMS */
    'uFieldB','uFieldBMin','uFieldBMax','uPairMode',
@@ -986,11 +1074,58 @@ LabRaymarcher.prototype._finishProgram = function() {
    /* v0.29.0 — flow view */
    'uFlowOn','uFlowPlane','uFlowHi','uFlowN','uFlowSpd',
    /* v0.31.0 — wall shear map */
-   'uShearOn','uShearMode','uShearA','uShearB','uShear'].forEach(function(name){
-    L[name] = gl.getUniformLocation(prg, name);
-  });
-  this._uloc = L;
-  return true;
+   'uShearOn','uShearMode','uShearA','uShearB','uShear',
+   /* v0.35.0 — Geometry data views */
+   'uGeomView','uGeomKind','uGeomRange','uGeomLimit','uGeomMm','uGeomBuild'];
+function labRmLocations(gl, prg) {
+  var L = {};
+  LAB_RM_UNIFORMS.forEach(function(name){ L[name] = gl.getUniformLocation(prg, name); });
+  return L;
+}
+
+/* v0.35.0 — the program for the current Geometry view: its own once compiled (without blocking
+   the page, as _compileShader), the plain shader until then. */
+LabRaymarcher.prototype._geomVariant = function() {
+  var S = this._u;
+  if (!S.geomView) return '';
+  if (S.geomView === 2) return 'over';
+  if (S.geomView > 2) return 'chord';
+  var plain = S.topoMode < 2.5 && !(S.topoMode < 0.5 && S.normMode > 0.5 && S.normMode < 1.5);
+  return plain ? 'curv' : 'curvc';
+};
+LabRaymarcher.prototype._geomSet = function(variant) {
+  var gl = this.gl, sets = this._geomSets || (this._geomSets = {}), V = sets[variant];
+  if (!V) {
+    var vs = gl.createShader(gl.VERTEX_SHADER);   gl.shaderSource(vs, LAB_RM_VS);                           gl.compileShader(vs);
+    var fs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(fs, buildLabRaymarcherFS(192, variant));  gl.compileShader(fs);
+    var prg = gl.createProgram();
+    gl.attachShader(prg, vs); gl.attachShader(prg, fs); gl.linkProgram(prg);
+    V = sets[variant] = { prg: prg, vs: vs, fs: fs, ready: false, failed: false };
+  }
+  if (V.failed) return null;
+  if (!V.ready) {
+    if (this._pcExt && !gl.getProgramParameter(V.prg, this._pcExt.COMPLETION_STATUS_KHR)) return null;
+    if (!gl.getProgramParameter(V.prg, gl.LINK_STATUS)) {
+      console.error('[LabRaymarcher] Geometry view ' + variant + ' failed:\n' + gl.getShaderInfoLog(V.fs));
+      V.failed = true;
+    } else { V.ready = true; V.loc = labRmLocations(gl, V.prg); }
+    gl.deleteShader(V.vs); gl.deleteShader(V.fs);
+    if (V.failed) return null;
+  }
+  return V;
+};
+LabRaymarcher.prototype._useViewProgram = function() {
+  var gl = this.gl, variant = this._geomVariant(), V = variant ? this._geomSet(variant) : null;
+  this._geomWaiting = !!variant && !V && !(this._geomSets[variant] && this._geomSets[variant].failed);
+  var prg = V ? V.prg : this._baseProg;
+  if (this._prog === prg) return;
+  this._prog = prg;
+  this._uloc = V ? V.loc : this._baseLoc;
+  gl.useProgram(prg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, this._quadBuf);
+  var loc = gl.getAttribLocation(prg, 'p');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 };
 
 
@@ -1763,8 +1898,19 @@ LabRaymarcher.prototype.setViewMode = function(mode) {
   else if (mode === 'thermal' && this._thermUploaded) effective = 3;   /* v0.21.0 */
   else if (mode === 'flow') effective = 4;                              /* v0.29.0 */
   this._u.viewMode = effective;
+  if (mode !== 'geom') this._u.geomView = 0;   /* v0.35.0 — the Geometry picker re-applies on the way back */
   this._dirty = true;
 };
+
+/* v0.35.0 — Geometry tab data view (31-geom-views.js): view 0 shaded, 1 curvature, 2 overhang,
+   3 wall thickness, 4 pore size; mm = mm per world unit.  Data views hold still and take the
+   drag and wheel, so a spot can be inspected; the shaded view keeps its turntable. */
+LabRaymarcher.prototype.setGeomView = function(p) {
+  var S = this._u;
+  S.geomView = p.view; S.geomKind = p.kind; S.geomRange = p.range; S.geomLimit = p.limit; S.geomMm = p.mm; S.geomBuild = p.build;
+  this._dirty = true;
+};
+LabRaymarcher.prototype._geomSpins = function() { return this._viewMode === 'geom' && !this._u.geomView; };
 
 /* setDeformAmp(sliderValue) — push the amp slider to the shader,
    scaled into world units.
@@ -1920,7 +2066,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
   /* Pointer drag — rotate _rotY (horizontal drag) and _rotX (vertical
      drag).  Active only in deform/stress modes; geom mode auto-rotates. */
   this.canvas.addEventListener('pointerdown', function(e) {
-    if (self._extControl || self._viewMode === 'geom') return;
+    if (self._extControl || self._geomSpins()) return;
     /* v0.21.0 — grabbing the section-plane handle scrubs the plane (F13LD.tpms) */
     var hs = self._clipScreen;
     if (hs && (self._viewMode === 'thermal' || self._viewMode === 'flow')) {
@@ -1934,7 +2080,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     self.canvas.style.cursor = 'grabbing';
   });
   this.canvas.addEventListener('pointermove', function(e) {
-    if (!self._pointerDown || self._viewMode === 'geom') return;
+    if (!self._pointerDown || self._geomSpins()) return;
     var dx = e.clientX - self._lastPointerX;
     var dy = e.clientY - self._lastPointerY;
     self._lastPointerX = e.clientX;
@@ -1957,6 +2103,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     var lim = Math.PI * 0.49;
     if (self._rotX >  lim) self._rotX =  lim;
     if (self._rotX < -lim) self._rotX = -lim;
+    if (self._u.geomView) labGeomLinkPose(self);   /* v0.35.0 — all tiles turn together */
     self._dirty = true;
   });
   var onPointerUp = function(e) {
@@ -1971,7 +2118,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
 
   /* Wheel zoom — active only in deform/stress.  Clamp [8, 40]. */
   this.canvas.addEventListener('wheel', function(e) {
-    if (self._extControl || self._viewMode === 'geom') return;
+    if (self._extControl || self._geomSpins()) return;
     e.preventDefault();
     var z = self._u.zoom;
     /* Scroll up (negative deltaY) → zoom in (smaller z) */
@@ -1979,6 +2126,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     if (z < 8)  z = 8;
     if (z > 40) z = 40;
     self._u.zoom = z;
+    if (self._u.geomView) labGeomLinkPose(self);
     self._dirty = true;
   }, { passive: false });
 };
@@ -2001,7 +2149,7 @@ LabRaymarcher.prototype._render = function(t) {
   if (this._lastFrame === 0) this._lastFrame = t;
   var dt = (t - this._lastFrame) * 0.001;
   this._lastFrame = t;
-  if (this._viewMode === 'geom') {
+  if (this._geomSpins()) {
     this._rotY += dt * 0.30;
   }
   /* Buckling tab: full-cycle amplitude pulse (A*sin), 2.5 s period.  Swings
@@ -2037,6 +2185,7 @@ LabRaymarcher.prototype._render = function(t) {
   gl.viewport(0, 0, w, h);
 
   /* Draw */
+  this._useViewProgram();   /* v0.35.0 */
   gl.useProgram(this._prog);
   var u = this._uloc, S = this._u;
   gl.uniform2f(u.res, w, h);
@@ -2082,6 +2231,15 @@ LabRaymarcher.prototype._render = function(t) {
   gl.uniform3f(u.uTint,           S.tint[0], S.tint[1], S.tint[2]);
   gl.uniform1f(u.uTintStrength,   S.tintStrength);
   gl.uniform3f(u.uBodyColor,      S.bodyColor[0], S.bodyColor[1], S.bodyColor[2]);
+  /* v0.35.0 — Geometry data views */
+  gl.uniform1f(u.uGeomView,  S.geomView || 0);
+  if (S.geomView) {
+    gl.uniform1f(u.uGeomKind,  S.geomKind);
+    gl.uniform1f(u.uGeomRange, S.geomRange);
+    gl.uniform1f(u.uGeomLimit, S.geomLimit);
+    gl.uniform1f(u.uGeomMm,    S.geomMm);
+    gl.uniform3f(u.uGeomBuild, S.geomBuild[0], S.geomBuild[1], S.geomBuild[2]);
+  }
   /* v0.21.0 — thermal field + section plane (thermal tab only) */
   var thermalOn = (this._viewMode === 'thermal' && this._thermUploaded);
   gl.uniform1f(u.uThermOn,    thermalOn ? 1 : 0);
@@ -2204,6 +2362,9 @@ LabRaymarcher.prototype.destroy = function() {
   if (this._flowTex)   gl.deleteTexture(this._flowTex);    /* v0.29.0 — flow speed field */
   if (this._flowLine)  { gl.deleteProgram(this._flowLine.prog); gl.deleteBuffer(this._flowLine.buf); gl.deleteBuffer(this._flowLine.ibuf); gl.deleteVertexArray(this._flowLine.vao); this._flowLine = null; }
   if (this._prog)      gl.deleteProgram(this._prog);
+  if (this._baseProg && this._baseProg !== this._prog) gl.deleteProgram(this._baseProg);   /* v0.35.0 */
+  for (var gv in (this._geomSets || {})) { if (this._geomSets[gv].prg !== this._prog) gl.deleteProgram(this._geomSets[gv].prg); }
+  this._geomSets = null; this._baseProg = null;
   if (this._pending)   { gl.deleteProgram(this._pending.prg); gl.deleteShader(this._pending.vs); gl.deleteShader(this._pending.fs); this._pending = null; }   /* v0.24.0 */
   if (this._quadBuf)   gl.deleteBuffer(this._quadBuf);
   /* Force-lose context to free GPU memory immediately */
@@ -2307,6 +2468,15 @@ function disposeRaymarcher(designId) {
   if (rm.canvas && rm.canvas.parentNode) rm.canvas.parentNode.removeChild(rm.canvas);
   rm.destroy();
   delete LAB_RM_REGISTRY[designId];
+}
+
+/* v0.35.0 — copy one tile's pose to the others (Geometry data views) */
+function labGeomLinkPose(from) {
+  for (var id in LAB_RM_REGISTRY) {
+    var r = LAB_RM_REGISTRY[id];
+    if (!r || r === from) continue;
+    r._rotX = from._rotX; r._rotY = from._rotY; r._u.zoom = from._u.zoom; r._dirty = true;
+  }
 }
 
 function pauseAllRaymarchers() {

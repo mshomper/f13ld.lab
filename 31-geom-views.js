@@ -1,0 +1,199 @@
+/* ============================================================
+   F13LD.lab · 31-geom-views.js
+   v0.35.0 — Geometry tab views: Shaded, Curvature, Overhang, Wall
+   thickness, Pore size.  No solver: the viewer reads them off its
+   own field (21-raymarcher.js geomColor).  One picker row under the
+   view strip; every tile shares the view, the scale and, in the
+   data views, the pose.  Accuracy: proto/geom-views/curvature_check.js.
+   ============================================================ */
+
+var GEOM_VIEWS = [
+  { id: 'shaded',    label: 'Shaded',         tip: 'The shaded view; turns by itself' },
+  { id: 'curvature', label: 'Curvature',      tip: 'How the surface bends' },
+  { id: 'overhang',  label: 'Overhang',       tip: 'Faces that need support for a build direction' },
+  { id: 'wall',      label: 'Wall thickness', tip: 'Thickness through the solid, measured along the surface normal' },
+  { id: 'pore',      label: 'Pore size',      tip: 'Gap across the pore, measured along the surface normal. Good for finding tight gaps; not a true pore diameter' }
+];
+var GEOM_KINDS = [
+  { id: 'mean',     label: 'Mean',            tip: 'Average bending; close to zero on a minimal surface' },
+  { id: 'gauss',    label: 'Gaussian',        tip: 'Dome (positive) or saddle (negative)' },
+  { id: 'tightest', label: 'Tightest radius', tip: 'Smallest bend radius at each point' }
+];
+
+/* Settings a user would keep (limits, scales) persist per browser; the view itself starts Shaded. */
+var GEOM_DEFAULTS = { kind: 'mean', build: 'z', curvRange: 1.5, tightest: 3, overhang: 45, wallMin: 0.4, wallScale: 2, poreMin: 0.5, poreScale: 4 };
+var GEOM_KEY = 'f13ld.lab.geomViews.v1';
+VIEW_STATE.geom = (function(){
+  var g = { view: 'shaded' }, k;
+  for (k in GEOM_DEFAULTS) g[k] = GEOM_DEFAULTS[k];
+  try {
+    var j = JSON.parse(localStorage.getItem(GEOM_KEY) || 'null');
+    if (j && typeof j === 'object') for (k in GEOM_DEFAULTS) if (typeof j[k] === typeof GEOM_DEFAULTS[k]) g[k] = j[k];
+  } catch (e) {}
+  return g;
+})();
+function geomViewSave(){
+  var o = {}, g = VIEW_STATE.geom;
+  for (var k in GEOM_DEFAULTS) o[k] = g[k];
+  try { localStorage.setItem(GEOM_KEY, JSON.stringify(o)); } catch (e) {}
+}
+
+function geomViewIndex(){
+  for (var i = 0; i < GEOM_VIEWS.length; i++) if (GEOM_VIEWS[i].id === VIEW_STATE.geom.view) return i;
+  return 0;
+}
+function geomViewRange(){
+  var g = VIEW_STATE.geom;
+  if (g.view === 'curvature') return g.kind === 'tightest' ? g.tightest : g.curvRange;
+  if (g.view === 'wall') return g.wallScale;
+  if (g.view === 'pore') return g.poreScale;
+  return 1;
+}
+function geomViewLimit(){
+  var g = VIEW_STATE.geom;
+  if (g.view === 'overhang') return g.overhang;
+  if (g.view === 'wall') return g.wallMin;
+  if (g.view === 'pore') return g.poreMin;
+  return 0;
+}
+
+/* Push the settings to every tile.  Called from renderDesignGrid and on any change here;
+   no grid re-render, so a slider stays smooth.  mm per world unit comes from each design's
+   own cell, on the one shared scale. */
+function geomViewApply(){
+  if (typeof LAB_RM_REGISTRY === 'undefined' || !LAB_STATE || !LAB_STATE.designs) return;
+  var g = VIEW_STATE.geom, view = geomViewIndex(), first = null;
+  var kind = g.kind === 'gauss' ? 1 : (g.kind === 'tightest' ? 2 : 0);
+  var build = g.build === 'x' ? [1, 0, 0] : (g.build === 'y' ? [0, 1, 0] : [0, 0, 1]);
+  for (var i = 0; i < LAB_STATE.designs.length; i++){
+    var d = LAB_STATE.designs[i], rm = LAB_RM_REGISTRY[d.id];
+    if (!rm || rm.failed || !rm.setGeomView) continue;
+    var cell = (isFinite(d.cell_mm) && d.cell_mm > 0) ? d.cell_mm : 5;
+    rm.setGeomView({ view: view, kind: kind, range: geomViewRange(), limit: geomViewLimit(), mm: cell / (2 * Math.PI), build: build });
+    if (!first) first = rm;
+  }
+  if (view && first && typeof labGeomLinkPose === 'function') labGeomLinkPose(first);   /* tiles line up on entering a data view */
+  geomBusyWatch();
+}
+/* A view's shader compiles the first time it is picked; the tiles stay shaded until then. */
+var _geomBusyTimer = null;
+function geomBusyWatch(){
+  if (_geomBusyTimer) return;
+  _geomBusyTimer = setTimeout(function(){
+    _geomBusyTimer = null;
+    var busy = false, el = document.getElementById('geomBusy');
+    for (var id in LAB_RM_REGISTRY){ var r = LAB_RM_REGISTRY[id]; if (r && r._geomWaiting && r._running) busy = true; }
+    if (el) el.style.display = (busy && VIEW_STATE.mode === 'geom') ? '' : 'none';
+    if (busy) geomBusyWatch();
+  }, 300);
+}
+
+function geomSlider(key, label, min, max, step, fmt, tip){
+  return '<span class="fa-sl" title="' + tip + '"><span class="fa-l">' + label + '</span>' +
+    '<input type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + VIEW_STATE.geom[key] + '"' +
+    ' data-key="' + key + '" data-fmt="' + fmt + '" oninput="onGeomSlider(this)">' +
+    '<span class="fa-v">' + geomFmt(fmt, VIEW_STATE.geom[key]) + '</span></span>';
+}
+function geomFmt(fmt, v){
+  if (fmt === 'mm') return v.toFixed(2) + ' mm';
+  if (fmt === 'mm1') return v.toFixed(1) + ' mm';
+  if (fmt === 'deg') return Math.round(v) + '°';
+  if (fmt === 'r') return 'r ' + (1 / v).toFixed(2) + ' mm';
+  if (fmt === 'curv') return '±' + v.toFixed(1) + (VIEW_STATE.geom.kind === 'gauss' ? ' /mm²' : ' /mm');
+  return String(v);
+}
+function geomPickBtns(items, cur, fn){
+  var h = '<div class="th-toggle">';
+  for (var i = 0; i < items.length; i++){
+    h += '<button class="th-btn' + (items[i].id === cur ? ' active' : '') + '" title="' + (items[i].tip || '') + '" onclick="' + fn + '(\'' + items[i].id + '\')">' + items[i].label + '</button>';
+  }
+  return h + '</div>';
+}
+
+function geomViewRowBuild(){
+  var row = document.getElementById('geomViewRow');
+  if (!row) return;
+  var g = VIEW_STATE.geom, h = geomPickBtns(GEOM_VIEWS, g.view, 'onGeomViewPick');
+  if (g.view === 'curvature'){
+    h += geomPickBtns(GEOM_KINDS, g.kind, 'onGeomKindPick');
+    h += g.kind === 'tightest'
+      ? geomSlider('tightest', 'tightest', 1, 8, 0.1, 'r', 'The radius at the top of the colour scale')
+      : geomSlider('curvRange', 'range', 0.5, 6, 0.1, 'curv', 'The value at each end of the colour scale');
+  } else if (g.view === 'overhang'){
+    h += '<span class="stress-norm-label">Build</span>' + geomPickBtns([{ id: 'x', label: 'X', tip: 'Build direction X' }, { id: 'y', label: 'Y', tip: 'Build direction Y' }, { id: 'z', label: 'Z', tip: 'Build direction Z' }], g.build, 'onGeomBuildPick');
+    h += geomSlider('overhang', 'limit', 30, 60, 1, 'deg', 'Steepest self-supporting face, measured from the build plate');
+  } else if (g.view === 'wall'){
+    h += geomSlider('wallMin', 'minimum', 0.1, 1.5, 0.05, 'mm', 'Thinner walls turn red') + geomSlider('wallScale', 'scale', 1, 5, 0.1, 'mm1', 'The thickness at the top of the colour scale');
+  } else if (g.view === 'pore'){
+    h += geomSlider('poreMin', 'minimum', 0.1, 2, 0.05, 'mm', 'Tighter gaps turn red') + geomSlider('poreScale', 'scale', 1, 6, 0.1, 'mm1', 'The gap at the top of the colour scale');
+  }
+  row.innerHTML = h + '<span class="gl-n" id="geomBusy" style="display:none">preparing this view; the first time can take up to a minute</span><span class="geom-legend" id="geomLegend"></span>';
+  geomLegendPaint();
+}
+
+var GEOM_RAMPS = {
+  coolwarm: [[0.2298,0.2987,0.7537],[0.5543,0.6901,0.9955],[0.8654,0.8654,0.8654],[0.9567,0.5980,0.4773],[0.7057,0.0156,0.1502]],
+  turbo: [[0.14,0.15,0.5],[0.15,0.4,0.95],[0.1,0.7,0.9],[0.15,0.9,0.55],[0.55,0.98,0.25],[0.95,0.85,0.15],[0.97,0.5,0.15],[0.88,0.13,0.08]],
+  cividis: [[0,0.1255,0.302],[0.1098,0.2431,0.3961],[0.2353,0.3451,0.4706],[0.3569,0.4471,0.4863],[0.498,0.5373,0.4588],[0.6667,0.6353,0.3882],[0.8471,0.7569,0.298],[1,0.9176,0.2745]]
+};
+function geomRampCss(name, limitFrac){
+  var s = GEOM_RAMPS[name], stops = [];
+  if (limitFrac != null) stops.push('#d94040 0', '#d94040 ' + (limitFrac * 100).toFixed(1) + '%');
+  var from = limitFrac != null ? limitFrac : 0;
+  for (var i = 0; i < 12; i++){
+    var f = i / 11, x = f * (s.length - 1), k = Math.min(Math.floor(x), s.length - 2), t = x - k, c = [];
+    for (var j = 0; j < 3; j++) c.push(Math.round(255 * (s[k][j] + (s[k + 1][j] - s[k][j]) * t)));
+    if (f < from) continue;
+    stops.push('rgb(' + c.join(',') + ') ' + (f * 100).toFixed(1) + '%');
+  }
+  return 'linear-gradient(90deg,' + stops.join(',') + ')';
+}
+function geomLegendPaint(){
+  var el = document.getElementById('geomLegend');
+  if (!el) return;
+  var g = VIEW_STATE.geom, h = '';
+  function bar(css, lo, hi, note){
+    return '<span class="gl-v">' + lo + '</span><span class="gl-bar" style="background:' + css + '"></span><span class="gl-v">' + hi + '</span>' + (note ? '<span class="gl-n">' + note + '</span>' : '');
+  }
+  function swatch(col, txt){ return '<span class="gl-sw" style="background:' + col + '"></span><span class="gl-n">' + txt + '</span>'; }
+  if (g.view === 'curvature' && g.kind === 'tightest'){
+    h = bar(geomRampCss('turbo'), 'flat', 'r ≤ ' + (1 / g.tightest).toFixed(2) + ' mm', 'tightest radius');
+  } else if (g.view === 'curvature'){
+    var v = g.kind === 'gauss' ? (g.curvRange * g.curvRange).toFixed(1) + ' /mm²' : g.curvRange.toFixed(1) + ' /mm';
+    h = bar(geomRampCss('coolwarm'), '−' + v, '+' + v, g.kind === 'gauss' ? 'red dome · blue saddle' : 'red convex solid · blue concave fillet');
+  } else if (g.view === 'overhang'){
+    h = swatch('#d94040', 'needs support') + swatch('#e0a33a', 'within 10°') + swatch('#1d9e75', 'self-supporting');
+  } else if (g.view === 'wall' || g.view === 'pore'){
+    var mx = geomViewRange(), lim = geomViewLimit();
+    h = bar(geomRampCss('cividis', Math.min(lim / mx, 1)), '0', '≥ ' + mx.toFixed(1) + ' mm', 'red below ' + lim.toFixed(2) + ' mm');
+  }
+  /* Stretched cells are drawn and solved as cubes (v0.26.1), so a value in mm would mislead */
+  if (g.view !== 'shaded' && g.view !== 'overhang' && typeof labCellStretch === 'function' && LAB_STATE && LAB_STATE.designs){
+    for (var i = 0; i < LAB_STATE.designs.length; i++){
+      if (labCellStretch(LAB_STATE.designs[i].raw_json)){ h += '<span class="gl-n">stretched cells: drawn as cubes, mm values approximate</span>'; break; }
+    }
+  }
+  el.innerHTML = h;
+}
+
+function geomViewRowSync(){
+  var row = document.getElementById('geomViewRow');
+  if (!row) return;
+  var on = (VIEW_STATE.mode === 'geom');
+  row.classList.toggle('show', on);
+  if (on && !row.firstChild) geomViewRowBuild();
+}
+function geomViewChanged(rebuild){
+  if (rebuild) geomViewRowBuild(); else geomLegendPaint();
+  geomViewSave();
+  geomViewApply();
+}
+function onGeomViewPick(v){ VIEW_STATE.geom.view = v; geomViewChanged(true); }
+function onGeomKindPick(k){ VIEW_STATE.geom.kind = k; geomViewChanged(true); }
+function onGeomBuildPick(a){ VIEW_STATE.geom.build = a; geomViewChanged(true); }
+function onGeomSlider(el){
+  VIEW_STATE.geom[el.dataset.key] = +el.value;
+  var o = el.parentNode.querySelector('.fa-v');
+  if (o) o.textContent = geomFmt(el.dataset.fmt, +el.value);
+  geomViewChanged(false);
+}

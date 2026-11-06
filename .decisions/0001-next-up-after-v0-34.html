@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%23a2aab7' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%238ea8ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%238ea8ff'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%238ea8ff'/%3E%3C/svg%3E">
+<title>Decision</title>
+<style>
+:root{--bg:#0b0d11;--panel:#10141a;--lane:#12161c;--surface:#191e26;--surface2:#1e242d;--raised:#1b2029;--line:rgba(255,255,255,.075);--line2:rgba(255,255,255,.12);--text:#e7eaf0;--muted:#a2aab7;--faint:#6c7584;--accent:#8ea8ff;--accent-ink:#0d1530;--accent-bg:rgba(142,168,255,.14);--good:#5fd3ae;--good-bg:rgba(95,211,174,.13);--warn:#f3b955;--warn-bg:rgba(243,185,85,.13);--bad:#f2727a;--bad-bg:rgba(242,114,122,.13);--chosen:#5fd3ae;--hist:#8792ad;--radius:10px;--font:"Segoe UI Variable Text","Segoe UI",Inter,system-ui,-apple-system,sans-serif;--mono:"Cascadia Mono",Consolas,ui-monospace,monospace;--good-fill:#5fd3ae;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--font);overflow-wrap:anywhere;-webkit-font-smoothing:antialiased}
+main{max-width:1240px;margin:0 auto;padding:18px 18px 48px}
+h1{font-size:21px;font-weight:600;margin:4px 0 8px;line-height:1.3}
+h2{font-size:14px;font-weight:600;margin:26px 0 10px;color:var(--text);letter-spacing:.1px}
+h3{font-size:14.5px;font-weight:600;margin:0}
+p{margin:0 0 10px}
+a{color:var(--accent)}
+.muted{color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:1px 8px;border-radius:999px;background:transparent;color:var(--muted);border:1px solid var(--line2);white-space:nowrap}
+.chip.open{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.chip.decided{background:var(--good-bg);color:var(--good);border-color:transparent}
+.chip.found{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.chip.superseded,.chip.rejected{text-decoration:line-through}
+.icon{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-width:0}
+.btn{font:inherit;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:7px;border:1px solid var(--line2);background:transparent;color:var(--text);cursor:pointer}
+.btn:hover{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.18)}
+.btn.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink);font-weight:600}
+input,textarea{font:inherit;width:100%;max-width:100%;padding:8px 11px;border-radius:7px;border:1px solid var(--line2);background:var(--panel);color:var(--text)}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+svg{max-width:100%}
+
+.brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text)}
+.brand .mark{width:28px;height:28px;flex:none}
+.brand b{font-size:17px;letter-spacing:.2px}
+
+.options{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:14px}
+.opt{display:flex;flex-direction:column;gap:10px}
+.opt.is-rec{border-color:var(--warn)}
+.opt.is-chosen{border-color:var(--chosen);box-shadow:inset 0 0 0 1px var(--chosen)}
+.opt.is-dim{opacity:.62}
+.letter{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;background:var(--surface2);font-weight:600;font-size:13px;flex:none}
+.sketch{background:var(--surface2);border-radius:8px;padding:8px;color:var(--text);aspect-ratio:16/9;display:grid;place-items:center;overflow:hidden}
+.sketch svg{width:100%;height:100%;display:block}
+.pc{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:14px}
+.pc li{display:flex;gap:6px;align-items:flex-start}
+.pc .icon{margin-top:2px}
+.pro .icon{color:var(--good)}
+.con .icon{color:var(--bad)}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px}
+.badge.rec{background:var(--warn-bg);color:var(--warn)}
+.badge.ch{background:var(--good-bg);color:var(--good)}
+.crit{display:grid;gap:10px}
+.crit-row{display:grid;gap:6px}
+.crit-name{font-weight:600;font-size:14px}
+.crit-opts{display:flex;flex-wrap:wrap;gap:6px 14px}
+.score{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.pips{display:inline-flex;gap:3px}
+.pip{width:10px;height:10px;border-radius:3px;background:var(--line)}
+.pip.on{background:var(--accent)}
+.score.is-chosen .pip.on{background:var(--chosen)}
+.note{font-size:13px;color:var(--muted)}
+.pick-opts{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+.pick-opts .btn[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);font-weight:600}
+.callout{border-left:3px solid var(--warn);padding:10px 14px;background:var(--surface);border-radius:0}
+.callout.good{border-left-color:var(--chosen)}
+.callout.bad{border-left-color:var(--bad)}
+.toast{font-size:13px;color:var(--good);min-height:1.4em;margin-top:8px}
+.err{font-size:13px;color:var(--bad);min-height:1.2em}
+.sub{font-size:12px;font-weight:600;color:var(--muted);margin:2px 0 0}
+.mini{list-style:none;margin:0;padding:0;display:grid;gap:3px;font-size:13.5px}
+.mini li{display:flex;gap:6px;align-items:flex-start}
+.mini .icon{width:14px;height:14px;margin-top:3px;color:var(--muted)}
+.mini.risk .icon{color:var(--warn)}
+.est{display:grid;gap:2px;font-size:13.5px}
+.est .basis{font-size:12.5px;color:var(--muted)}
+.ev{display:grid;gap:10px}
+.ev-item{display:grid;gap:4px}
+.ev-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px}
+.ev-meta a{display:inline-flex;gap:4px;align-items:center}
+.code{font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--surface2);padding:1px 6px;border-radius:5px}
+.brief{display:grid;gap:14px}
+.brief ol{margin:0;padding-left:20px;display:grid;gap:4px}
+.reads{display:grid;gap:8px;margin:4px 0 12px}
+.read{display:flex;gap:8px;align-items:flex-start;padding:9px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--line);font-size:14px}
+.read .icon{margin-top:2px}
+.ok-read .icon{color:var(--good)}
+.warn-read{border-color:var(--warn)}.warn-read .icon{color:var(--warn)}
+.bad-read{border-color:var(--bad)}.bad-read .icon{color:var(--bad)}
+.ruled{margin-top:12px}
+.deep-chip{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script id="data" type="application/json">{"id":1,"slug":"next-up-after-v0-34","title":"What should the next Lab session build after v0.34.0?","date":"2026-11-02","mode":"quick","deep":true,"lenses":["research","solver","architecture"],"status":"decided","context":"v0.32.0–v0.34.0 (flow in the sweep, Atlas modes, Atlas entry points) merged to main on 2026-10-15. NEXT_STEPS.md names the F13LD.sweep flow port next, then HX-1 inertial pressure drop; scope §17 lists them the other way round. Two older items are still open in the code: buckling and crush voxel prep on the main thread (the 2026-10-08 goal), and a handful of small follow-ups. Nothing has moved in Lab or Sweep since 2026-10-15.","depends_on":[],"conflicts":[],"log_refs":[{"file":"docs/NEXT_STEPS.md","entry":"PICK UP HERE (2026-10-15): (2) Sweep flow port, (3) HX-1"},{"file":"docs/FLUIDS_LBM_SCOPE.md","entry":"§11.7 Reynolds list waits for the user's answer; §17 Next: HX-1, then Sweep port"},{"file":"docs/NEXT_STEPS.md","entry":"§1 (2026-10-08): Buckling and Crush prep onto background workers"}],"options":[{"key":"A","name":"F13LD.sweep flow port","summary":"Copy 14e, 19g and 19h into Sweep's solver/lab/, flow at 32³ in Fast and 64³ otherwise, append flow columns after the existing ones so F13LD.ingest's validator keeps passing. Vault columns in a later pass.","sketch":"\u003csvg viewBox='0 0 320 180' xmlns='http://www.w3.org/2000/svg'>\u003crect x='14' y='40' width='92' height='100' rx='8' fill='var(--muted)' opacity='0.35' stroke='currentColor'/>\u003ctext x='60' y='32' font-size='13' text-anchor='middle' fill='currentColor'>Lab\u003c/text>\u003ctext x='60' y='78' font-size='12' text-anchor='middle' fill='currentColor'>14e 19g 19h\u003c/text>\u003crect x='214' y='40' width='92' height='100' rx='8' fill='var(--accent)' opacity='0.35' stroke='currentColor'/>\u003ctext x='260' y='32' font-size='13' text-anchor='middle' fill='currentColor'>Sweep\u003c/text>\u003ctext x='260' y='78' font-size='12' text-anchor='middle' fill='currentColor'>flow cols\u003c/text>\u003cline x1='110' y1='90' x2='208' y2='90' stroke='currentColor' stroke-width='2'/>\u003cpolygon points='208,84 218,90 208,96' fill='currentColor'/>\u003ctext x='160' y='80' font-size='12' text-anchor='middle' fill='currentColor'>byte copy\u003c/text>\u003ctext x='160' y='165' font-size='12' text-anchor='middle' fill='currentColor'>then Vault\u003c/text>\u003c/svg>","pros":["It is the order Matt set on 2026-10-15 and has been queued since 2026-10-14.","Puts permeability and wall shear into the database that Vault and surrogate work read from, at sweep scale.","14e, 19g and 19h are close to clean copies: 19g needs only WGPU.device (already in Sweep) and 19h's summary code has no UI ties.","Porting the Stokes-only solver now gives Sweep a fixed copy before HX-1 changes 19g."],"cons":["17c's flow job does not copy cleanly: it pulls in the whole worker pool and kernels 13–14 that Sweep lacks. Use the existing no-worker path (buildFlowLinks) or copy 17c and its imports.","Work happens in another repo that is not checked out here; Lab itself gains nothing user-visible.","Once HX-1 lands, 19g changes and Sweep's copy must be re-synced."],"effort":"About 1–2 sessions, mostly in the Sweep repo.","source":"claude","assumptions":["Sweep's single-thread link build is fast enough at 32³ and 64³ (it runs once per design, before a solve of under a second).","F13LD.ingest's validator accepts columns appended after the existing ones."],"risks":["The 17c dependency grows into copying 13, 13b, 13c, 13d and 14 too, widening the byte-copy contract between the repos.","Flow at 32³ in Fast may fall below the grid rule (scope §3.8) on thin-pore designs; the coarse flag must travel with the port."],"estimates":[{"what":"Effort","value":"1–2 sessions","basis":"14e, 19g, 19h copy with small guards; Lab's 62-sweep.js:537-554 is a ready template for the caller"},{"what":"Flow time per design in Sweep","value":"about 0.1–0.4 s solve at 64³ on an RTX, plus link build","basis":"scope §12–13: 64³ about 0.09 s per direction bench, 0.35–0.41 s per design measured by Matt"}]},{"key":"B","name":"HX-1 inertial pressure drop","summary":"Per-axis flow at a list of Reynolds numbers with a mean-velocity force controller, Darcy–Forchheimer fit, Fanning friction factor, unsteady flag, heat-exchanger fluid presets and a long-format CSV (scope §11.2).","sketch":"\u003csvg viewBox='0 0 320 180' xmlns='http://www.w3.org/2000/svg'>\u003cline x1='40' y1='150' x2='300' y2='150' stroke='currentColor'/>\u003cline x1='40' y1='150' x2='40' y2='20' stroke='currentColor'/>\u003ctext x='170' y='172' font-size='12' text-anchor='middle' fill='currentColor'>speed\u003c/text>\u003ctext x='14' y='90' font-size='12' fill='currentColor' transform='rotate(-90 14 90)'>dp/dx\u003c/text>\u003cline x1='40' y1='150' x2='290' y2='70' stroke='var(--muted)' stroke-width='2' stroke-dasharray='5 4'/>\u003cpath d='M40 150 Q180 120 290 30' fill='none' stroke='var(--accent)' stroke-width='3'/>\u003ctext x='230' y='92' font-size='12' fill='currentColor'>Darcy\u003c/text>\u003ctext x='190' y='50' font-size='12' fill='currentColor'>Forchheimer\u003c/text>\u003c/svg>","pros":["The kernel is already fully nonlinear (quadratic equilibrium, Guo forcing); only the driver, cache key and outputs are new.","A ready pass/fail check now exists: Tupin and Ohta refit Castro's measurements with Forchheimer (k and β for gyroid, P and D), which would close the F12 P-gap question.","Serves the heat-exchanger database user directly and is the gate for HX-2 convective heat transfer.","The Reynolds-list blocker is softer than it looks: Castro's experiments span Re 29–145, inside the scope's default 1–200."],"cons":["Largest of the options: controller, warm start, per-Re cache and results, presets, cards, sweep and long CSV.","Breaks the linear-flow assumptions the cards rely on (fields stored per unit force, wall shear rescaled linearly, cache without fluid), so the Stokes path must be kept separate and unchanged.","64³ is marginal: published TRT runs at Re up to about 200 used about 38 cells per sphere diameter; higher points need 128³ and averaging if unsteady."],"effort":"About 3–4 sessions.","source":"claude","assumptions":["Matt accepts the scope defaults (1, 10, 50, 100, 200) without the user's operating range, editable later.","The Stokes path stays byte-identical, so cards, sweep and the Sweep port are unaffected."],"risks":["Compressibility error at higher Re (Mach) and τ near ½ make the top Re points noisy at 64³; results need a resolution flag.","Unsteady onset (Re about 110–250 in periodic packs) forces long time-averaged runs at 128³, tens of seconds per point."],"estimates":[{"what":"Effort","value":"3–4 sessions","basis":"earlier fluids phases took about one session each; no kernel rewrite, but four layers (driver, results, UI and CSV, validation)"},{"what":"Run time per design","value":"about 5 Re × 3 axes = 15 solves; seconds at 64³, 10–60 s per unsteady point at 128³","basis":"64³ bench 0.09 s per direction from rest; 128³ 2.9 s per 5,000 steps; unsteady averaging about 10⁵ steps (extrapolated)"}]},{"key":"C","name":"Buckling and crush prep off the main thread","summary":"The 2026-10-08 goal: crush upload async on the 17c pool (0/1 cube), buckling voxelized once and sent to the axis workers, predict probe timed and moved if slow. Bit-identical checks in validate-prep.js.","sketch":"\u003csvg viewBox='0 0 320 180' xmlns='http://www.w3.org/2000/svg'>\u003crect x='20' y='30' width='130' height='34' rx='6' fill='var(--warn)' opacity='0.45' stroke='currentColor'/>\u003ctext x='85' y='52' font-size='12' text-anchor='middle' fill='currentColor'>main thread\u003c/text>\u003crect x='170' y='30' width='130' height='34' rx='6' fill='var(--good)' opacity='0.45' stroke='currentColor'/>\u003ctext x='235' y='52' font-size='12' text-anchor='middle' fill='currentColor'>17c pool\u003c/text>\u003cline x1='85' y1='70' x2='85' y2='120' stroke='currentColor'/>\u003cline x1='85' y1='120' x2='225' y2='120' stroke='currentColor'/>\u003cpolygon points='225,114 235,120 225,126' fill='currentColor'/>\u003ctext x='160' y='148' font-size='12' text-anchor='middle' fill='currentColor'>no page freeze\u003c/text>\u003c/svg>","pros":["Smallest self-contained piece, entirely in Lab; the pattern and pieces already exist (labPrepElasticParallel, _TV_PREP_CACHE, 16b's fallback).","Removes the last page freeze; buckling stops voxelizing once per axis worker.","Easy to verify: bit-identical grids, buckling factors unchanged."],"cons":["Both features are off by default, so few runs hit the freeze today.","Moves no research question forward and does not touch the fluids track Matt has been driving."],"effort":"About 1 session.","source":"claude","assumptions":["Prep, not the solve, is the bulk of the freeze (to profile first, as §1 asks)."],"risks":["16g's upload has five call sites; making it async can reorder state in the crush run loop."],"estimates":[{"what":"Effort","value":"about 1 session","basis":"same pattern v0.24.0 used for elastic, with the checks already written"}]},{"key":"D","name":"Small follow-ups pass","summary":"Validators runnable from the repo root, the phone-width header overflow, and Lab → Vault push matching on vault_id (Phase 4 of the round-trip scope).","sketch":"\u003csvg viewBox='0 0 320 180' xmlns='http://www.w3.org/2000/svg'>\u003crect x='40' y='30' width='22' height='22' rx='4' fill='none' stroke='currentColor'/>\u003ctext x='76' y='47' font-size='13' fill='currentColor'>validators\u003c/text>\u003crect x='40' y='76' width='22' height='22' rx='4' fill='none' stroke='currentColor'/>\u003ctext x='76' y='93' font-size='13' fill='currentColor'>header width\u003c/text>\u003crect x='40' y='122' width='22' height='22' rx='4' fill='none' stroke='currentColor'/>\u003ctext x='76' y='139' font-size='13' fill='currentColor'>Vault push\u003c/text>\u003crect x='220' y='60' width='70' height='60' rx='8' fill='var(--muted)' opacity='0.35'/>\u003ctext x='255' y='95' font-size='12' text-anchor='middle' fill='currentColor'>tidy\u003c/text>\u003c/svg>","pros":["Clears known debt; every validator running from the root makes later sessions' checks cheaper.","Each item is low risk and independently reversible."],"cons":["The Vault push is not small: no push code exists yet, so it is really its own phase.","Little user-visible value apart from the phone header."],"effort":"Under 1 session without the Vault push; 1–2 with it.","source":"claude","assumptions":["The Vault push is scoped out or done as a separate phase."],"risks":["Scope creep into the round trip, which needs Ingest and Vault changes too."],"estimates":[{"what":"Effort","value":"half a session for validators and header","basis":"two require-path fixes and one CSS breakpoint"}]},{"key":"E","name":"Viewer modes on the Geometry tab","summary":"Look into a curvature view, and other views to swap to on the main page beyond the shaded one.","pros":[],"cons":[],"source":"human"}],"criteria":[{"name":"Value of the result","scores":{"A":3,"B":3,"C":2,"D":1},"note":"A fills the comparison database; B answers the Castro gap and serves the HX user"},{"name":"Time to first result","scores":{"A":3,"B":1,"C":3,"D":3}},{"name":"Risk to existing results","scores":{"A":3,"B":2,"C":2,"D":3},"note":"B must keep the Stokes path identical; C touches five crush call sites"},{"name":"Readiness (nothing blocking)","scores":{"A":2,"B":2,"C":3,"D":3},"note":"A: 17c copy question and a repo not checked out here; B: Reynolds list waits on the user"},{"name":"Fits Matt's stated order","scores":{"A":3,"B":2,"C":1,"D":1}}],"evidence":[{"claim":"Sweep's solver/lab/ has no flow files (14e, 17c, 19g, 19h absent) and no commits since 2026-10-14, so the port has not started.","options":["A"],"source":"GitHub API, mshomper/f13ld.sweep contents and commits","url":"https://github.com/mshomper/f13ld.sweep"},{"claim":"17c's flow job depends on the whole worker pool and kernels Sweep lacks; 14e, 19g and 19h copy with small guards, and a no-worker path already exists.","options":["A"],"judgment":true},{"claim":"Lab's flow kernel is D3Q19 TRT with Guo forcing and a full quadratic equilibrium; it runs in the Stokes limit only because the force is tiny (g = 1e-5·(64/N)²).","options":["B"],"judgment":true},{"claim":"Castro's measurements span Re 29–145; a Forchheimer refit gives k and β for D (8.68e-8 m², 5390 /m), gyroid (2.40e-7 m², 3044 /m) and P (1.31e-7 m², 4035 /m), and Darcy underestimated k by 36–85 %.","options":["B"],"source":"Tupin & Ohta, comment on Castro et al. 2019 (Materials)","url":"https://pmc.ncbi.nlm.nih.gov/articles/PMC7321472"},{"claim":"TRT with CLI walls on a periodic sphere pack: departs from Darcy at Re_p about 20, unsteady at about 180, and used about 38 cells per diameter with Λ = 3/16 up to Re_p about 200.","options":["B"],"source":"Fattahi et al., Pore-scale lattice Boltzmann simulation of laminar and turbulent flow through a sphere pack (arXiv 1508.02960)","url":"https://arxiv.org/abs/1508.02960"},{"claim":"TPMS lattices leave the Darcy regime early: Re about 4 for Primitive, about 20 for Diamond.","options":["B"],"source":"Rathore et al., Flow Characterization in TPMS based Porous Geometries: Part 1 (arXiv 2205.03591)","url":"https://arxiv.org/abs/2205.03591"},{"claim":"Buckling and crush prep are still synchronous (16g upload, per-worker voxelization in 16h and 16c); labPrepElasticParallel and _TV_PREP_CACHE exist to reuse.","options":["C"],"judgment":true}],"recommended":"A","recommendation":"Port first, as Matt ordered: it is one to two sessions, it lands flow in the comparison database before HX-1 changes 19g, and its one snag (17c) has a ready workaround. Then HX-1, which now has a real validation target in the Tupin and Ohta refit of Castro.","confidence":"lean","change_mind":"If the heat-exchanger user is waiting, or Matt wants the Castro P-gap closed before more data goes to Vault, B goes first: the kernel is ready and the Tupin and Ohta β values make it testable now.","chosen":"E","reason":"neither, I actually want to look into a curvature visualization toggle for the lab. Which made me think of other visualization toggles we could swap into for the main page of the lab rather than just the \"shader\" view","decided_on":"2026-11-06","superseded_by":null,"challenge":null,"settles":[],"_file":"0001-next-up-after-v0-34.html","_links":{"1":"0001-next-up-after-v0-34.html","2":"0002-geometry-view-picker-scope.html"}}</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const I = {
+  star:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>',
+  check:'<svg class="icon" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  plus:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  minus:'<svg class="icon" viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
+  back:'<svg class="icon" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
+  copy:'<svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>',
+  link:'<svg class="icon" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
+  alert:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></svg>',
+  dot:'<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/></svg>',
+  book:'<svg class="icon" viewBox="0 0 24 24"><path d="M5 4h9a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4z"/><path d="M5 16a4 4 0 0 1 4-4h9"/></svg>',
+  brain:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 5a3 3 0 0 0-6 1 3 3 0 0 0-1 5 3 3 0 0 0 2 5 3 3 0 0 0 5 2z"/><path d="M12 5a3 3 0 0 1 6 1 3 3 0 0 1 1 5 3 3 0 0 1-2 5 3 3 0 0 1-5 2"/></svg>',
+  edit:'<svg class="icon" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+  clock:'<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>'
+};
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pad = n => String(n).padStart(4, '0');
+const conf = {strong:'Strong recommendation', lean:'Leaning', 'toss-up':'Toss-up'};
+document.title = `${pad(D.id)} ${D.title} · Crux`;
+const opts = D.options || [];
+const decided = D.status === 'decided' && D.chosen;
+
+function refLinks(list){
+  return (list || []).map(n => `<a href="${esc(fileOf(n))}">${pad(n)}</a>`).join(', ');
+}
+function fileOf(n){ return (D._links || {})[n] || 'index.html'; }
+
+let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></div>`;
+h += `<div class="row" style="margin-top:14px"><span class="muted">${pad(D.id)}</span><span class="chip ${esc(D.status)}">${esc(D.status)}</span><span class="chip">${I.clock}${esc(D.date)}</span>${(D.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}${D.deep?'<span class="chip deep-chip">deep</span>':''}</div>`;
+h += `<h1>${esc(D.title)}</h1><p>${esc(D.context)}</p>`;
+if ((D.depends_on||[]).length) h += `<p class="muted row" style="gap:6px">${I.link}Builds on ${refLinks(D.depends_on)}</p>`;
+if ((D.conflicts||[]).length) h += `<div class="callout bad"><b>Conflicts with active decision ${refLinks(D.conflicts)}.</b> Picking against it means superseding that decision.</div>`;
+if (D.deliberate || D.holding_up || D.open_item){
+  const dl = {yes:'Deliberate', likely:'Likely deliberate', unclear:'Unclear, may be accidental'}[D.deliberate] || '';
+  h += `<div class="reads">
+    ${D.open_item?`<div class="read bad-read">${I.alert}<div><b>Open item in the repo's own log.</b> Confirming this finding closes it.</div></div>`:''}
+    ${dl?`<div class="read">${I.check}<div><b>${esc(dl)}</b></div></div>`:''}
+    ${D.holding_up?`<div class="read ${D.holding_up==='strained'?'warn-read':'ok-read'}">${D.holding_up==='strained'?I.alert:I.check}<div><b>${D.holding_up==='strained'?'Strained':'Holding up'}</b>${D.strain?`<div>${esc(D.strain)}</div>`:''}</div></div>`:''}
+  </div>`;
+}
+if (D.status === 'parked'){
+  const rv = D.revisit || {}; const due = rv.date && rv.date <= new Date().toISOString().slice(0,10);
+  h += `<div class="read ${due?'warn-read':''}" style="margin:4px 0 12px">${I.clock}<div><b>${due?'Parked, revisit is due':'Parked'}</b><div>${rv.date?`Come back on ${esc(rv.date)}`:''}${rv.date&&rv.trigger?', or ':''}${rv.trigger?`Come back ${esc(rv.trigger)}`:''}</div></div></div>`;
+}
+if ((D.log_refs||[]).length) h += `<p class="muted row" style="gap:6px">${I.book}Also in the repo's log: ${D.log_refs.map(r=>`<span class="code">${esc(r.file)}</span> ${esc(r.entry||'')}`).join(', ')}</p>`;
+if (D.status === 'superseded' && D.superseded_by) h += `<div class="callout bad">Replaced by decision ${refLinks([D.superseded_by])}.</div>`;
+
+h += `<h2>Options</h2><div class="options">`;
+for (const o of opts){
+  const rec = o.key === D.recommended, ch = decided && o.key === D.chosen;
+  h += `<article class="card opt${rec?' is-rec':''}${ch?' is-chosen':''}${decided&&!ch?' is-dim':''}" id="opt-${esc(o.key)}">
+    <div class="row"><span class="letter">${esc(o.key)}</span><h3 style="flex:1;min-width:0">${esc(o.name)}</h3></div>
+    ${(rec||ch||o.source==='human')?`<div class="row">${rec?`<span class="badge rec">${I.star}${(D.status==='found'||D.deliberate)?'In the code now':'Recommended'}</span>`:''}${ch?`<span class="badge ch">${I.check}Chosen</span>`:''}${o.source==='human'?'<span class="chip">Your option</span>':''}</div>`:''}
+    ${o.sketch?`<div class="sketch">${o.sketch}</div>`:''}
+    <p style="margin:0">${esc(o.summary)}</p>
+    <ul class="pc">${(o.pros||[]).map(p=>`<li class="pro">${I.plus}<span>${esc(p)}</span></li>`).join('')}${(o.cons||[]).map(c=>`<li class="con">${I.minus}<span>${esc(c)}</span></li>`).join('')}</ul>
+    ${o.effort?`<p class="note" style="margin:0">Effort: ${esc(o.effort)}</p>`:''}
+    ${(o.assumptions||[]).length?`<div class="sub">Assumes</div><ul class="mini">${o.assumptions.map(a=>`<li>${I.dot}<span>${esc(a)}</span></li>`).join('')}</ul>`:''}
+    ${(o.risks||[]).length?`<div class="sub">Risks</div><ul class="mini risk">${o.risks.map(r=>`<li>${I.alert}<span>${esc(r)}</span></li>`).join('')}</ul>`:''}
+    ${(o.estimates||[]).length?`<div class="sub">Estimates</div><div class="est">${o.estimates.map(e=>`<div><b>${esc(e.what)}:</b> ${esc(e.value)}${e.basis?`<div class="basis">Basis: ${esc(e.basis)}</div>`:''}</div>`).join('')}</div>`:''}
+  </article>`;
+}
+h += `</div>`;
+if ((D.ruled_out||[]).length) h += `<div class="ruled"><div class="sub">Ruled out</div><ul class="mini">${D.ruled_out.map(r=>`<li>${I.minus}<span>${esc(r.option)} <span class="muted">· ${esc(r.by)}</span></span></li>`).join('')}</ul></div>`;
+
+if ((D.criteria||[]).length){
+  h += `<h2>How they compare</h2><div class="card crit">`;
+  for (const c of D.criteria){
+    h += `<div class="crit-row"><div class="crit-name">${esc(c.name)}</div><div class="crit-opts">`;
+    for (const o of opts){
+      const s = (c.scores||{})[o.key];
+      if (s == null) continue;
+      h += `<span class="score${decided&&o.key===D.chosen?' is-chosen':''}"><span class="letter" style="width:22px;height:22px;font-size:12px">${esc(o.key)}</span><span class="pips">${[1,2,3].map(i=>`<span class="pip${i<=s?' on':''}"></span>`).join('')}</span></span>`;
+    }
+    h += `</div>${c.note?`<div class="note">${esc(c.note)}</div>`:''}</div>`;
+  }
+  h += `</div>`;
+}
+
+if ((D.evidence||[]).length){
+  h += `<h2>Evidence</h2><div class="card ev">${D.evidence.map(e=>`<div class="ev-item"><div>${esc(e.claim)}</div><div class="ev-meta">${(e.options||[]).map(k=>`<span class="letter" style="width:20px;height:20px;font-size:11px">${esc(k)}</span>`).join('')}${e.judgment||!e.url?`<span class="chip">${I.brain}Claude's judgment</span>`:`<a href="${esc(e.url)}" target="_blank" rel="noopener">${I.book}${esc(e.source||e.url)}</a>`}</div></div>`).join('')}</div>`;
+}
+
+if (D.recommended){
+  const ro = opts.find(o=>o.key===D.recommended);
+  const isFinding = D.status === 'found' || D.deliberate;
+  h += `<h2>${isFinding?'Evidence in the code':"Claude's recommendation"}</h2><div class="callout"><b>${esc(D.recommended)}${ro?': '+esc(ro.name):''}</b>${!isFinding && D.confidence?` <span class="muted">· ${esc(conf[D.confidence]||D.confidence)}</span>`:''}<p style="margin:6px 0 0">${esc(D.recommendation)}</p>${D.change_mind?`<p style="margin:8px 0 0"><span class="muted">What would change this:</span> ${esc(D.change_mind)}</p>`:''}</div>`;
+}
+
+if (D.challenge) h += `<h2>The case against the pick</h2><div class="callout bad"><p style="margin:0">${esc(D.challenge)}</p></div>`;
+
+if (decided){
+  const co = opts.find(o=>o.key===D.chosen);
+  h += `<h2>Your decision</h2><div class="callout good"><b>${esc(D.chosen)}${co?': '+esc(co.name):''}</b>${D.decided_on?` <span class="muted">· ${esc(D.decided_on)}</span>`:''}${D.reason?`<p style="margin:6px 0 0">${esc(D.reason)}</p>`:''}</div>`;
+  const B = D.brief;
+  if (B){
+    const list = (t, arr, ordered) => (arr||[]).length ? `<div><div class="sub">${t}</div>${ordered?`<ol>${arr.map(x=>`<li>${esc(x)}</li>`).join('')}</ol>`:`<ul class="mini">${arr.map(x=>`<li>${I.dot}<span>${esc(x)}</span></li>`).join('')}</ul>`}</div>` : '';
+    h += `<h2>Build brief</h2><div class="card brief">
+      ${(B.files||[]).length?`<div><div class="sub">Files</div><ul class="mini">${B.files.map(f=>`<li>${I.dot}<span><span class="code">${esc(f.path)}</span> ${esc(f.change)}</span></li>`).join('')}</ul></div>`:''}
+      ${list('Steps', B.steps, true)}${list('Done when', B.done_when)}${list('Validation', B.validation)}${list('Avoid', B.avoid)}
+    </div>`;
+  }
+} else if (D.status === 'rejected'){
+  h += `<h2>Dropped</h2><div class="callout bad">${D.reason?`<p style="margin:0">${esc(D.reason)}</p>`:'<p style="margin:0" class="muted">No reason given.</p>'}</div>`;
+} else if (D.status === 'found'){
+  h += `<h2>Review this finding</h2><div class="card">
+    <div class="pick-opts" role="group" aria-label="Review">
+      <button class="btn" data-act="confirm" aria-pressed="false">${I.check}Confirm</button>
+      <button class="btn" data-act="reject" aria-pressed="false">${I.minus}Reject</button>
+      <button class="btn" data-act="edit" aria-pressed="false">${I.edit}Edit</button>
+    </div>
+    <label class="note" for="why" id="whyLabel">Note (optional)</label>
+    <textarea id="why" rows="2" placeholder="Anything to add, such as why it was done this way"></textarea>
+    <div class="err" id="err"></div>
+    <div class="row" style="margin-top:4px"><button class="btn primary" id="copyReview">${I.copy}Copy for Claude</button></div>
+    <div class="toast" id="toast"></div>
+    <p class="note" style="margin:6px 0 0">Paste the copied line into Claude, or reply there with several at once, such as "confirm 3, 5; reject 4".</p>
+  </div>`;
+} else if (D.status === 'open'){
+  h += `<h2>Make the call</h2><div class="card">
+    <div class="pick-opts" role="group" aria-label="Options">${opts.map(o=>`<button class="btn" data-k="${esc(o.key)}" aria-pressed="false">${esc(o.key)}: ${esc(o.name)}</button>`).join('')}</div>
+    <div class="pick-opts" role="group" aria-label="Or set it aside" style="margin-top:-4px"><span class="note" style="align-self:center">Or</span><button class="btn" data-k="park" aria-pressed="false">${I.clock}Park it</button><button class="btn" data-k="drop" aria-pressed="false">${I.minus}Drop it</button></div>
+    <label class="note" for="why" id="pickLabel">Your reason (optional)</label>
+    <textarea id="why" rows="2" placeholder="Why this one, in a sentence"></textarea>
+    <div class="err" id="err"></div>
+    <div class="row" style="margin-top:4px"><button class="btn primary" id="copy">${I.copy}Copy pick for Claude</button></div>
+    <div class="toast" id="toast"></div>
+    <p class="note" style="margin:6px 0 0">Paste the copied line into Claude, or just type the letter there.</p>
+  </div>`;
+}
+document.getElementById('app').innerHTML = h;
+
+let pick = null;
+document.querySelectorAll('.pick-opts .btn').forEach(b => b.addEventListener('click', () => {
+  pick = b.dataset.k;
+  document.querySelectorAll('.pick-opts .btn').forEach(x => x.setAttribute('aria-pressed', x === b));
+  const pl = document.getElementById('pickLabel');
+  if (pl) pl.textContent = pick === 'park' ? 'When to come back: a date or a trigger (required)' : pick === 'drop' ? 'Why not (optional)' : 'Your reason (optional)';
+  document.getElementById('err').textContent = '';
+}));
+const copyBtn = document.getElementById('copy');
+if (copyBtn) copyBtn.addEventListener('click', async () => {
+  if (!pick){ document.getElementById('err').textContent = 'Choose an option first'; return; }
+  const why = document.getElementById('why').value.trim();
+  if (pick === 'park' && !why){ document.getElementById('err').textContent = 'Say when to come back to it'; return; }
+  const line = pick === 'park' ? `Decision ${pad(D.id)}: park, revisit ${why}`
+    : pick === 'drop' ? `Decision ${pad(D.id)}: drop.` + (why ? ` Reason: ${why}` : '')
+    : `Decision ${pad(D.id)}: pick ${pick}.` + (why ? ` Reason: ${why}` : '');
+  try { await navigator.clipboard.writeText(line); document.getElementById('toast').textContent = 'Copied. Paste it into Claude.'; }
+  catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
+});
+let act = null;
+document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+  act = b.dataset.act;
+  document.querySelectorAll('[data-act]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  document.getElementById('whyLabel').textContent = act === 'edit' ? 'What should change (required)' : 'Note (optional)';
+  document.getElementById('err').textContent = '';
+}));
+const rev = document.getElementById('copyReview');
+if (rev) rev.addEventListener('click', async () => {
+  const why = document.getElementById('why').value.trim();
+  if (!act){ document.getElementById('err').textContent = 'Choose confirm, reject or edit first'; return; }
+  if (act === 'edit' && !why){ document.getElementById('err').textContent = 'Say what should change'; return; }
+  const line = `Decision ${pad(D.id)}: ${act}` + (why ? `: ${why}` : '.');
+  try { await navigator.clipboard.writeText(line); document.getElementById('toast').textContent = 'Copied. Paste it into Claude.'; }
+  catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
+});
+document.getElementById('why')?.addEventListener('input', () => document.getElementById('err').textContent = '');
+</script>
+</body>
+</html>

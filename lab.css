@@ -1474,3 +1474,16 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
 @media (max-width:860px) { .at-guide .steps { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
 @media (max-width:520px) { .at-guide .steps { grid-template-columns:1fr; } }
 @media (max-width:820px) { .at-top { padding-right:72px; } .at-hbtns2 { position:absolute; top:0; right:0; } }
+
+/* v0.35.0 — Geometry tab views (31-geom-views.js) */
+.geom-view-row { display:none; flex-wrap:wrap; align-items:center; gap:8px 14px; padding:7px 16px; background:var(--panel-3); border-bottom:0.5px solid var(--line) }
+.geom-view-row.show { display:flex }
+.geom-view-row .th-toggle { display:inline-flex; flex-wrap:wrap }
+.geom-view-row .th-btn { padding:5px 9px }
+.geom-view-row .stress-norm-label { margin-right:-8px }
+.geom-legend { display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; margin-left:auto }
+.geom-legend:empty { display:none }
+.gl-bar { width:150px; height:8px; border-radius:2px; flex:none }
+.gl-v, .gl-n { font:10px 'JetBrains Mono', ui-monospace, monospace; color:rgba(255,255,255,0.6); white-space:nowrap }
+.gl-n { margin-left:4px; color:rgba(255,255,255,0.45) }
+.gl-sw { width:10px; height:10px; border-radius:2px; flex:none; margin-left:8px }
