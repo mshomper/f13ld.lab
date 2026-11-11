@@ -1,0 +1,69 @@
+{
+ "id": 10,
+ "slug": "per-design-geometry-numbers",
+ "title": "How should Lab measure and show each design's thinnest wall, tightest gap and tightest radius?",
+ "date": "2026-11-11",
+ "mode": "quick",
+ "lenses": [
+  "ui",
+  "solver"
+ ],
+ "status": "decided",
+ "context": "The v0.35.0 Geometry views colour the surface but give no single number per design. Lab already measures 'thinnest feature' for the sweep with inscribed balls on the 0/1 voxels (14d, 5th percentile), while the Wall thickness and Pore size views measure straight through along the surface normal. The two definitions read differently on the same design, so the choice decides which one users trust.",
+ "depends_on": [
+  2
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Inscribed-ball numbers, on each Geometry tile",
+   "summary": "Reuse the sweep's existing measure (largest ball that fits, 5th percentile) for wall and gap, plus the 5th-percentile tightest radius from the baked curvature; run once per design on the worker pool and show one line on each tile for the active view, red under the slider limit.",
+   "pros": [
+    "Same number as the sweep CSV and Atlas, so Lab and Sweep agree.",
+    "Reuses tested code (periodic distance transform in 14c/14d); about one session."
+   ],
+   "cons": [
+    "Can read thicker than the colour map shows on oblique sheets, because the view measures along the normal."
+   ],
+   "effort": "About one session: one new pool job in 17c, a tile readout in 31, lab.css.",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Along-the-normal numbers, matching the colour map",
+   "summary": "Compute the same straight-through chord the Wall thickness and Pore size views draw, on the CPU over surface points, and report its 5th percentile on each tile.",
+   "pros": [
+    "The number always matches the reddest spot the user sees."
+   ],
+   "cons": [
+    "New CPU code that differs from the sweep's 'thinnest feature', so two thinnest-wall numbers exist in Lab.",
+    "Pore size along the normal is not a true pore diameter (noted in v0.35.0)."
+   ],
+   "effort": "About 1.5 sessions: new chord march on the pool plus the same tile readout.",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Inscribed-ball numbers as card rows",
+   "summary": "Same measure as A, but shown as rows on the design cards (Geometry section) instead of on the tiles.",
+   "pros": [
+    "Visible on every tab and exportable with the cards later."
+   ],
+   "cons": [
+    "Cards are already dense; the number sits away from the view it explains."
+   ],
+   "effort": "About one session; touches 40-design-grid card rows.",
+   "source": "claude"
+  }
+ ],
+ "recommended": "A",
+ "recommendation": "One definition across Lab and Sweep is worth more than an exact match to the colour map; the tile line puts the number where the eye already is.",
+ "confidence": "lean",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": []
+}

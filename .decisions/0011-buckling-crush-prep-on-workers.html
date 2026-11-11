@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%23a2aab7' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%238ea8ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%238ea8ff'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%238ea8ff'/%3E%3C/svg%3E">
+<title>Decision</title>
+<style>
+:root{--bg:#0b0d11;--panel:#10141a;--lane:#12161c;--surface:#191e26;--surface2:#1e242d;--raised:#1b2029;--line:rgba(255,255,255,.075);--line2:rgba(255,255,255,.12);--text:#e7eaf0;--muted:#a2aab7;--faint:#6c7584;--accent:#8ea8ff;--accent-ink:#0d1530;--accent-bg:rgba(142,168,255,.14);--good:#5fd3ae;--good-bg:rgba(95,211,174,.13);--warn:#f3b955;--warn-bg:rgba(243,185,85,.13);--bad:#f2727a;--bad-bg:rgba(242,114,122,.13);--chosen:#5fd3ae;--hist:#8792ad;--radius:10px;--font:"Segoe UI Variable Text","Segoe UI",Inter,system-ui,-apple-system,sans-serif;--mono:"Cascadia Mono",Consolas,ui-monospace,monospace;--good-fill:#5fd3ae;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--font);overflow-wrap:anywhere;-webkit-font-smoothing:antialiased}
+main{max-width:1240px;margin:0 auto;padding:18px 18px 48px}
+h1{font-size:21px;font-weight:600;margin:4px 0 8px;line-height:1.3}
+h2{font-size:14px;font-weight:600;margin:26px 0 10px;color:var(--text);letter-spacing:.1px}
+h3{font-size:14.5px;font-weight:600;margin:0}
+p{margin:0 0 10px}
+a{color:var(--accent)}
+.muted{color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:1px 8px;border-radius:999px;background:transparent;color:var(--muted);border:1px solid var(--line2);white-space:nowrap}
+.chip.open{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.chip.decided{background:var(--good-bg);color:var(--good);border-color:transparent}
+.chip.found{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.chip.superseded,.chip.rejected{text-decoration:line-through}
+.icon{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-width:0}
+.btn{font:inherit;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:7px;border:1px solid var(--line2);background:transparent;color:var(--text);cursor:pointer}
+.btn:hover{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.18)}
+.btn.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink);font-weight:600}
+input,textarea{font:inherit;width:100%;max-width:100%;padding:8px 11px;border-radius:7px;border:1px solid var(--line2);background:var(--panel);color:var(--text)}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+svg{max-width:100%}
+
+.brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text)}
+.brand .mark{width:28px;height:28px;flex:none}
+.brand b{font-size:17px;letter-spacing:.2px}
+
+.options{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:14px}
+.opt{display:flex;flex-direction:column;gap:10px}
+.opt.is-rec{border-color:var(--warn)}
+.opt.is-chosen{border-color:var(--chosen);box-shadow:inset 0 0 0 1px var(--chosen)}
+.opt.is-dim{opacity:.62}
+.letter{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;background:var(--surface2);font-weight:600;font-size:13px;flex:none}
+.sketch{background:var(--surface2);border-radius:8px;padding:8px;color:var(--text);aspect-ratio:16/9;display:grid;place-items:center;overflow:hidden}
+.sketch svg{width:100%;height:100%;display:block}
+.pc{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:14px}
+.pc li{display:flex;gap:6px;align-items:flex-start}
+.pc .icon{margin-top:2px}
+.pro .icon{color:var(--good)}
+.con .icon{color:var(--bad)}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px}
+.badge.rec{background:var(--warn-bg);color:var(--warn)}
+.badge.ch{background:var(--good-bg);color:var(--good)}
+.crit{display:grid;gap:10px}
+.crit-row{display:grid;gap:6px}
+.crit-name{font-weight:600;font-size:14px}
+.crit-opts{display:flex;flex-wrap:wrap;gap:6px 14px}
+.score{display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.pips{display:inline-flex;gap:3px}
+.pip{width:10px;height:10px;border-radius:3px;background:var(--line)}
+.pip.on{background:var(--accent)}
+.score.is-chosen .pip.on{background:var(--chosen)}
+.note{font-size:13px;color:var(--muted)}
+.pick-opts{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+.pick-opts .btn[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);font-weight:600}
+.callout{border-left:3px solid var(--warn);padding:10px 14px;background:var(--surface);border-radius:0}
+.callout.good{border-left-color:var(--chosen)}
+.callout.bad{border-left-color:var(--bad)}
+.toast{font-size:13px;color:var(--good);min-height:1.4em;margin-top:8px}
+.err{font-size:13px;color:var(--bad);min-height:1.2em}
+.sub{font-size:12px;font-weight:600;color:var(--muted);margin:2px 0 0}
+.mini{list-style:none;margin:0;padding:0;display:grid;gap:3px;font-size:13.5px}
+.mini li{display:flex;gap:6px;align-items:flex-start}
+.mini .icon{width:14px;height:14px;margin-top:3px;color:var(--muted)}
+.mini.risk .icon{color:var(--warn)}
+.est{display:grid;gap:2px;font-size:13.5px}
+.est .basis{font-size:12.5px;color:var(--muted)}
+.ev{display:grid;gap:10px}
+.ev-item{display:grid;gap:4px}
+.ev-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px}
+.ev-meta a{display:inline-flex;gap:4px;align-items:center}
+.code{font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--surface2);padding:1px 6px;border-radius:5px}
+.brief{display:grid;gap:14px}
+.brief ol{margin:0;padding-left:20px;display:grid;gap:4px}
+.reads{display:grid;gap:8px;margin:4px 0 12px}
+.read{display:flex;gap:8px;align-items:flex-start;padding:9px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--line);font-size:14px}
+.read .icon{margin-top:2px}
+.ok-read .icon{color:var(--good)}
+.warn-read{border-color:var(--warn)}.warn-read .icon{color:var(--warn)}
+.bad-read{border-color:var(--bad)}.bad-read .icon{color:var(--bad)}
+.ruled{margin-top:12px}
+.deep-chip{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.hub-nav{display:flex;gap:8px;align-items:center}.hub-nav a{display:inline-flex;align-items:center;gap:7px;padding:6px 14px 6px 11px;border-radius:999px;border:1px solid var(--line2);background:var(--surface);color:var(--text);font-size:13.5px;font-weight:500;text-decoration:none;transition:border-color .15s,background .15s,color .15s}.hub-nav a[hidden]{display:none}.hub-nav a svg{width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.hub-nav a:hover{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}.hub-nav a.hub{background:var(--accent-bg);border-color:transparent;color:var(--accent)}.hub-nav a.hub:hover{border-color:var(--accent)}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script id="data" type="application/json">{"id":11,"slug":"buckling-crush-prep-on-workers","title":"When and how should Buckling and Crush voxel prep move off the main thread?","date":"2026-11-11","mode":"quick","lenses":["architecture","solver"],"status":"decided","context":"Turning on Crush or Buckling still freezes the page while voxels are built on the main thread (both are off by default). Moving it to the 17c worker pool as v0.24.0 did for elastic touches six files (16g, 16c, 16e, 16h, 17c and 50-controls) and needs bit-identical checks, so it is bigger than a tidy-up.","depends_on":[],"conflicts":[],"options":[{"key":"A","name":"Crush first, as its own small release","summary":"Make the crush solver's setup wait on the pool's 0/1 grid (shared cache with elastic), keep a main-thread fallback, extend validate-prep.js. Buckling follows later.","pros":["Removes the bigger freeze with about half the risk.","Five call sites, one solver file plus 50-controls."],"cons":["Buckling still voxelizes once per axis in each worker until the second step."],"effort":"About one session.","source":"claude"},{"key":"B","name":"Both together, one release","summary":"Crush as in A, plus buckling builds its grid once on the pool and sends it to the axis workers, and the buckling-size probe moves to the pool if it takes over 50 ms.","pros":["Closes the item in one go; one click-test round."],"cons":["Larger change across both solvers; harder to bisect if a factor shifts."],"effort":"About two sessions.","source":"claude"},{"key":"C","name":"Keep it queued","summary":"Leave it behind the Sweep flow port and HX-1; both features stay off by default.","pros":["No solver files touched while HX-1 is planned."],"cons":["The freeze stays for anyone who turns them on."],"effort":"None now.","source":"claude"}],"recommended":"A","recommendation":"Crush is the longer freeze and the cleaner change; doing it alone keeps the check simple and the release small.","confidence":"lean","chosen":"A","reason":"","decided_on":"2026-11-11","superseded_by":null,"challenge":null,"settles":[],"_file":"0011-buckling-crush-prep-on-workers.html","_links":{"1":"0001-next-up-after-v0-34.html","2":"0002-geometry-view-picker-scope.html","10":"0010-per-design-geometry-numbers.html","11":"0011-buckling-crush-prep-on-workers.html"}}</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const I = {
+  star:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>',
+  check:'<svg class="icon" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  plus:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  minus:'<svg class="icon" viewBox="0 0 24 24"><path d="M5 12h14"/></svg>',
+  back:'<svg class="icon" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
+  copy:'<svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>',
+  link:'<svg class="icon" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
+  alert:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></svg>',
+  dot:'<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/></svg>',
+  book:'<svg class="icon" viewBox="0 0 24 24"><path d="M5 4h9a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4z"/><path d="M5 16a4 4 0 0 1 4-4h9"/></svg>',
+  brain:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 5a3 3 0 0 0-6 1 3 3 0 0 0-1 5 3 3 0 0 0 2 5 3 3 0 0 0 5 2z"/><path d="M12 5a3 3 0 0 1 6 1 3 3 0 0 1 1 5 3 3 0 0 1-2 5 3 3 0 0 1-5 2"/></svg>',
+  edit:'<svg class="icon" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
+  clock:'<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>'
+};
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pad = n => String(n).padStart(4, '0');
+const conf = {strong:'Strong recommendation', lean:'Leaning', 'toss-up':'Toss-up'};
+document.title = `${pad(D.id)} ${D.title} · Crux`;
+const opts = D.options || [];
+const decided = D.status === 'decided' && D.chosen;
+
+function refLinks(list){
+  return (list || []).map(n => `<a href="${esc(fileOf(n))}">${pad(n)}</a>`).join(', ');
+}
+function fileOf(n){ return (D._links || {})[n] || 'index.html'; }
+
+let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><span class="row" style="gap:14px"><nav class="hub-nav"><a id="hub-link" class="hub" hidden href="http://localhost:4747/" title="Back to the Crux hub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h10a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2H8.5L5 16.5V14H4a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2z"/><path d="M18.5 8.5H20a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2h-1v2.5L15.5 18H12"/></svg>Open hub</a></nav><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></span></div>`;
+h += `<div class="row" style="margin-top:14px"><span class="muted">${pad(D.id)}</span><span class="chip ${esc(D.status)}">${esc(D.status)}</span><span class="chip">${I.clock}${esc(D.date)}</span>${(D.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}${D.deep?'<span class="chip deep-chip">deep</span>':''}</div>`;
+h += `<h1>${esc(D.title)}</h1><p>${esc(D.context)}</p>`;
+if ((D.depends_on||[]).length) h += `<p class="muted row" style="gap:6px">${I.link}Builds on ${refLinks(D.depends_on)}</p>`;
+if ((D.conflicts||[]).length) h += `<div class="callout bad"><b>Conflicts with active decision ${refLinks(D.conflicts)}.</b> Picking against it means superseding that decision.</div>`;
+if (D.deliberate || D.holding_up || D.open_item){
+  const dl = {yes:'Deliberate', likely:'Likely deliberate', unclear:'Unclear, may be accidental'}[D.deliberate] || '';
+  h += `<div class="reads">
+    ${D.open_item?`<div class="read bad-read">${I.alert}<div><b>Open item in the repo's own log.</b> Confirming this finding closes it.</div></div>`:''}
+    ${dl?`<div class="read">${I.check}<div><b>${esc(dl)}</b></div></div>`:''}
+    ${D.holding_up?`<div class="read ${D.holding_up==='strained'?'warn-read':'ok-read'}">${D.holding_up==='strained'?I.alert:I.check}<div><b>${D.holding_up==='strained'?'Strained':'Holding up'}</b>${D.strain?`<div>${esc(D.strain)}</div>`:''}</div></div>`:''}
+  </div>`;
+}
+if (D.status === 'parked'){
+  const rv = D.revisit || {}; const due = rv.date && rv.date <= new Date().toISOString().slice(0,10);
+  h += `<div class="read ${due?'warn-read':''}" style="margin:4px 0 12px">${I.clock}<div><b>${due?'Parked, revisit is due':'Parked'}</b><div>${rv.date?`Come back on ${esc(rv.date)}`:''}${rv.date&&rv.trigger?', or ':''}${rv.trigger?`Come back ${esc(rv.trigger)}`:''}</div></div></div>`;
+}
+if ((D.log_refs||[]).length) h += `<p class="muted row" style="gap:6px">${I.book}Also in the repo's log: ${D.log_refs.map(r=>`<span class="code">${esc(r.file)}</span> ${esc(r.entry||'')}`).join(', ')}</p>`;
+if (D.status === 'superseded' && D.superseded_by) h += `<div class="callout bad">Replaced by decision ${refLinks([D.superseded_by])}.</div>`;
+
+h += `<h2>Options</h2><div class="options">`;
+for (const o of opts){
+  const rec = o.key === D.recommended, ch = decided && o.key === D.chosen;
+  h += `<article class="card opt${rec?' is-rec':''}${ch?' is-chosen':''}${decided&&!ch?' is-dim':''}" id="opt-${esc(o.key)}">
+    <div class="row"><span class="letter">${esc(o.key)}</span><h3 style="flex:1;min-width:0">${esc(o.name)}</h3></div>
+    ${(rec||ch||o.source==='human')?`<div class="row">${rec?`<span class="badge rec">${I.star}${(D.status==='found'||D.deliberate)?'In the code now':'Recommended'}</span>`:''}${ch?`<span class="badge ch">${I.check}Chosen</span>`:''}${o.source==='human'?'<span class="chip">Your option</span>':''}</div>`:''}
+    ${o.sketch?`<div class="sketch">${o.sketch}</div>`:''}
+    <p style="margin:0">${esc(o.summary)}</p>
+    <ul class="pc">${(o.pros||[]).map(p=>`<li class="pro">${I.plus}<span>${esc(p)}</span></li>`).join('')}${(o.cons||[]).map(c=>`<li class="con">${I.minus}<span>${esc(c)}</span></li>`).join('')}</ul>
+    ${o.effort?`<p class="note" style="margin:0">Effort: ${esc(o.effort)}</p>`:''}
+    ${(o.assumptions||[]).length?`<div class="sub">Assumes</div><ul class="mini">${o.assumptions.map(a=>`<li>${I.dot}<span>${esc(a)}</span></li>`).join('')}</ul>`:''}
+    ${(o.risks||[]).length?`<div class="sub">Risks</div><ul class="mini risk">${o.risks.map(r=>`<li>${I.alert}<span>${esc(r)}</span></li>`).join('')}</ul>`:''}
+    ${(o.estimates||[]).length?`<div class="sub">Estimates</div><div class="est">${o.estimates.map(e=>`<div><b>${esc(e.what)}:</b> ${esc(e.value)}${e.basis?`<div class="basis">Basis: ${esc(e.basis)}</div>`:''}</div>`).join('')}</div>`:''}
+  </article>`;
+}
+h += `</div>`;
+if ((D.ruled_out||[]).length) h += `<div class="ruled"><div class="sub">Ruled out</div><ul class="mini">${D.ruled_out.map(r=>`<li>${I.minus}<span>${esc(r.option)} <span class="muted">· ${esc(r.by)}</span></span></li>`).join('')}</ul></div>`;
+
+if ((D.criteria||[]).length){
+  h += `<h2>How they compare</h2><div class="card crit">`;
+  for (const c of D.criteria){
+    h += `<div class="crit-row"><div class="crit-name">${esc(c.name)}</div><div class="crit-opts">`;
+    for (const o of opts){
+      const s = (c.scores||{})[o.key];
+      if (s == null) continue;
+      h += `<span class="score${decided&&o.key===D.chosen?' is-chosen':''}"><span class="letter" style="width:22px;height:22px;font-size:12px">${esc(o.key)}</span><span class="pips">${[1,2,3].map(i=>`<span class="pip${i<=s?' on':''}"></span>`).join('')}</span></span>`;
+    }
+    h += `</div>${c.note?`<div class="note">${esc(c.note)}</div>`:''}</div>`;
+  }
+  h += `</div>`;
+}
+
+if ((D.evidence||[]).length){
+  h += `<h2>Evidence</h2><div class="card ev">${D.evidence.map(e=>`<div class="ev-item"><div>${esc(e.claim)}</div><div class="ev-meta">${(e.options||[]).map(k=>`<span class="letter" style="width:20px;height:20px;font-size:11px">${esc(k)}</span>`).join('')}${e.judgment||!e.url?`<span class="chip">${I.brain}Claude's judgment</span>`:`<a href="${esc(e.url)}" target="_blank" rel="noopener">${I.book}${esc(e.source||e.url)}</a>`}</div></div>`).join('')}</div>`;
+}
+
+if (D.recommended){
+  const ro = opts.find(o=>o.key===D.recommended);
+  const isFinding = D.status === 'found' || D.deliberate;
+  h += `<h2>${isFinding?'Evidence in the code':"Claude's recommendation"}</h2><div class="callout"><b>${esc(D.recommended)}${ro?': '+esc(ro.name):''}</b>${!isFinding && D.confidence?` <span class="muted">· ${esc(conf[D.confidence]||D.confidence)}</span>`:''}<p style="margin:6px 0 0">${esc(D.recommendation)}</p>${D.change_mind?`<p style="margin:8px 0 0"><span class="muted">What would change this:</span> ${esc(D.change_mind)}</p>`:''}</div>`;
+}
+
+if (D.challenge) h += `<h2>The case against the pick</h2><div class="callout bad"><p style="margin:0">${esc(D.challenge)}</p></div>`;
+
+if (decided){
+  const co = opts.find(o=>o.key===D.chosen);
+  h += `<h2>Your decision</h2><div class="callout good"><b>${esc(D.chosen)}${co?': '+esc(co.name):''}</b>${D.decided_on?` <span class="muted">· ${esc(D.decided_on)}</span>`:''}${D.reason?`<p style="margin:6px 0 0">${esc(D.reason)}</p>`:''}</div>`;
+  const B = D.brief;
+  if (B){
+    const list = (t, arr, ordered) => (arr||[]).length ? `<div><div class="sub">${t}</div>${ordered?`<ol>${arr.map(x=>`<li>${esc(x)}</li>`).join('')}</ol>`:`<ul class="mini">${arr.map(x=>`<li>${I.dot}<span>${esc(x)}</span></li>`).join('')}</ul>`}</div>` : '';
+    h += `<h2>Build brief</h2><div class="card brief">
+      ${(B.files||[]).length?`<div><div class="sub">Files</div><ul class="mini">${B.files.map(f=>`<li>${I.dot}<span><span class="code">${esc(f.path)}</span> ${esc(f.change)}</span></li>`).join('')}</ul></div>`:''}
+      ${list('Steps', B.steps, true)}${list('Done when', B.done_when)}${list('Validation', B.validation)}${list('Avoid', B.avoid)}
+    </div>`;
+  }
+} else if (D.status === 'rejected'){
+  h += `<h2>Dropped</h2><div class="callout bad">${D.reason?`<p style="margin:0">${esc(D.reason)}</p>`:'<p style="margin:0" class="muted">No reason given.</p>'}</div>`;
+} else if (D.status === 'found'){
+  h += `<h2>Review this finding</h2><div class="card">
+    <div class="pick-opts" role="group" aria-label="Review">
+      <button class="btn" data-act="confirm" aria-pressed="false">${I.check}Confirm</button>
+      <button class="btn" data-act="reject" aria-pressed="false">${I.minus}Reject</button>
+      <button class="btn" data-act="edit" aria-pressed="false">${I.edit}Edit</button>
+    </div>
+    <label class="note" for="why" id="whyLabel">Note (optional)</label>
+    <textarea id="why" rows="2" placeholder="Anything to add, such as why it was done this way"></textarea>
+    <div class="err" id="err"></div>
+    <div class="row" style="margin-top:4px"><button class="btn primary" id="copyReview">${I.copy}Copy for Claude</button></div>
+    <div class="toast" id="toast"></div>
+    <p class="note" style="margin:6px 0 0">Paste the copied line into Claude, or reply there with several at once, such as "confirm 3, 5; reject 4".</p>
+  </div>`;
+} else if (D.status === 'open'){
+  h += `<h2>Make the call</h2><div class="card">
+    <div class="pick-opts" role="group" aria-label="Options">${opts.map(o=>`<button class="btn" data-k="${esc(o.key)}" aria-pressed="false">${esc(o.key)}: ${esc(o.name)}</button>`).join('')}</div>
+    <div class="pick-opts" role="group" aria-label="Or set it aside" style="margin-top:-4px"><span class="note" style="align-self:center">Or</span><button class="btn" data-k="park" aria-pressed="false">${I.clock}Park it</button><button class="btn" data-k="drop" aria-pressed="false">${I.minus}Drop it</button></div>
+    <label class="note" for="why" id="pickLabel">Your reason (optional)</label>
+    <textarea id="why" rows="2" placeholder="Why this one, in a sentence"></textarea>
+    <div class="err" id="err"></div>
+    <div class="row" style="margin-top:4px"><button class="btn primary" id="copy">${I.copy}Copy pick for Claude</button></div>
+    <div class="toast" id="toast"></div>
+    <p class="note" style="margin:6px 0 0">Paste the copied line into Claude, or just type the letter there.</p>
+  </div>`;
+}
+document.getElementById('app').innerHTML = h;
+
+let pick = null;
+document.querySelectorAll('.pick-opts .btn').forEach(b => b.addEventListener('click', () => {
+  pick = b.dataset.k;
+  document.querySelectorAll('.pick-opts .btn').forEach(x => x.setAttribute('aria-pressed', x === b));
+  const pl = document.getElementById('pickLabel');
+  if (pl) pl.textContent = pick === 'park' ? 'When to come back: a date or a trigger (required)' : pick === 'drop' ? 'Why not (optional)' : 'Your reason (optional)';
+  document.getElementById('err').textContent = '';
+}));
+const copyBtn = document.getElementById('copy');
+if (copyBtn) copyBtn.addEventListener('click', async () => {
+  if (!pick){ document.getElementById('err').textContent = 'Choose an option first'; return; }
+  const why = document.getElementById('why').value.trim();
+  if (pick === 'park' && !why){ document.getElementById('err').textContent = 'Say when to come back to it'; return; }
+  const line = pick === 'park' ? `Decision ${pad(D.id)}: park, revisit ${why}`
+    : pick === 'drop' ? `Decision ${pad(D.id)}: drop.` + (why ? ` Reason: ${why}` : '')
+    : `Decision ${pad(D.id)}: pick ${pick}.` + (why ? ` Reason: ${why}` : '');
+  try { await navigator.clipboard.writeText(line); document.getElementById('toast').textContent = 'Copied. Paste it into Claude.'; }
+  catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
+});
+let act = null;
+document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+  act = b.dataset.act;
+  document.querySelectorAll('[data-act]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  document.getElementById('whyLabel').textContent = act === 'edit' ? 'What should change (required)' : 'Note (optional)';
+  document.getElementById('err').textContent = '';
+}));
+const rev = document.getElementById('copyReview');
+if (rev) rev.addEventListener('click', async () => {
+  const why = document.getElementById('why').value.trim();
+  if (!act){ document.getElementById('err').textContent = 'Choose confirm, reject or edit first'; return; }
+  if (act === 'edit' && !why){ document.getElementById('err').textContent = 'Say what should change'; return; }
+  const line = `Decision ${pad(D.id)}: ${act}` + (why ? `: ${why}` : '.');
+  try { await navigator.clipboard.writeText(line); document.getElementById('toast').textContent = 'Copied. Paste it into Claude.'; }
+  catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
+});
+document.getElementById('why')?.addEventListener('input', () => document.getElementById('err').textContent = '');
+</script>
+<script>
+// Links to the Crux hub: shown when the page comes from the hub, or when a running hub answers on this machine.
+(() => {
+  const show = (id, href) => { const a = document.getElementById(id); if (a) { if (href) a.href = href; a.hidden = false; } };
+  if (location.protocol !== 'file:') { show('hub-link', '/'); show('all-link', '/all'); return; }
+  fetch('http://localhost:4747/api/ping').then(r => { if (r.ok) show('hub-link'); }).catch(() => {});
+})();
+</script>
+</body>
+</html>
