@@ -1,0 +1,6 @@
+# Crux hub: local chat log and memory for this project (never published)
+.crux/
+
+# Claude Code: personal permission rules and local working copies
+.claude/settings.local.json
+.claude/worktrees/
