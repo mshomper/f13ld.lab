@@ -14,12 +14,13 @@
   var ESCALATE = 8;   /* target voxels-per-wall (drop to 6 = riskier) */
 
   if (inNode && typeof bk_medianErosionDepth === 'undefined') {
-    var fs = require('fs');
+    var fs = require('fs'), path = require('path');
     var pipeline = ['13-kernels.js', '13b-kernels-new.js', '14-rasterizer.js',
                     '15-demo-recipes.js', '16c-buckling-cpu-ref.js'];
     var srcs = [];
+    /* v0.35.1 — read next to this script, and say which file is missing instead of skipping it */
     for (var f = 0; f < pipeline.length; f++) {
-      try { srcs.push(fs.readFileSync(pipeline[f], 'utf8')); } catch (e) {}
+      srcs.push(fs.readFileSync(path.join(__dirname, pipeline[f]), 'utf8'));
     }
     (0, eval)(srcs.join('\n'));
   }

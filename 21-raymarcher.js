@@ -58,9 +58,10 @@ var LAB_RM_VS = '#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 
      curv   curvature, read from a texture baked from the exact field (labBakeCurvature)
      chord  wall thickness and pore size
    A trailing c (shadec, overc, curvc, chordc) is for PI and normalized shells, which need the field's
-   gradient in the surface and are not level sets of the field: curvature by a stencil on their own
-   distance, one texel, so it still shows the sampling noise labBakeCurvature removes elsewhere.  The
-   stencil is a loop with one call site, because Direct3D inlines every call. */
+   gradient in the surface and are not level sets of the field.  v0.35.1 — their curvature is baked too:
+   their own distance is built from the 32-bit field (labBakeCompDistance) and labBakeCurvature reads
+   that, so they no longer speckle at tight scales (the v0.35.0 one-texel stencil on the stored texture
+   did). */
 
 /* Mean and Gaussian curvature of the level set through each voxel (world units), from the 32-bit
    field, with one-texel periodic differences.  Differencing the stored texture in the shader speckles:
@@ -95,6 +96,89 @@ function labBakeCurvature(d, N) {
     }
   }
   return out;
+}
+
+/* v0.35.1 — the distance the small shader's implicit0 draws for PI-TPMS and normalized shells (the
+   c variants), on the field's own grid, from the 32-bit field(s) instead of the R16F texture.  Same
+   formulas and clamps as implicit0; the gradient is the one-texel periodic difference of the field.
+   The PI partner (field sampled at p + pipe offset) is a periodic trilinear resample at a constant
+   offset, so its weights are the same at every voxel.  PI: negative inside the solid and growing out
+   of it, so labBakeCurvature's outward normal already points out of the solid.  Normalized shells: see
+   below.  u: the tile's uniforms
+   (topoMode, isoLevel, thickness, pipeR, pipeOffset, normMode, pairMode).  dB: field B (pair mode). */
+function labBakeCompDistance(d, dB, N, u) {
+  var N2 = N * N, N3 = N2 * N, h = 2 * Math.PI / N, i1 = 0.5 / h, a, o;
+  var ip = new Int32Array(N), im = new Int32Array(N);
+  for (a = 0; a < N; a++) { ip[a] = (a + 1) % N; im[a] = (a + N - 1) % N; }
+  function grad(src) {
+    var g = new Float32Array(3 * N3), q = 0;
+    for (var k = 0; k < N; k++) for (var j = 0; j < N; j++) for (var i = 0; i < N; i++, q += 3) {
+      var c = i + j * N + k * N2;
+      g[q]     = (src[ip[i] + j * N + k * N2] - src[im[i] + j * N + k * N2]) * i1;
+      g[q + 1] = (src[i + ip[j] * N + k * N2] - src[i + im[j] * N + k * N2]) * i1;
+      g[q + 2] = (src[c - k * N2 + ip[k] * N2] - src[c - k * N2 + im[k] * N2]) * i1;
+    }
+    return g;
+  }
+  /* src (ch channels per voxel) read at every voxel centre + off (world units), trilinear, periodic */
+  function shifted(src, ch, off) {
+    var out = new Float32Array(ch * N3), s = [], w = [], q = 0;
+    for (var ax = 0; ax < 3; ax++) { var t = off[ax] / h, f = Math.floor(t); s.push(((f % N) + N) % N); w.push(t - f); }
+    for (var k = 0; k < N; k++) {
+      var k0 = ((k + s[2]) % N) * N2, k1 = ((k + s[2] + 1) % N) * N2;
+      for (var j = 0; j < N; j++) {
+        var j0 = ((j + s[1]) % N) * N, j1 = ((j + s[1] + 1) % N) * N;
+        for (var i = 0; i < N; i++, q += ch) {
+          var i0 = (i + s[0]) % N, i1b = (i + s[0] + 1) % N;
+          var p000 = ch * (i0 + j0 + k0), p100 = ch * (i1b + j0 + k0), p010 = ch * (i0 + j1 + k0), p110 = ch * (i1b + j1 + k0);
+          var p001 = ch * (i0 + j0 + k1), p101 = ch * (i1b + j0 + k1), p011 = ch * (i0 + j1 + k1), p111 = ch * (i1b + j1 + k1);
+          for (var c = 0; c < ch; c++) {
+            var x00 = src[p000 + c] + (src[p100 + c] - src[p000 + c]) * w[0], x10 = src[p010 + c] + (src[p110 + c] - src[p010 + c]) * w[0];
+            var x01 = src[p001 + c] + (src[p101 + c] - src[p001 + c]) * w[0], x11 = src[p011 + c] + (src[p111 + c] - src[p011 + c]) * w[0];
+            var y0 = x00 + (x10 - x00) * w[1], y1 = x01 + (x11 - x01) * w[1];
+            out[q + c] = y0 + (y1 - y0) * w[2];
+          }
+        }
+      }
+    }
+    return out;
+  }
+  var out = new Float32Array(N3), iso = u.isoLevel || 0, gA = grad(d), q3;
+  if (u.topoMode > 2.5) {
+    var pair = u.pairMode > 0.5 && dB, off = u.pipeOffset || [0, 0, 0], R = u.pipeR || 0;
+    var fB = pair ? dB : shifted(d, 1, off), norm = u.normMode > 1.5;
+    if (!norm) return fB;   /* plain PI: field B on this grid (labBakeCompCurvature bakes each face) */
+    var gB = norm ? (pair ? grad(dB) : shifted(gA, 3, off)) : null;
+    for (o = 0, q3 = 0; o < N3; o++, q3 += 3) {
+      var A = d[o] - iso, B = pair ? fB[o] : fB[o] - iso;
+      var ax_ = gA[q3], ay = gA[q3 + 1], az = gA[q3 + 2], bx = gB[q3], by = gB[q3 + 1], bz = gB[q3 + 2];
+      var mA = Math.max(Math.sqrt(ax_ * ax_ + ay * ay + az * az), 0.08), mB = Math.max(Math.sqrt(bx * bx + by * by + bz * bz), 0.08);
+      var dA = A / mA, dB2 = B / mB, ca = Math.max(-0.95, Math.min(0.95, (ax_ * bx + ay * by + az * bz) / (mA * mB)));
+      out[o] = Math.sqrt(Math.max(dA * dA - 2 * ca * dA * dB2 + dB2 * dB2, 0) / (1 - ca * ca)) - R;
+    }
+  } else {
+    /* Normalized shell: the signed distance from the mid-surface, without the fold that |…| - thickness
+       puts at the mid-surface (a one-texel stencil crosses it on thin shells).  Both skins are level
+       sets of it; the shader flips the sign on the negative side, as for plain shells. */
+    for (o = 0, q3 = 0; o < N3; o++, q3 += 3) {
+      var gx = gA[q3], gy = gA[q3 + 1], gz = gA[q3 + 2];
+      out[o] = (d[o] - iso) / Math.max(Math.sqrt(gx * gx + gy * gy + gz * gz), 0.08);
+    }
+  }
+  return out;
+}
+
+/* v0.35.1 — the curvature texture for the c variants.  Normalized PI and normalized shells: curvature
+   of labBakeCompDistance, two channels.  Plain PI: its pipe is square in section, each face a level set
+   of field A or field B, and the edges between faces are real creases; a stencil across an edge reads
+   nonsense, so bake each field on its own (A in rg, B in ba) and let the shader read the face it is on. */
+function labBakeCompCurvature(d, dB, N, u) {
+  if (u.topoMode > 2.5 && !(u.normMode > 1.5)) {
+    var cA = labBakeCurvature(d, N), cB = labBakeCurvature(labBakeCompDistance(d, dB, N, u), N), N3 = N * N * N, out = new Float32Array(4 * N3);
+    for (var o = 0; o < N3; o++) { out[4 * o] = cA[2 * o]; out[4 * o + 1] = cA[2 * o + 1]; out[4 * o + 2] = cB[2 * o]; out[4 * o + 3] = cB[2 * o + 1]; }
+    return { data: out, rgba: true };
+  }
+  return { data: labBakeCurvature(labBakeCompDistance(d, dB, N, u), N), rgba: false };
 }
 
 function buildLabGeomFS(variant) {
@@ -165,21 +249,20 @@ function buildLabGeomFS(variant) {
       ''
     );
     if (comp) {
+      /* v0.35.1 — baked by labBakeCompCurvature.  Normalized PI grows out of the solid.  A normalized
+         shell's signed distance grows out of the solid on its positive side only, so flip the other
+         side.  Plain PI: the face the point is on, A (rg) or B (ba); the solid is |a| < r there. */
       L.push(
-        'const vec3 GEOM_O[18] = vec3[18](vec3(1,0,0),vec3(-1,0,0),vec3(0,1,0),vec3(0,-1,0),vec3(0,0,1),vec3(0,0,-1),' +
-          'vec3(1,1,0),vec3(1,-1,0),vec3(-1,1,0),vec3(-1,-1,0),vec3(1,0,1),vec3(1,0,-1),vec3(-1,0,1),vec3(-1,0,-1),vec3(0,1,1),vec3(0,1,-1),vec3(0,-1,1),vec3(0,-1,-1));',
+        'uniform highp sampler3D uCurv;',
         'vec2 geomCurvature(vec3 p) {',
-        '  float h = (2.0*H)/max(uTexNG, 8.0); float f0 = implicit0(p);',
-        '  float v[18];',
-        '  for (int i = 0; i < 18; i++) v[i] = implicit0(p + GEOM_O[i]*h);',
-        '  float gx = (v[0]-v[1])/(2.0*h), gy = (v[2]-v[3])/(2.0*h), gz = (v[4]-v[5])/(2.0*h);',
-        '  float i2 = 1.0/(h*h), i4 = 0.25*i2;',
-        '  float xx = (v[0]-2.0*f0+v[1])*i2, yy = (v[2]-2.0*f0+v[3])*i2, zz = (v[4]-2.0*f0+v[5])*i2;',
-        '  float xy = (v[6]-v[7]-v[8]+v[9])*i4, xz = (v[10]-v[11]-v[12]+v[13])*i4, yz = (v[14]-v[15]-v[16]+v[17])*i4;',
-        '  float g2 = max(gx*gx+gy*gy+gz*gz, 1e-6), g = sqrt(g2);',
-        '  float gHg = gx*gx*xx+gy*gy*yy+gz*gz*zz+2.0*(gx*gy*xy+gx*gz*xz+gy*gz*yz);',
-        '  float K = (gx*gx*(yy*zz-yz*yz)+gy*gy*(xx*zz-xz*xz)+gz*gz*(xx*yy-xy*xy)+2.0*(gx*gy*(xz*yz-xy*zz)+gy*gz*(xy*xz-yz*xx)+gx*gz*(xy*yz-xz*yy)))/(g2*g2);',
-        '  return vec2((g2*(xx+yy+zz)-gHg)/(2.0*g2*g), K);',
+        '  vec4 c = texture(uCurv, fract(p/(2.0*H) + 0.5));',
+        '  if (uTopoMode > 2.5 && uNormMode < 1.5) {',
+        '    float a = sampleF(p) - isoLevel;',
+        '    float b = uPairMode > 0.5 ? sampleFB(p) : sampleF(p + uPipeOffset) - isoLevel;',
+        '    return abs(a) >= abs(b) ? vec2((a >= 0.0 ? 1.0 : -1.0)*c.r, c.g) : vec2((b >= 0.0 ? 1.0 : -1.0)*c.b, c.a);',
+        '  }',
+        '  float s = uTopoMode > 2.5 ? 1.0 : ((sampleF(p) - isoLevel) >= 0.0 ? 1.0 : -1.0);',
+        '  return vec2(s*c.r, c.g);',
         '}'
       );
     } else {
@@ -1290,14 +1373,17 @@ LabRaymarcher.prototype._useViewProgram = function() {
   return V;
 };
 /* The baked curvature for the current field, on TEXTURE7; built the first time it is shown. */
-LabRaymarcher.prototype._bindCurvature = function() {
+LabRaymarcher.prototype._bindCurvature = function(comp) {
   var gl = this.gl;
   gl.activeTexture(gl.TEXTURE7);
-  if (this._curvN !== this._geomN) {
+  if (this._curvN !== this._geomN || this._curvComp !== !!comp) {
     if (!this._curvTex) this._curvTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_3D, this._curvTex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RG16F, this._geomN, this._geomN, this._geomN, 0, gl.RG, gl.FLOAT, labBakeCurvature(this._geomData, this._geomN));
+    /* v0.35.1 — PI and normalized shells: baked from the 32-bit field too (labBakeCompCurvature) */
+    var bk = comp ? labBakeCompCurvature(this._geomData, this._geomDataB, this._geomN, this._u) : { data: labBakeCurvature(this._geomData, this._geomN), rgba: false };
+    gl.texImage3D(gl.TEXTURE_3D, 0, bk.rgba ? gl.RGBA16F : gl.RG16F, this._geomN, this._geomN, this._geomN, 0, bk.rgba ? gl.RGBA : gl.RG, gl.FLOAT, bk.data);
+    this._curvComp = !!comp;
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
@@ -1492,6 +1578,8 @@ LabRaymarcher.prototype._applyBake = function(fr, N, tBake) {
     this._u.fieldBMin = fb.fieldMin;
     this._u.fieldBMax = fb.fieldMax;
     this._u.pairMode  = 1;
+    this._geomDataB   = fb.data;   /* v0.35.1 — labBakeCompDistance */
+    this._curvN = 0;
   }
 
   this._fieldUploaded = true;
@@ -1522,6 +1610,7 @@ LabRaymarcher.prototype._uploadGeomField = function(fr, N) {
   }
   this._u.lipschitz = Math.max(maxG * 1.1, 0.05);
   this._geomData = fr.data; this._geomN = N; this._curvN = 0;   /* v0.35.0 — labBakeCurvature */
+  this._geomDataB = null;                                        /* v0.35.1 — field B, set below for PI pairs */
   this._u.fieldMin  = fr.fieldMin;
   this._u.fieldMax  = fr.fieldMax;
   this._u.nrmStep   = step * 0.5;
@@ -2121,8 +2210,10 @@ var LAB_GEOM_HELD = false;
 LabRaymarcher.prototype._geomSpins = function() { return this._viewMode === 'geom' && !this._u.geomView && !LAB_GEOM_HELD; };
 LabRaymarcher.prototype._geomHold = function() {
   if (this._viewMode !== 'geom') return;
+  var was = LAB_GEOM_HELD;
   LAB_GEOM_HELD = true;
   labGeomLinkPose(this);
+  if (!was && typeof geomViewRowBuild === 'function') geomViewRowBuild();   /* v0.35.1 — shows Turn again */
 };
 
 /* setDeformAmp(sliderValue) — push the amp slider to the shader,
@@ -2403,7 +2494,7 @@ LabRaymarcher.prototype._render = function(t) {
   if (!viewSet) return;
   gl.useProgram(this._prog);
   var u = this._uloc, S = this._u;
-  if (viewSet.variant === 'curv') { this._bindCurvature(); gl.uniform1i(u.uCurv, 7); }
+  if (viewSet.variant === 'curv' || viewSet.variant === 'curvc') { this._bindCurvature(viewSet.variant === 'curvc'); gl.uniform1i(u.uCurv, 7); }
   gl.uniform2f(u.res, w, h);
   gl.uniformMatrix3fv(u.rot, false, rot);
   gl.uniform1f(u.zoom,        S.zoom);
