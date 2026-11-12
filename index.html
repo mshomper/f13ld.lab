@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="lab.css?v=0.35.0">
+<link rel="stylesheet" href="lab.css?v=0.35.1">
 </head>
 <body>
 <!-- v0.24.0 — startup splash: the wordmark resolves from scrambled glyphs
@@ -67,11 +67,11 @@
       <div class="fh-tool-name">LAB</div>
     </div>
     <div class="fh-right">
-      <button class="fh-action-btn ghost fh-ib" id="addDesignBtn" onclick="onAddDesignClick()"><span class="fh-ico" data-ico="plus"></span>Add Design</button>
+      <button class="fh-action-btn ghost fh-ib" id="addDesignBtn" onclick="onAddDesignClick()" title="Add a design"><span class="fh-ico" data-ico="plus"></span>Add Design</button>
       <button class="fh-action-btn ghost fh-ib" id="importStlBtn" onclick="openImportDialog()" title="Import a unit cell from any CAD program as an STL"><span class="fh-ico" data-ico="importCell"></span>Import STL</button>
       <button class="fh-action-btn ghost fh-ib" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design through its parameters: stiffness, and optionally thermal and flow, for every run"><span class="fh-ico" data-ico="sweep"></span><span class="fh-lbl">Sweep</span><span class="fh-prog"></span></button>
       <button class="fh-action-btn ghost fh-ib fh-atlas" id="atlasBtn" onclick="onAtlasBtnClick()" aria-disabled="true" title="Atlas — see every sweep run’s results: maps, surfaces and charts. Run a sweep to explore its results here."><span class="fh-ico" data-ico="atlas"></span>Atlas<span class="fh-cnt" id="atlasCnt"></span></button>
-      <button class="fh-action-btn ghost fh-ib" id="exportPdfBtn" onclick="onExportPdfClick()" disabled><span class="fh-ico" data-ico="exportDoc"></span>Export PDF</button>
+      <button class="fh-action-btn ghost fh-ib" id="exportPdfBtn" onclick="onExportPdfClick()" title="Export PDF" disabled><span class="fh-ico" data-ico="exportDoc"></span>Export PDF</button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
       <span class="fh-version">v0.37.0</span>
       <div class="fh-icon">
@@ -285,12 +285,12 @@
 <script src="20-svg-mocks.js"></script>
 <script src="20b-curve-plotly.js"></script>
 <script src="20c-f13-shade.js"></script>
-<script src="21-raymarcher.js?v=0.35.0"></script>
+<script src="21-raymarcher.js?v=0.35.1"></script>
 <script src="22-stiffness-viz.js?v=0.31.0"></script>
 <script src="23-flow-viz.js?v=0.29.1"></script>
 <script src="24-flow-charts.js?v=0.37.0"></script>
 <script src="30-view-tabs.js?v=0.31.0"></script>
-<script src="31-geom-views.js?v=0.35.0"></script>
+<script src="31-geom-views.js?v=0.35.1"></script>
 <script src="40-design-grid.js?v=0.37.0"></script>
 <script src="50-controls.js?v=0.37.0"></script>
 <script src="51-dock.js?v=0.37.0"></script>

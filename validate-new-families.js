@@ -1,5 +1,5 @@
 /* ============================================================
-   F13LD.lab · _validation/validate-new-families.js
+   F13LD.lab · validate-new-families.js   (node validate-new-families.js, from anywhere)
    Cross-checks the three new SDF kernels (Beam · Bundle · Wave)
    in 13b-kernels-new.js against the verbatim mesh builders in
    mesh-ref.js (extracted from index_-_mesh.html).
@@ -17,8 +17,9 @@
    A faithful port gives 100.00% sign agreement and identical VF.
    ============================================================ */
 
-const mesh = require('./mesh-ref.js');
-const lab  = require('../13b-kernels-new.js');
+const path = require('path');   /* v0.35.1 — files are found next to this script, wherever it is run from */
+const mesh = require(path.join(__dirname, 'mesh-ref.js'));
+const lab  = require(path.join(__dirname, '13b-kernels-new.js'));
 
 const PI = Math.PI, W = 5 / PI;     /* solver→world */
 const M = 40;                       /* grid per side */
