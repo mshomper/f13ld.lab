@@ -1,5 +1,5 @@
 /* ============================================================
-   F13LD.lab · _validation/validate-existing-fixes.js
+   F13LD.lab · validate-existing-fixes.js   (node validate-existing-fixes.js, from anywhere)
    Verifies the alignment fixes to the existing families:
 
    1. Grain HU shape params are a strict SUPERSET — at defaults
@@ -10,7 +10,7 @@
       the alignment decision) and respect explicit true/false.
    ============================================================ */
 
-const k = require('../13-kernels.js');
+const k = require(require('path').join(__dirname, '13-kernels.js'));   /* v0.35.1 — next to this script */
 let all = true;
 
 /* ── 1a. HU reduction identity ──────────────────────────────── */
