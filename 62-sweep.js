@@ -663,7 +663,7 @@ function sweepNotesFor(run, r) {
 }
 
 /* ── Geometry checks (worker) ─────────────────────────────── */
-var SWEEP_GEOM_VERSION = 'swg-7';   /* v0.27.0 — straight-reach load axes (14a) */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — 14e geometry metrics (surface area, open pores) */
+var SWEEP_GEOM_VERSION = 'swg-8';   /* v0.36.0 — local thickness (14d, decision 0012) */   /* v0.27.0 — straight-reach load axes (14a) */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — 14e geometry metrics (surface area, open pores) */
 var SWEEP_THIN_VOX = 6;          /* Matt, 2026-10-01: flag under 6 voxels across the thinnest feature */
 var _swWorker = null, _swJobs = {}, _swNext = 1;
 function sweepGeomWorker() {
@@ -700,23 +700,36 @@ function sweepGeomCall(msg, onProgress) {
 async function sweepPreviewAll() {
   if (SWEEP_STATE.previewing) return;
   var conn = (typeof GEOM_STATE !== 'undefined') ? GEOM_STATE.connectivity : 'networks';
-  var todo = SWEEP_STATE.runs.filter(function (r) { var p = SWEEP_STATE.preview[r.id]; return !p || p.connectivity !== conn; });
+  /* v0.36.0 — stats saved by an older version (thinnest feature by the old measure) are checked again */
+  var todo = SWEEP_STATE.runs.filter(function (r) { var p = SWEEP_STATE.preview[r.id]; return !p || p.connectivity !== conn || (!p.error && p.thinMeasure !== 'local-thickness'); });
   if (!todo.length) return;
   SWEEP_STATE.previewing = true; SWEEP_STATE.previewDone = 0; SWEEP_STATE.previewTotal = todo.length;
   sweepRender();
-  for (var i = 0; i < todo.length; i++) {
-    var run = todo[i];
-    try {
-      var m = await sweepGeomCall({ type: 'stats', recipe: sweepRecipeForRun(run), N: run.N, connectivity: conn });
-      var st = m.stats; st.connectivity = conn;
-      SWEEP_STATE.preview[run.id] = st;
-      if (sweepFlags(run, st).some(function (f) { return f.level === 'skip'; })) SWEEP_STATE.selected[run.id] = false;
-    } catch (e) {
-      SWEEP_STATE.preview[run.id] = { error: e.message, connectivity: conn };
+  /* v0.36.0 — several runs at once on the geometry pool (17c, one run per worker); the sweep's own
+     geometry worker is the fallback.  Local thickness costs a few passes per run, so one worker in
+     series would add seconds per run. */
+  var usePool = typeof labGeomStatsAsync === 'function' && typeof _tvCanUseWorkers === 'function' && _tvCanUseWorkers();
+  var next = 0, done = 0;
+  async function lane() {
+    while (next < todo.length) {
+      var run = todo[next++];
+      try {
+        var recipe = sweepRecipeForRun(run), st;
+        if (usePool) st = await labGeomStatsAsync(recipe, run.N, conn);
+        else st = (await sweepGeomCall({ type: 'stats', recipe: recipe, N: run.N, connectivity: conn })).stats;
+        st.connectivity = conn;
+        SWEEP_STATE.preview[run.id] = st;
+        if (sweepFlags(run, st).some(function (f) { return f.level === 'skip'; })) SWEEP_STATE.selected[run.id] = false;
+      } catch (e) {
+        SWEEP_STATE.preview[run.id] = { error: e.message, connectivity: conn };
+      }
+      SWEEP_STATE.previewDone = ++done;
+      if (SWEEP_STATE.open) sweepRender();
     }
-    SWEEP_STATE.previewDone = i + 1;
-    if (SWEEP_STATE.open) sweepRender();
   }
+  var lanes = [], nLanes = usePool ? Math.max(1, thermalVoxelPoolInfo().size) : 1;
+  for (var li = 0; li < nLanes; li++) lanes.push(lane());
+  await Promise.all(lanes);
   SWEEP_STATE.previewing = false;
   sweepSave(); sweepRender();
 }

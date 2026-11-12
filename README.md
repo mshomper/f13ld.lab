@@ -39,6 +39,11 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (Configure → Crush → Grid, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Load axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.36.0
+
+- **One number per design on each Geometry tile:** thinnest wall (Wall thickness view), tightest gap (Pore size) and tightest bend radius (Curvature), measured in the background on all cores; red when under the view's minimum.
+- **Thinnest wall is now local thickness** (each point takes the largest ball that fits and covers it, as for bone and scaffolds). The old measure read the fattest point on smooth designs such as Schwarz P. **Sweep CSV:** the columns are now `thinnest_wall_*` and `median_wall_*` (were `thinnest_feature_*` / `median_feature_*`), so old and new sweeps can't be mixed up; values for smooth designs change. The sweep's geometry check runs several designs at once.
+
 ## What's new in v0.35.1
 
 - **Curvature on PI-TPMS and normalized shells** is baked from the exact field like every other design, so it no longer speckles at tight colour scales (normalized PI reads as before).
@@ -190,7 +195,7 @@ Details and validation: [`docs/THERMAL_SCOPE.md`](./docs/THERMAL_SCOPE.md) §12.
 
 **Normal runs on the fast elastic path.** Runs that capture stress and deformation fields for the viewer now use the GPU-resident solver (`16i-elastic-fast.js`) that sweeps have used since v0.15.0, instead of the older path with two blocking GPU round trips per iteration. Same operator, same CG, same stopping test, same fields. The older path stays as the fallback, for example when a GPU's limits can't hold the fast path's operator at N = 128. `await runElasticFastTest(32)` now also compares the captured fields.
 
-**Feature size in mm.** The sweep CSV gains `thinnest_feature_T`, `median_feature_T` (cell units), `thinnest_feature_mm`, `median_feature_mm` and `cell_mm`. The sweep builder can step parameter 1 **by thinnest feature** in mm: each target size is found by bisection at the run grid, to the nearest quarter voxel, and the review map shows the size each run actually reached.
+**Feature size in mm.** The sweep CSV gains `thinnest_feature_T`, `median_feature_T` (cell units), `thinnest_feature_mm`, `median_feature_mm` and `cell_mm` (renamed `thinnest_wall_*` / `median_wall_*` and measured by local thickness from v0.36.0). The sweep builder can step parameter 1 **by thinnest feature** in mm: each target size is found by bisection at the run grid, to the nearest quarter voxel, and the review map shows the size each run actually reached.
 
 **Partial-volume voxels (default on).** Every voxel the surface passes through now carries its true solid fraction (sampled 64 times inside the voxel), and the stiffness solve blends solid and void by it. Solid fraction is exact at any grid. Stiffness is grid-converged by N = 64 on the PI-TPMS paper's PI, sheet and skeletal designs: within 0.5 % of N = 128, where the old 0/1 cube still moved 2–11 %. Crush and buckling keep the 0/1 cube. **Surface voxels → 0/1 cube** reproduces results from before v0.19.0, including the PI-TPMS paper. Sweep CSV: `partial_volume`, `vf_partial_pct`. Details and data: [`docs/PARTIAL_VOLUME.md`](./docs/PARTIAL_VOLUME.md). GPU check: `await runPartialVolumeCheck()`. Also fixed: the fast elastic path could bind a destroyed stiffness operator after cycling through three grids; it now rebinds whenever the buffer changes.
 

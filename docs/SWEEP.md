@@ -100,6 +100,8 @@ Checked at N = 64, 5 mm cell:
 
 About 0.7–4 s per base design in the background worker.
 
+**CSV (v0.36.0):** `thinnest_wall_vox / _T / _mm` and `median_wall_vox / _T / _mm` replace the `*_feature_*` columns below. They are local thickness (decision 0012: each solid voxel takes the diameter of the largest inscribed ball that covers it; 5th percentile and median by volume). The old measure read the fattest point on smooth designs (Schwarz P: the node, not the neck). Stats kept from an older version leave the new columns blank and are checked again.
+
 **CSV (v0.19.0):** `thinnest_feature_T` and `median_feature_T` (fraction of the cell edge), `thinnest_feature_mm`, `median_feature_mm` and `cell_mm`, next to the existing `_vox` columns. With **Surface voxels = partial volume** (run settings; the default from v0.19.0 — saved sweeps from before keep the 0/1 cube): `partial_volume = yes` and `vf_partial_pct`, the fraction-weighted solid. `vf_measured_pct` stays the 0/1 voxel count after the trim. See `PARTIAL_VOLUME.md`.
 ## 2. Settings
 

@@ -36,7 +36,7 @@ var THERMAL_VOXEL_FILES = [
   '13c-import-kernel.js', '13d-foam-kernel.js', '14e-link-field.js',
   '14c-stl-import.js', '14d-voxel-stats.js', '14f-geom-curvature.js'   /* v0.36.0 — per-design geometry numbers */
 ];
-var THERMAL_VOXEL_VERSION = 'tv-9';   /* v0.36.0 — geomnums / georadius jobs, 14c 14d 14f loaded */   /* v0.30.0 — flowlinks jobs return wall probes */   /* v0.29.2 — HU kernel index, rawslab jobs, parse cache */   /* v0.28.1 */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
+var THERMAL_VOXEL_VERSION = 'tv-9';   /* v0.36.0 — geomtrim / lt12 / lt3 / stats / georadius jobs, 14c 14d 14f loaded */   /* v0.30.0 — flowlinks jobs return wall probes */   /* v0.29.2 — HU kernel index, rawslab jobs, parse cache */   /* v0.28.1 */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
 
 /* ── Stash: the elastic solves of this Run All ───────────────────────
    Entries { recipe, N, conn, raw, kept, m }, newest last, matched by the
@@ -123,20 +123,20 @@ var THERMAL_VOXEL_ONMESSAGE =
   '      var famR = job.recipe.family, prR = KERNELS[famR].parseRecipe(job.recipe), fr = buildRawField(famR, prR, N);\n' +
   '      postMessage({ id: job.id, ok: true, data: fr.data, fieldMin: fr.fieldMin, fieldMax: fr.fieldMax }, [fr.data.buffer]); return;\n' +
   '    }\n' +
-  /* v0.36.0 — per-design geometry numbers (decision 0010, 31-geom-views.js).  geomnums: island trim as
-     the solvers do, then local thickness (14d sweepLocalThickness, decision 0012: the largest ball
-     that fits and holds each point, 5th percentile by volume) on the solid and on the pore.  georadius: tightest bend radius of the drawn surface (14f). */
-  '    if (job.type === "geomnums"){\n' +
-  '      var keptG = job.prune ? pruneVoxels(job.raw, N, job.family, job.conn) : job.raw, N3g = NN*N, nS = 0;\n' +
-  '      for (var g0 = 0; g0 < N3g; g0++) if (keptG[g0] > 0.5) nS++;\n' +
-  '      var wallV = null, gapV = null;\n' +
-  '      if (nS > 0 && nS < N3g){\n' +
-  '        wallV = sweepLocalThickness(keptG, N, [0.05])[0];\n' +
-  '        var poreG = new Uint8Array(N3g); for (var g1 = 0; g1 < N3g; g1++) poreG[g1] = keptG[g1] > 0.5 ? 0 : 1;\n' +
-  '        gapV = sweepLocalThickness(poreG, N, [0.05])[0];\n' +
-  '      }\n' +
-  '      postMessage({ id: job.id, ok: true, wallVox: wallV, gapVox: gapV, solid: nS / N3g }); return;\n' +
+  /* v0.36.0 — per-design geometry numbers (decisions 0010, 0012; 31-geom-views.js).  geomtrim: the
+     island trim the solvers use; local thickness then runs as lt12 / lt3 passes (below) from the main
+     thread's labLocalThicknessParallel.  georadius: tightest bend radius of the drawn surface (14f). */
+  '    if (job.type === "geomtrim"){\n' +
+  '      var keptG = job.prune ? pruneVoxels(job.raw, N, job.family, job.conn) : job.raw;\n' +
+  '      var kOut = (keptG === job.raw) ? job.raw : Float32Array.from(keptG);\n' +
+  '      postMessage({ id: job.id, ok: true, kept: kOut }, [kOut.buffer]); return;\n' +
   '    }\n' +
+  /* local thickness passes (14d), split across the pool: lt12 on a slab of slow-index planes, lt3 on
+     a packed block of middle-index rows (17c labLocalThicknessParallel) */
+  '    if (job.type === "lt12"){ _ltPass12(job.d, N, job.rows); postMessage({ id: job.id, ok: true, d: job.d }, [job.d.buffer]); return; }\n' +
+  '    if (job.type === "lt3"){ _ltPass3(job.d, N, job.cols); postMessage({ id: job.id, ok: true, d: job.d }, [job.d.buffer]); return; }\n' +
+  /* the sweep's per-run geometry check, one run per worker (62 sweepPreviewAll) */
+  '    if (job.type === "stats"){ postMessage({ id: job.id, ok: true, stats: sweepGeometryStats(job.recipe, N, job.connectivity) }); return; }\n' +
   '    if (job.type === "georadius"){\n' +
   '      var tr = geomTightestRadius(job.d, job.dB, N, job.u);\n' +
   '      postMessage({ id: job.id, ok: true, r5: tr.r5, r0: tr.r0, n: tr.n }); return;\n' +
@@ -408,8 +408,9 @@ async function labBakeFieldAsync(recipe, N) {
 /* ── v0.36.0 — per-design geometry numbers (decision 0010) ─────────────
    Background jobs (low priority: a Run or a viewer bake always goes first).
    labGeomWallGapAsync(recipe, N, conn) → Promise<{ wallVox, gapVox, solid } | null>
-     0/1 voxels in x-slabs over the pool (the elastic 'voxels' job), then one
-     job does the island trim and the two inscribed-ball measures.
+     0/1 voxels in x-slabs over the pool (the elastic 'voxels' job), the island
+     trim on one worker, then local thickness of the solid and of the pore with
+     every pass split across the pool (labLocalThicknessParallel, below).
    labGeomRadiusAsync(d, dB, N, u) → Promise<{ r5, r0, n } | null>
      tightest radius from a copy of a tile's field (14f geomTightestRadius). */
 async function labGeomWallGapAsync(recipe, N, conn) {
@@ -423,8 +424,57 @@ async function labGeomWallGapAsync(recipe, N, conn) {
     });
   }));
   var c = conn || { connectivity: 'networks', pruneLargest: true };
-  return _tvRun({ type: 'geomnums', N: N, raw: raw, family: recipe.family, prune: c.connectivity !== 'off',
-                  conn: { connectivity: c.connectivity || 'networks', pruneLargest: c.pruneLargest !== false } }, [raw.buffer], true);
+  var kept = (await _tvRun({ type: 'geomtrim', N: N, raw: raw, family: recipe.family, prune: c.connectivity !== 'off',
+                             conn: { connectivity: c.connectivity || 'networks', pruneLargest: c.pruneLargest !== false } }, [raw.buffer], true)).kept;
+  var N3 = NN * N, nS = 0, i;
+  for (i = 0; i < N3; i++) if (kept[i] > 0.5) nS++;
+  if (!nS || nS === N3) return { wallVox: null, gapVox: null, solid: nS / N3 };
+  var pore = new Uint8Array(N3); for (i = 0; i < N3; i++) pore[i] = kept[i] > 0.5 ? 0 : 1;
+  var wall = await labLocalThicknessParallel(kept, N, [0.05], true);
+  var gap = await labLocalThicknessParallel(pore, N, [0.05], true);
+  return { wallVox: wall[0], gapVox: gap[0], solid: nS / N3 };
+}
+
+/* v0.36.0 — local thickness with each envelope pass split across the pool (decision 0012).  The same
+   step machine and the same per-line arithmetic as 14d sweepLocalThickness, so the numbers are
+   identical (proto/geom-views/numbers_check.js N5).  Main thread: seeding, filling and counting
+   (a few ms at 96³); workers: the passes, in slabs of slow-index planes (two fast axes), then in
+   packed middle-index rows (slow axis).  low = background priority. */
+async function _ltEnvelopeParallel(B, N, low) {
+  var NN = N * N, slabs = _tvSlabs(N, _tvPoolSize());
+  await Promise.all(slabs.map(function (sl) {
+    var sub = B.slice(sl[0] * NN, sl[1] * NN);
+    return _tvRun({ type: 'lt12', N: N, d: sub, rows: sl[1] - sl[0] }, [sub.buffer], low).then(function (r) { B.set(r.d, sl[0] * NN); });
+  }));
+  await Promise.all(slabs.map(function (sl) {
+    var cols = sl[1] - sl[0], w = cols * N, P = new Float32Array(N * w), s;
+    for (s = 0; s < N; s++) P.set(B.subarray(s * NN + sl[0] * N, s * NN + sl[1] * N), s * w);
+    return _tvRun({ type: 'lt3', N: N, d: P, cols: cols }, [P.buffer], low).then(function (r) {
+      for (var s2 = 0; s2 < N; s2++) B.set(r.d.subarray(s2 * w, (s2 + 1) * w), s2 * NN + sl[0] * N);
+    });
+  }));
+}
+async function labLocalThicknessParallel(solid, N, fracs, low) {
+  var N3 = N * N * N, n = 0, i;
+  for (i = 0; i < N3; i++) if (solid[i]) n++;
+  if (!n) return fracs.map(function () { return 0; });
+  if (n === N3) return fracs.map(function () { return N; });
+  if (!_tvCanUseWorkers()) return sweepLocalThickness(solid, N, fracs);
+  var A = _ltSeed(solid, N3);
+  await _ltEnvelopeParallel(A, N, low);
+  var B = new Float32Array(N3), S = _ltSearcher(_ltLevels(A, solid), fracs), q = S.step(null);
+  while (!q.done) {
+    _ltFill(B, A, solid, q.r2);
+    await _ltEnvelopeParallel(B, N, low);
+    q = S.step(_ltCount(B, solid) / n);
+  }
+  return q.done;
+}
+/* the sweep's geometry check for one run, on the pool (62 runs several at once) */
+function labGeomStatsAsync(recipe, N, connectivity) {
+  if (!_tvCanUseWorkers()) return null;
+  var importGrid = (recipe.family === 'import' && typeof importGridMessage === 'function') ? importGridMessage(recipe) : null;
+  return _tvRun({ type: 'stats', recipe: recipe, N: N, connectivity: connectivity, importGrid: importGrid }).then(function (r) { return r.stats; });
 }
 async function labGeomRadiusAsync(d, dB, N, u) {
   if (!_tvCanUseWorkers()) return null;

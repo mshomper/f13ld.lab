@@ -51,7 +51,8 @@ for (const N of [48, 96]) {
     const N = 96, NN = N * N, raw = new Float32Array(NN * N), t0 = Date.now();
     for (const [i0, i1] of [[0, 30], [30, 61], [61, 96]]) raw.set(job({ type: 'voxels', recipe, N, key: 'k', i0, i1 }).v, i0 * NN);
     const tVox = Date.now() - t0, t1 = Date.now();
-    const got = job({ type: 'geomnums', N, raw: Float32Array.from(raw), family: recipe.family, prune: true, conn: { connectivity: 'networks', pruneLargest: true } });
+    const keptJ = job({ type: 'geomtrim', N, raw: Float32Array.from(raw), family: recipe.family, prune: true, conn: { connectivity: 'networks', pruneLargest: true } }).kept;
+    const got = { wallVox: ctx.sweepLocalThickness(keptJ, N, [0.05])[0], gapVox: ctx.sweepLocalThickness(Uint8Array.from(keptJ, v => v > .5 ? 0 : 1), N, [0.05])[0] };
     const tNum = Date.now() - t1;
     const st = ctx.sweepGeometryStats(recipe, N, 'networks');   /* the sweep's own thinnest feature */
     const kept = ctx.pruneVoxels(raw, N, recipe.family, { connectivity: 'networks', pruneLargest: true });
@@ -91,9 +92,58 @@ for (const N of [48, 96]) {
     const r = ctx.DEMO_RECIPES.schwarzP, p = ctx.KERNELS[r.family].parseRecipe(r), a = ctx.resolveBuildArgs(r);
     const kept = ctx.buildVoxels(r.family, p, a.offset, N, a.mode, a.wt, a.nWeights, a.pipeR, a.phaseShift), t0 = Date.now();
     const v = ctx.sweepLocalThickness(kept, N, [0.05, 0.5]), ms = Date.now() - t0;
-    check('N4 Schwarz P ' + N + '³ time (one thread)', ms < 4000, ms + ' ms; thinnest ' + v[0].toFixed(1) + ', median ' + v[1].toFixed(1) + ' voxels (old measure gave the node, 82.5 at 96³)');
+    console.log('      N4 Schwarz P ' + N + '³, one thread (for reference; the pool times are in N5): ' + ms + ' ms; thinnest ' + v[0].toFixed(1) + ', median ' + v[1].toFixed(1) + ' voxels (old measure gave the node, 82.5 at 96³)');
   }
 }
 
-console.log(fails ? fails + ' failed' : 'all passed');
-process.exit(fails ? 1 : 0);
+// N5 — the pool version (17c labLocalThicknessParallel: every pass split into slabs across workers)
+// gives exactly the single-thread numbers, and how long it takes.  Real worker threads stand in for
+// the page's pool: each loads the pool's files and runs THERMAL_VOXEL_ONMESSAGE, as a browser worker does.
+(async () => {
+  const { Worker } = require('worker_threads'), os = require('os');
+  const nW = Math.max(1, Math.min(8, os.cpus().length - 1));   /* as 17c _tvPoolSize */
+  const pctx = vm.createContext({ document: undefined, console });
+  vm.runInContext(fs.readFileSync(path.join(ROOT, '17c-thermal-voxel-pool.js'), 'utf8'), pctx);
+  const files = pctx.THERMAL_VOXEL_FILES.map(f => path.join(ROOT, f)), onmsg = pctx.THERMAL_VOXEL_ONMESSAGE;
+  const src = `const { parentPort, workerData } = require('worker_threads'), fs = require('fs'), vm = require('vm');
+    globalThis.postMessage = (m, t) => parentPort.postMessage(m, t || []);
+    for (const f of workerData.files) vm.runInThisContext(fs.readFileSync(f, 'utf8'), { filename: f });
+    vm.runInThisContext(workerData.onmsg);
+    parentPort.on('message', d => onmessage({ data: d }));`;
+  const idle = [], queue = [], pending = new Map(), workers = [];
+  for (let i = 0; i < nW; i++) {
+    const w = new Worker(src, { eval: true, workerData: { files, onmsg } });
+    w.on('message', m => { const p = pending.get(m.id); pending.delete(m.id); idle.push(w); pump(); m.ok ? p.resolve(m) : p.reject(new Error(m.message)); });
+    workers.push(w); idle.push(w);
+  }
+  let nextId = 1;
+  function pump() { while (idle.length && queue.length) { const w = idle.pop(), t = queue.shift(); pending.set(t.msg.id, t); w.postMessage(t.msg, t.transfer || []); } }
+  ctx.__nodeRun = (msg, transfer) => new Promise((resolve, reject) => { msg.id = nextId++; queue.push({ msg, transfer, resolve, reject }); pump(); });
+  vm.runInContext(fs.readFileSync(path.join(ROOT, '17c-thermal-voxel-pool.js'), 'utf8'), ctx);
+  vm.runInContext('_tvCanUseWorkers = function () { return true; }; _tvPoolSize = function () { return ' + nW + '; }; _tvRun = function (m, t) { return __nodeRun(m, t); };', ctx);
+  console.log('      N5 pool: ' + nW + ' worker threads (' + os.cpus().length + ' logical cores, ' + os.cpus()[0].model.trim() + ')');
+  try {
+    for (const [key, N] of [['schwarzP', 64], ['spinodoid', 64], ['schwarzP', 96], ['spinodoid', 96]]) {
+      const r = ctx.DEMO_RECIPES[key], p = ctx.KERNELS[r.family].parseRecipe(r), a = ctx.resolveBuildArgs(r);
+      const kept = ctx.pruneVoxels(ctx.buildVoxels(r.family, p, a.offset, N, a.mode, a.wt, a.nWeights, a.pipeR, a.phaseShift), N, r.family, { connectivity: 'networks', pruneLargest: true });
+      const t0 = Date.now(), one = ctx.sweepLocalThickness(kept, N, [0.05, 0.5]), tOne = Date.now() - t0;
+      const t1 = Date.now(), par = await ctx.labLocalThicknessParallel(kept, N, [0.05, 0.5], false), tPar = Date.now() - t1;
+      check('N5 ' + key + ' ' + N + '³ pool = single thread, exactly', par[0] === one[0] && par[1] === one[1],
+        'thinnest ' + par[0].toFixed(2) + ', median ' + par[1].toFixed(2) + ' voxels; one thread ' + tOne + ' ms, pool ' + tPar + ' ms');
+    }
+    /* tile numbers: voxels + trim + wall and gap, all on the pool, at 96³ */
+    for (const key of ['schwarzP', 'spinodoid']) {
+      const t0 = Date.now(), g = await ctx.labGeomWallGapAsync(ctx.DEMO_RECIPES[key], 96, { connectivity: 'networks', pruneLargest: true }), ms = Date.now() - t0;
+      check('N5 ' + key + ' tile numbers at 96³ within a few seconds', ms < 5000, 'wall ' + g.wallVox.toFixed(2) + ', gap ' + g.gapVox.toFixed(2) + ' voxels, ' + ms + ' ms');
+    }
+    /* sweep geometry check: runs spread over the pool, one run per worker, at 64³ */
+    {
+      const runs = 2 * nW, recipes = Array.from({ length: runs }, (_, i) => ctx.DEMO_RECIPES[i % 2 ? 'spinodoid' : 'schwarzP']);
+      const t0 = Date.now(); await Promise.all(recipes.map(rc => ctx.labGeomStatsAsync(rc, 64, 'networks'))); const ms = Date.now() - t0;
+      check('N5 sweep geometry check at 64³ under 1 s per run', ms / runs < 1000, runs + ' runs in ' + ms + ' ms = ' + Math.round(ms / runs) + ' ms per run');
+    }
+  } catch (e) { check('N5 pool', false, e.message); }
+  workers.forEach(w => w.terminate());
+  console.log(fails ? fails + ' failed' : 'all passed');
+  process.exit(fails ? 1 : 0);
+})();

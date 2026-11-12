@@ -69,72 +69,96 @@ function sweepGeometryStats(recipe, N, connectivity) {
    when some voxel c with its own inscribed radius ρ(c) ≥ r has the voxel inside its ball, i.e.
    max over those c of ρ(c)² − |x − c|² ≥ 0.  That maximum is one separable lower-envelope pass (the
    distance transform's algorithm run on −ρ², a "reverse distance transform"), so the solid fraction
-   thinner than 2r costs one pass per r, and each quantile is a short search on r (regula falsi with
-   a bisection guard, about 5–8 passes, shared between quantiles).  Same answer as painting every ball.
+   thinner than 2r costs one pass per r.  Local thickness only takes the values √ρ² that occur, so each
+   quantile is an exact bisection over that list (about log2 of its length, ~8 passes at 64³, shared
+   between quantiles).  Same answer as painting every ball.  On the page, 17c labLocalThicknessParallel
+   runs the same steps with each pass split across the pool.
    Pore space: pass the inverted grid.  node proto/geom-views/numbers_check.js */
 function sweepLocalThickness(solid, N, fracs) {
-  var N3 = N * N * N, A = new Float32Array(N3), n = 0, i, amax = 0;
-  for (i = 0; i < N3; i++) { if (solid[i]) { A[i] = EDT_INF; n++; } else A[i] = 0; }
+  var N3 = N * N * N, n = 0, i;
+  for (i = 0; i < N3; i++) if (solid[i]) n++;
   if (!n) return fracs.map(function () { return 0; });
   if (n === N3) return fracs.map(function () { return N; });
-  periodicEdt3d(A, N);   /* ρ² per voxel: squared distance to the nearest void voxel centre */
-  for (i = 0; i < N3; i++) if (solid[i] && A[i] > amax) amax = A[i];
-  var B = new Float32Array(N3), memo = {}, env = _ltEnvelope(N);
-  /* fraction of the solid with local thickness < 2r */
-  function below(r) {
-    var key = r.toFixed(5);
-    if (memo[key] != null) return memo[key];
-    var r2 = r * r, any = false;
-    for (var j = 0; j < N3; j++) { if (solid[j] && A[j] >= r2 && A[j] > 0) { B[j] = -A[j]; any = true; } else B[j] = EDT_INF; }
-    var cnt = n;
-    if (any) { env(B); cnt = 0; for (var k = 0; k < N3; k++) if (solid[k] && B[k] > 0) cnt++; }
-    return (memo[key] = cnt / n);
+  var A = _ltSeed(solid, N3);
+  _ltEnvelopeAll(A, N);   /* ρ² per voxel: squared distance to the nearest void voxel centre */
+  var B = new Float32Array(N3), S = _ltSearcher(_ltLevels(A, solid), fracs), q = S.step(null);
+  while (!q.done) {
+    _ltFill(B, A, solid, q.r2);
+    _ltEnvelopeAll(B, N);
+    q = S.step(_ltCount(B, solid) / n);
   }
-  var rmax = Math.sqrt(amax);
-  return fracs.map(function (f) {
-    /* smallest r with below(r) >= f, to 1/8 voxel: regula falsi (Illinois) with a bisection guard */
-    var lo = 0, flo = below(0) - f, hi = rmax + 0.25, fhi = below(hi) - f, side = 0;
-    if (flo >= 0) return 0.5;
-    for (var it = 0; it < 24 && hi - lo > 0.125; it++) {
-      var mid = (flo !== fhi) ? (lo * fhi - hi * flo) / (fhi - flo) : 0.5 * (lo + hi);
-      if (!(mid > lo + 0.0625 && mid < hi - 0.0625) || it % 3 === 2) mid = 0.5 * (lo + hi);
-      var fm = below(mid) - f;
-      if (fm >= 0) { hi = mid; fhi = fm; if (side === -1) flo *= 0.5; side = -1; }
-      else { lo = mid; flo = fm; if (side === 1) fhi *= 0.5; side = 1; }
+  return q.done;
+}
+/* Pieces shared with the pool version (17c labLocalThicknessParallel), which runs the same steps with
+   the envelope passes split across workers, so both give identical numbers. */
+function _ltSeed(solid, N3) { var A = new Float32Array(N3); for (var i = 0; i < N3; i++) A[i] = solid[i] ? EDT_INF : 0; return A; }
+/* the distinct ρ² values of the solid, ascending: local thickness only takes these values */
+function _ltLevels(A, solid) {
+  var seen = {}, L = [];
+  for (var i = 0; i < A.length; i++) if (solid[i] && !seen[A[i]]) { seen[A[i]] = 1; L.push(A[i]); }
+  return L.sort(function (a, b) { return a - b; });
+}
+/* ball centres of radius² ≥ r2 carry −ρ²; everything else is empty */
+function _ltFill(B, A, solid, r2) { for (var j = 0; j < A.length; j++) B[j] = (solid[j] && A[j] >= r2) ? -A[j] : EDT_INF; }
+/* solid voxels no ball reached */
+function _ltCount(B, solid) { var c = 0; for (var k = 0; k < B.length; k++) if (solid[k] && B[k] > 0) c++; return c; }
+/* The quantile search as a step machine: step(value) returns { r2 } (the level whose uncovered fraction
+   it needs next) or { done: thicknesses }.  Exact bisection over the level list, levels shared between
+   quantiles.  The answer for fraction f is the smallest level t with (solid fraction of local
+   thickness ≤ 2√t) ≥ f, reported as 2√t + 0.5 voxels. */
+function _ltSearcher(levels, fracs) {
+  var K = levels.length, memo = {}, res = [], fi = 0, lo = -1, hi = K - 1, pending = -1;
+  return { step: function (val) {
+    if (pending >= 0) { memo[pending] = val; pending = -1; }
+    while (fi < fracs.length) {
+      var f = fracs[fi];
+      while (hi - lo > 1) {
+        var mid = (lo + hi) >> 1, key = mid + 1, v = key >= K ? 1 : memo[key];
+        if (v == null) { pending = key; return { r2: levels[key] }; }
+        if (v >= f) hi = mid; else lo = mid;
+      }
+      res.push(2 * Math.sqrt(levels[hi]) + 0.5); fi++; lo = -1; hi = K - 1;
     }
-    return 2 * lo + 0.5;
-  });
+    return { done: res };
+  } };
 }
 /* Periodic separable lower envelope, in place: B[x] ← min over c of (|x − c|² + B[c]) on an N³ torus.
    With B = −ρ² at ball centres and EDT_INF elsewhere, B[x] ≤ 0 exactly where some ball holds x.  A
    dedicated copy of 14c's periodicEdt3d pass (which assumes B ≥ 0 only in its clamp), on flat
    Float64 scratch arrays; lines are padded by N/2 wrapped samples per side (a ball radius never
    exceeds N/2 on a periodic cell). */
-function _ltEnvelope(N) {
-  var h = N >> 1, E = N + 2 * h, NN = N * N;
-  var f = new Float64Array(E), d = new Float64Array(E), v = new Int32Array(E), z = new Float64Array(E + 1), w = new Int32Array(E);
+function _ltScratch(N) {
+  var h = N >> 1, E = N + 2 * h, w = new Int32Array(E);
   for (var t = 0; t < E; t++) w[t] = ((t - h) % N + N) % N;
-  function line(B, base, stride) {
-    var any = false, t2, q, k;
-    for (t2 = 0; t2 < E; t2++) { var val = B[base + w[t2] * stride]; f[t2] = val; if (val < EDT_INF) any = true; }
-    if (!any) return;
-    k = 0; v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
-    for (q = 1; q < E; q++) {
-      var s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
-      while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
-      k++; v[k] = q; z[k] = s; z[k + 1] = Infinity;
-    }
-    k = 0;
-    for (q = h; q < h + N; q++) { while (z[k + 1] < q) k++; var dq = q - v[k]; d[q] = dq * dq + f[v[k]]; }
-    for (q = 0; q < N; q++) B[base + q * stride] = Math.min(d[q + h], EDT_INF);
-  }
-  return function (B) {
-    var a, b;
-    for (a = 0; a < N; a++) for (b = 0; b < N; b++) line(B, a * NN + b * N, 1);
-    for (a = 0; a < N; a++) for (b = 0; b < N; b++) line(B, a * NN + b, N);
-    for (a = 0; a < N; a++) for (b = 0; b < N; b++) line(B, a * N + b, NN);
-  };
+  return { N: N, h: h, E: E, w: w, f: new Float64Array(E), d: new Float64Array(E), v: new Int32Array(E), z: new Float64Array(E + 1) };
 }
+function _ltLine(S, B, base, stride) {
+  var N = S.N, h = S.h, E = S.E, w = S.w, f = S.f, d = S.d, v = S.v, z = S.z, any = false, t, q, k;
+  for (t = 0; t < E; t++) { var val = B[base + w[t] * stride]; f[t] = val; if (val < EDT_INF) any = true; }
+  if (!any) return;
+  k = 0; v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
+  for (q = 1; q < E; q++) {
+    var s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+    k++; v[k] = q; z[k] = s; z[k + 1] = Infinity;
+  }
+  k = 0;
+  for (q = h; q < h + N; q++) { while (z[k + 1] < q) k++; var dq = q - v[k]; d[q] = dq * dq + f[v[k]]; }
+  for (q = 0; q < N; q++) B[base + q * stride] = Math.min(d[q + h], EDT_INF);
+}
+/* passes along the two fast axes, on `rows` consecutive slow-index planes (a slab, or the whole grid) */
+function _ltPass12(B, N, rows) {
+  var S = _ltScratch(N), NN = N * N, a, b;
+  for (a = 0; a < rows; a++) for (b = 0; b < N; b++) _ltLine(S, B, a * NN + b * N, 1);
+  for (a = 0; a < rows; a++) for (b = 0; b < N; b++) _ltLine(S, B, a * NN + b, N);
+}
+/* pass along the slow axis, on P[s · cols · N + c · N + x]: `cols` middle-index rows for every s
+   (the whole grid when cols = N) */
+function _ltPass3(P, N, cols) {
+  var S = _ltScratch(N), c, x;
+  for (c = 0; c < cols; c++) for (x = 0; x < N; x++) _ltLine(S, P, c * N + x, cols * N);
+}
+function _ltEnvelopeAll(B, N) { _ltPass12(B, N, N); _ltPass3(B, N, N); }
 
 /* Thickness at maximal-ball centers of the inside distance transform.
    v0.36.0 — kept for the flow solver's narrowest pore (19g); the sweep and the Geometry tiles use
@@ -577,6 +601,8 @@ var SWEEP_WORKER_ONMESSAGE =
 /* node/test harness export (browser ignores this block) */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { sweepGeometryStats: sweepGeometryStats, sweepFeatureThickness: sweepFeatureThickness, sweepLocalThickness: sweepLocalThickness,
+                     _ltSeed: _ltSeed, _ltLevels: _ltLevels, _ltFill: _ltFill, _ltCount: _ltCount, _ltSearcher: _ltSearcher,
+                     _ltPass12: _ltPass12, _ltPass3: _ltPass3, _ltEnvelopeAll: _ltEnvelopeAll,
     sweepThresholdField: sweepThresholdField, sweepParamsForFractions: sweepParamsForFractions,
     sweepThinVoxAt: sweepThinVoxAt, sweepParamsForFeatures: sweepParamsForFeatures,
     sweepParamCatalog: sweepParamCatalog, sweepParamGet: sweepParamGet, sweepParamSet: sweepParamSet, sweepReviewCombos: sweepReviewCombos };

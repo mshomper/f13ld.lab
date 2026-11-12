@@ -79,8 +79,8 @@ function geomViewApply(){
 
 /* ── v0.36.0 — one number per design on each tile (decision 0010) ─────────
    Wall thickness → thinnest wall, Pore size → tightest gap, Curvature → tightest radius.
-   Wall and gap: the sweep's thinnest-feature measure (largest ball that fits, 5th percentile, 14d)
-   on a 96³ grid, after the island trim the solvers use.  Radius: 5th percentile of the tightest bend
+   Wall and gap: local thickness (decision 0012; 14d / 17c labLocalThicknessParallel), 5th percentile
+   by volume, on a 96³ grid after the island trim the solvers use; the sweep reports the same measure.  Radius: 5th percentile of the tightest bend
    over the drawn surface, from the tile's own field (14f).  Both run in the background on the
    geometry pool (17c, low priority) the first time a design shows on the Geometry tab; the chip
    appears when its number arrives, with no waiting note.  Lab's tile chip (.vp-buckle-chip). */
@@ -142,8 +142,8 @@ function geomNumChip(d){
     var mm = vox / GEOM_NUM_N * cell, lim = wall ? g.wallMin : g.poreMin;
     return { cls: mm < lim ? 'geom-low' : 'geom-ok', lbl: wall ? 'thinnest wall' : 'tightest gap', val: geomNumFmt(mm) + ' mm',
       tip: wall
-        ? 'Thinnest wall: 95 % of the walls are thicker than this. Measured as the largest ball that fits inside the solid on a 96³ grid, the same measure as the sweep’s thinnest feature, so it can read a little thicker than the colours, which measure straight through. Red when under the minimum.'
-        : 'Tightest gap: 95 % of the pore space is wider than this. Measured as the largest ball that fits in the pore on a 96³ grid, the same measure the sweep uses for walls. Red when under the minimum.' };
+        ? 'Thinnest wall: 95 % of the solid is thicker than this. Each point takes the diameter of the largest ball that fits in the solid and covers it (local thickness, as used for bone and scaffolds), on a 96³ grid; the sweep reports the same number. The colours measure straight through instead, so they can read thinner on slanted walls. Red when under the minimum.'
+        : 'Tightest gap: 95 % of the pore space is wider than this. Same local-thickness measure as the thinnest wall, on the pore space, on a 96³ grid. Red when under the minimum.' };
   }
   if (g.view === 'curvature'){
     if (e.rKey == null || e.r5 == null) return null;
