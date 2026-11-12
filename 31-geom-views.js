@@ -73,6 +73,102 @@ function geomViewApply(){
     if (!first) first = rm;
   }
   if ((view || LAB_GEOM_HELD) && first && typeof labGeomLinkPose === 'function') labGeomLinkPose(first);   /* tiles line up on entering a data view, or when a design joins */
+  geomNumsRequest();   /* v0.36.0 */
+  geomNumsPaint();
+}
+
+/* ── v0.36.0 — one number per design on each tile (decision 0010) ─────────
+   Wall thickness → thinnest wall, Pore size → tightest gap, Curvature → tightest radius.
+   Wall and gap: the sweep's thinnest-feature measure (largest ball that fits, 5th percentile, 14d)
+   on a 96³ grid, after the island trim the solvers use.  Radius: 5th percentile of the tightest bend
+   over the drawn surface, from the tile's own field (14f).  Both run in the background on the
+   geometry pool (17c, low priority) the first time a design shows on the Geometry tab; the chip
+   appears when its number arrives, with no waiting note.  Lab's tile chip (.vp-buckle-chip). */
+var GEOM_NUM_N = 96;
+var GEOM_NUMS = {};   /* design id → { wgKey, wgBusy, wall, gap, rKey, rBusy, r5, rN } */
+function geomNumsRequest(){
+  if (VIEW_STATE.mode !== 'geom' || typeof LAB_RM_REGISTRY === 'undefined' || !LAB_STATE || !LAB_STATE.designs) return;
+  if (typeof labGeomWallGapAsync !== 'function') return;
+  var conn = (typeof connOpts === 'function') ? connOpts() : { connectivity: 'networks', pruneLargest: true };
+  LAB_STATE.designs.forEach(function (d){
+    var rm = LAB_RM_REGISTRY[d.id];
+    if (!rm || rm.failed || !rm._recipe) return;
+    var recipe = rm._recipe;
+    if (rm._numFpOf !== recipe){   /* fingerprint once per recipe, not on every slider tick */
+      rm._numFpOf = recipe; rm._numFp = (typeof recipeFingerprint === 'function') ? recipeFingerprint(recipe) : JSON.stringify(recipe);
+    }
+    var fp = rm._numFp;
+    var e = GEOM_NUMS[d.id] || (GEOM_NUMS[d.id] = {});
+    var wgKey = fp + '|' + GEOM_NUM_N + '|' + (conn.connectivity || 'networks');
+    if (e.wgKey !== wgKey && e.wgBusy !== wgKey){
+      e.wgBusy = wgKey;
+      labGeomWallGapAsync(recipe, GEOM_NUM_N, conn).then(function (r){
+        if (e.wgBusy !== wgKey) return;
+        e.wgBusy = null; e.wgKey = wgKey; e.wall = r ? r.wallVox : null; e.gap = r ? r.gapVox : null;
+        geomNumsPaint();
+      }).catch(function (err){
+        if (e.wgBusy !== wgKey) return;
+        e.wgBusy = null; e.wgKey = wgKey; e.wall = e.gap = null;
+        console.warn('[geometry numbers] wall / gap failed:', err && err.message);
+      });
+    }
+    if (!rm._geomData || rm._baking) return;   /* radius waits for the tile's field */
+    var rKey = fp + '|' + rm._geomN;
+    if (e.rKey !== rKey && e.rBusy !== rKey){
+      e.rBusy = rKey;
+      var rN = rm._geomN;
+      labGeomRadiusAsync(rm._geomData, rm._geomDataB, rN, rm._u).then(function (r){
+        if (e.rBusy !== rKey) return;
+        e.rBusy = null; e.rKey = rKey; e.r5 = r ? r.r5 : null; e.rN = rN;
+        geomNumsPaint();
+      }).catch(function (err){
+        if (e.rBusy !== rKey) return;
+        e.rBusy = null; e.rKey = rKey; e.r5 = null;
+        console.warn('[geometry numbers] radius failed:', err && err.message);
+      });
+    }
+  });
+}
+function geomNumsPoke(){ geomNumsRequest(); geomNumsPaint(); }   /* 21 — a tile's field arrived */
+function geomNumFmt(mm){ return mm < 10 ? mm.toFixed(2) : mm.toFixed(1); }
+/* { cls, lbl, val, tip } for a design in the current view, or null */
+function geomNumChip(d){
+  var g = VIEW_STATE.geom, e = GEOM_NUMS[d.id];
+  if (!e) return null;
+  var cell = (isFinite(d.cell_mm) && d.cell_mm > 0) ? d.cell_mm : 5;
+  if (g.view === 'wall' || g.view === 'pore'){
+    var wall = g.view === 'wall', vox = wall ? e.wall : e.gap;
+    if (vox == null || e.wgKey == null) return null;
+    var mm = vox / GEOM_NUM_N * cell, lim = wall ? g.wallMin : g.poreMin;
+    return { cls: mm < lim ? 'geom-low' : 'geom-ok', lbl: wall ? 'thinnest wall' : 'tightest gap', val: geomNumFmt(mm) + ' mm',
+      tip: wall
+        ? 'Thinnest wall: 95 % of the walls are thicker than this. Measured as the largest ball that fits inside the solid on a 96³ grid, the same measure as the sweep’s thinnest feature, so it can read a little thicker than the colours, which measure straight through. Red when under the minimum.'
+        : 'Tightest gap: 95 % of the pore space is wider than this. Measured as the largest ball that fits in the pore on a 96³ grid, the same measure the sweep uses for walls. Red when under the minimum.' };
+  }
+  if (g.view === 'curvature'){
+    if (e.rKey == null || e.r5 == null) return null;
+    var step = cell / (e.rN || 48);
+    var val = isFinite(e.r5) ? 'r ' + geomNumFmt(e.r5 * cell / (2 * Math.PI)) + ' mm' : 'flat';
+    return { cls: '', lbl: 'tightest radius', val: val,
+      tip: 'Tightest bend radius: 95 % of the surface bends more gently than this. Read from the same curvature the colours show; radii under one grid step (' + geomNumFmt(step) + ' mm here) read as about one step.' };
+  }
+  return null;
+}
+function geomNumsPaint(){
+  if (typeof document === 'undefined' || !LAB_STATE || !LAB_STATE.designs) return;
+  var on = VIEW_STATE.mode === 'geom', byId = {};
+  LAB_STATE.designs.forEach(function (d){ byId[d.id] = d; });
+  var mounts = document.querySelectorAll('.rm-mount[data-design-id]');
+  for (var i = 0; i < mounts.length; i++){
+    var vp = mounts[i].parentNode, d = byId[mounts[i].getAttribute('data-design-id')];
+    if (!vp) continue;
+    var chip = vp.querySelector('.geom-num'), c = (on && d) ? geomNumChip(d) : null;
+    if (!c){ if (chip) chip.parentNode.removeChild(chip); continue; }
+    if (!chip){ chip = document.createElement('div'); vp.appendChild(chip); }
+    chip.className = 'vp-buckle-chip geom-num' + (c.cls ? ' ' + c.cls : '');
+    chip.title = c.tip;
+    chip.innerHTML = '<span class="lbl">' + c.lbl + '</span><span class="val">' + c.val + '</span>';
+  }
 }
 
 function geomSlider(key, label, min, max, step, fmt, tip){
@@ -193,7 +289,7 @@ function geomViewRowSync(){
 function geomViewChanged(rebuild){
   if (rebuild) geomViewRowBuild(); else geomLegendPaint();
   geomViewSave();
-  geomViewApply();
+  geomViewApply();   /* also repaints the tile numbers (red under a moved minimum) */
 }
 function onGeomViewPick(v){ VIEW_STATE.geom.view = v; geomViewChanged(true); }
 function onGeomKindPick(k){ VIEW_STATE.geom.kind = k; geomViewChanged(true); }

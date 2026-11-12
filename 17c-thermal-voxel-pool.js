@@ -33,9 +33,10 @@
 
 var THERMAL_VOXEL_FILES = [
   '14-rasterizer.js', '14a-connectivity.js', '13-kernels.js', '13b-kernels-new.js',
-  '13c-import-kernel.js', '13d-foam-kernel.js', '14e-link-field.js'
+  '13c-import-kernel.js', '13d-foam-kernel.js', '14e-link-field.js',
+  '14c-stl-import.js', '14d-voxel-stats.js', '14f-geom-curvature.js'   /* v0.36.0 — per-design geometry numbers */
 ];
-var THERMAL_VOXEL_VERSION = 'tv-8';   /* v0.30.0 — flowlinks jobs return wall probes */   /* v0.29.2 — HU kernel index, rawslab jobs, parse cache */   /* v0.28.1 */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
+var THERMAL_VOXEL_VERSION = 'tv-9';   /* v0.36.0 — geomnums / georadius jobs, 14c 14d 14f loaded */   /* v0.30.0 — flowlinks jobs return wall probes */   /* v0.29.2 — HU kernel index, rawslab jobs, parse cache */   /* v0.28.1 */   /* v0.26.0 — noise kernel + anisotropic shell wall */   /* v0.23.0 — slabs also return wall area; v0.24.0 — voxels, pv, rawfield jobs */   /* bump when a worker file changes (blob workers cache separately) */
 
 /* ── Stash: the elastic solves of this Run All ───────────────────────
    Entries { recipe, N, conn, raw, kept, m }, newest last, matched by the
@@ -122,6 +123,24 @@ var THERMAL_VOXEL_ONMESSAGE =
   '      var famR = job.recipe.family, prR = KERNELS[famR].parseRecipe(job.recipe), fr = buildRawField(famR, prR, N);\n' +
   '      postMessage({ id: job.id, ok: true, data: fr.data, fieldMin: fr.fieldMin, fieldMax: fr.fieldMax }, [fr.data.buffer]); return;\n' +
   '    }\n' +
+  /* v0.36.0 — per-design geometry numbers (decision 0010, 31-geom-views.js).  geomnums: island trim as
+     the solvers do, then the sweep's thinnest feature (14d, largest inscribed ball, 5th percentile)
+     on the solid and on the pore.  georadius: tightest bend radius of the drawn surface (14f). */
+  '    if (job.type === "geomnums"){\n' +
+  '      var keptG = job.prune ? pruneVoxels(job.raw, N, job.family, job.conn) : job.raw, N3g = NN*N, nS = 0;\n' +
+  '      for (var g0 = 0; g0 < N3g; g0++) if (keptG[g0] > 0.5) nS++;\n' +
+  '      var wallV = null, gapV = null;\n' +
+  '      if (nS > 0 && nS < N3g){\n' +
+  '        wallV = sweepFeatureThickness(keptG, N).thin;\n' +
+  '        var poreG = new Uint8Array(N3g); for (var g1 = 0; g1 < N3g; g1++) poreG[g1] = keptG[g1] > 0.5 ? 0 : 1;\n' +
+  '        gapV = sweepFeatureThickness(poreG, N).thin;\n' +
+  '      }\n' +
+  '      postMessage({ id: job.id, ok: true, wallVox: wallV, gapVox: gapV, solid: nS / N3g }); return;\n' +
+  '    }\n' +
+  '    if (job.type === "georadius"){\n' +
+  '      var tr = geomTightestRadius(job.d, job.dB, N, job.u);\n' +
+  '      postMessage({ id: job.id, ok: true, r5: tr.r5, r0: tr.r0, n: tr.n }); return;\n' +
+  '    }\n' +
   '    var fn = marginFn(job.recipe, N, job.key);\n' +
   /* v0.28.0 — flow: wall fractions of the 18 lattice Boltzmann links starting in a slab (14e) */
   '    if (job.type === "flowlinks"){\n' +
@@ -156,7 +175,7 @@ var THERMAL_VOXEL_ONMESSAGE =
   '  } catch (err){ postMessage({ id: job.id, ok: false, message: (err && err.message) || String(err) }); }\n' +
   '};\n';
 
-var _TV_POOL = { workers: [], idle: [], queue: [], pending: {}, nextId: 1, size: 0 };
+var _TV_POOL = { workers: [], idle: [], queue: [], low: [], pending: {}, nextId: 1, size: 0 };   /* v0.36.0 — low: background jobs, run only when nothing else waits */
 
 function _tvPoolSize() {
   var hc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
@@ -180,13 +199,13 @@ function _tvMakeWorker() {
 function _tvDispatch() {
   var P = _TV_POOL;
   if (!P.size) P.size = _tvPoolSize();
-  while (P.queue.length) {
+  while (P.queue.length || P.low.length) {
     var w = P.idle.pop();
     if (!w) {
       if (P.workers.length >= P.size) return;
       w = _tvMakeWorker(); P.workers.push(w);
     }
-    var t = P.queue.shift();
+    var t = P.queue.length ? P.queue.shift() : P.low.shift();
     w._tvJob = t.msg.id;
     P.pending[t.msg.id] = t;
     w.postMessage(t.msg, t.transfer || []);
@@ -206,10 +225,10 @@ function _tvOnError(w, msg) {
   try { w.terminate(); } catch (e) {}
   _tvDispatch();
 }
-function _tvRun(msg, transfer) {
+function _tvRun(msg, transfer, low) {
   return new Promise(function (resolve, reject) {
     msg.id = _TV_POOL.nextId++;
-    _TV_POOL.queue.push({ msg: msg, transfer: transfer, resolve: resolve, reject: reject });
+    (low ? _TV_POOL.low : _TV_POOL.queue).push({ msg: msg, transfer: transfer, resolve: resolve, reject: reject });
     _tvDispatch();
   });
 }
@@ -384,6 +403,35 @@ async function labBakeFieldAsync(recipe, N) {
     });
   }));
   return { data: data, fieldMin: mn, fieldMax: mx };
+}
+
+/* ── v0.36.0 — per-design geometry numbers (decision 0010) ─────────────
+   Background jobs (low priority: a Run or a viewer bake always goes first).
+   labGeomWallGapAsync(recipe, N, conn) → Promise<{ wallVox, gapVox, solid } | null>
+     0/1 voxels in x-slabs over the pool (the elastic 'voxels' job), then one
+     job does the island trim and the two inscribed-ball measures.
+   labGeomRadiusAsync(d, dB, N, u) → Promise<{ r5, r0, n } | null>
+     tightest radius from a copy of a tile's field (14f geomTightestRadius). */
+async function labGeomWallGapAsync(recipe, N, conn) {
+  if (!_tvCanUseWorkers()) return null;
+  var NN = N * N, raw = new Float32Array(NN * N);
+  var key = (typeof recipeFingerprint === 'function' ? recipeFingerprint(recipe) : String(linkNowMs())) + '|' + N;
+  var importGrid = (recipe.family === 'import' && typeof importGridMessage === 'function') ? importGridMessage(recipe) : null;
+  await Promise.all(_tvSlabs(N, _tvPoolSize()).map(function (sl) {
+    return _tvRun({ type: 'voxels', recipe: recipe, N: N, key: key, i0: sl[0], i1: sl[1], importGrid: importGrid }, null, true).then(function (r) {
+      raw.set(r.v, sl[0] * NN);
+    });
+  }));
+  var c = conn || { connectivity: 'networks', pruneLargest: true };
+  return _tvRun({ type: 'geomnums', N: N, raw: raw, family: recipe.family, prune: c.connectivity !== 'off',
+                  conn: { connectivity: c.connectivity || 'networks', pruneLargest: c.pruneLargest !== false } }, [raw.buffer], true);
+}
+async function labGeomRadiusAsync(d, dB, N, u) {
+  if (!_tvCanUseWorkers()) return null;
+  var dc = Float32Array.from(d), dBc = dB ? Float32Array.from(dB) : null;
+  var uc = { topoMode: u.topoMode, isoLevel: u.isoLevel, thickness: u.thickness, halfInvert: u.halfInvert, pipeR: u.pipeR,
+             pipeOffset: (u.pipeOffset || [0, 0, 0]).slice(), normMode: u.normMode || 0, pairMode: u.pairMode || 0 };
+  return _tvRun({ type: 'georadius', N: N, d: dc, dB: dBc, u: uc }, dBc ? [dc.buffer, dBc.buffer] : [dc.buffer], true);
 }
 
 /* ── v0.28.0 — fluids: lattice Boltzmann wall links on the pool ──────────

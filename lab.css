@@ -1495,6 +1495,14 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
 .gl-v { color:var(--ink-2) }
 .gl-n { color:var(--ink-mute) }
 .gl-sw { width:10px; height:10px; border-radius:2px; flex:none; margin-left:6px }
+/* v0.36.0 — per-design number on each Geometry tile: Lab's tile chip (.vp-buckle-chip), with a hover note */
+.vp-buckle-chip.geom-num { pointer-events:auto; cursor:help }
+.vp-buckle-chip.geom-num .lbl { color:var(--ink-2) }
+.vp-buckle-chip.geom-num .val { color:var(--ink); font-size:11px }
+.vp-buckle-chip.geom-ok  { border-left-color:#1D9E75 }
+.vp-buckle-chip.geom-low { border-left-color:#ef4444 }
+.vp-buckle-chip.geom-low .lbl { color:#ef4444 }
+
 /* v0.35.1 — Turn again: an icon button inside the View group (.cp-seg button), next to Shaded */
 .cp-seg button.geom-turn { display:inline-flex; align-items:center; justify-content:center; padding:3px 7px }
 .cp-seg button.geom-turn svg { width:16px; height:16px }

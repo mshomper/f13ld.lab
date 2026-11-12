@@ -1,0 +1,70 @@
+// F13LD.lab v0.36.0 · per-design geometry numbers check (decision 0010).
+// Run: node proto/geom-views/numbers_check.js (from any folder).  No browser, no GPU.
+//   N1  tightest radius (14f geomTightestRadius) on shapes with a known answer: strut, ball, pore ball
+//   N2  thinnest wall and tightest gap (14d inscribed-ball measure) on a periodic plate
+//   N3  the real pool job code (17c THERMAL_VOXEL_ONMESSAGE): 'voxels' slabs + 'geomnums' + 'georadius'
+//       give the same numbers as calling the functions directly (Schwarz P and gyroid demos)
+const fs = require('fs'), vm = require('vm'), path = require('path');
+const ROOT = path.join(__dirname, '..', '..');
+const ctx = vm.createContext({ console, Math, Float32Array, Float64Array, Int32Array, Uint8Array, Uint16Array, Uint32Array, Int8Array, Int16Array, Array, Object, JSON, Date, Infinity, NaN, isFinite, Error, Map, Set, performance: { now: () => Date.now() } });
+const load = f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f });
+['13-kernels.js', '13b-kernels-new.js', '13c-import-kernel.js', '13d-foam-kernel.js', '14-rasterizer.js', '14a-connectivity.js',
+ '14c-stl-import.js', '14d-voxel-stats.js', '14e-link-field.js', '14f-geom-curvature.js', '15-demo-recipes.js'].forEach(load);
+const TAU = 2 * Math.PI;
+let fails = 0;
+const check = (name, ok, detail) => { if (!ok) fails++; console.log((ok ? 'pass  ' : 'FAIL  ') + name + (detail ? ': ' + detail : '')); };
+const grid = (f, N) => { const d = new Float32Array(N * N * N); for (let k = 0, o = 0; k < N; k++) for (let j = 0; j < N; j++) for (let i = 0; i < N; i++, o++) d[o] = f((i + .5) / N * TAU - Math.PI, (j + .5) / N * TAU - Math.PI, (k + .5) / N * TAU - Math.PI); return d; };
+const SOLID_BELOW = { topoMode: 1, halfInvert: 1, isoLevel: 0 };   /* TPMS solid: solid where field < level */
+
+// N1 — tightest radius: strut (r), solid ball (R), spherical pore (R); all should read their radius
+for (const N of [48, 96]) {
+  const h = TAU / N;
+  for (const [name, f, R] of [['strut r = 4 voxels', (x, y) => Math.hypot(x, y) - 4 * h, 4 * h],
+                              ['ball R = 1.2', (x, y, z) => Math.hypot(x, y, z) - 1.2, 1.2],
+                              ['pore ball R = 1.5', (x, y, z) => 1.5 - Math.hypot(x, y, z), 1.5]]) {
+    const t0 = Date.now(), r = ctx.geomTightestRadius(grid(f, N), null, N, SOLID_BELOW), ms = Date.now() - t0;
+    const err = 100 * (r.r5 - R) / R;
+    check('N1 ' + name + ' at ' + N + '³', Math.abs(err) < 5, 'r5 ' + r.r5.toFixed(4) + ' vs ' + R.toFixed(4) + ' (' + err.toFixed(1) + ' %), ' + r.n + ' crossings, ' + ms + ' ms');
+  }
+}
+
+// N2 — periodic plate, solid |x| < t/2: thinnest wall = t, tightest gap = cell − t (in voxels, ±1)
+{
+  const N = 96, tv = 20, kept = new Float32Array(N * N * N);
+  for (let x = 0; x < N; x++) if (Math.abs(x + 0.5 - N / 2) < tv / 2) for (let y = 0; y < N; y++) for (let z = 0; z < N; z++) kept[x * N * N + y * N + z] = 1;
+  const wall = ctx.sweepFeatureThickness(kept, N).thin, pore = Uint8Array.from(kept, v => v > .5 ? 0 : 1), gap = ctx.sweepFeatureThickness(pore, N).thin;
+  check('N2 plate wall ' + tv + ' voxels', Math.abs(wall - tv) <= 1, 'measured ' + wall.toFixed(2));
+  check('N2 plate gap ' + (N - tv) + ' voxels', Math.abs(gap - (N - tv)) <= 1, 'measured ' + gap.toFixed(2));
+}
+
+// N3 — the worker job code itself, run in this context with postMessage captured
+{
+  const pool = fs.readFileSync(path.join(ROOT, '17c-thermal-voxel-pool.js'), 'utf8');
+  const pctx = vm.createContext({ document: undefined, console });
+  vm.runInContext(pool, pctx);
+  check('N3 pool loads 14c, 14d and 14f', ['14c-stl-import.js', '14d-voxel-stats.js', '14f-geom-curvature.js'].every(f => pctx.THERMAL_VOXEL_FILES.indexOf(f) >= 0), pctx.THERMAL_VOXEL_VERSION);
+  let last = null; ctx.postMessage = m => { last = m; };
+  vm.runInContext(pctx.THERMAL_VOXEL_ONMESSAGE, ctx);
+  const job = m => { last = null; ctx.onmessage({ data: m }); if (!last || !last.ok) throw new Error((last && last.message) || 'no reply'); return last; };
+  for (const key of ['schwarzP', 'spinodoid']) {
+    const recipe = ctx.DEMO_RECIPES[key]; if (!recipe) { check('N3 demo ' + key, false, 'missing'); continue; }
+    const N = 96, NN = N * N, raw = new Float32Array(NN * N), t0 = Date.now();
+    for (const [i0, i1] of [[0, 30], [30, 61], [61, 96]]) raw.set(job({ type: 'voxels', recipe, N, key: 'k', i0, i1 }).v, i0 * NN);
+    const tVox = Date.now() - t0, t1 = Date.now();
+    const got = job({ type: 'geomnums', N, raw: Float32Array.from(raw), family: recipe.family, prune: true, conn: { connectivity: 'networks', pruneLargest: true } });
+    const tNum = Date.now() - t1;
+    const st = ctx.sweepGeometryStats(recipe, N, 'networks');   /* the sweep's own thinnest feature */
+    const kept = ctx.pruneVoxels(raw, N, recipe.family, { connectivity: 'networks', pruneLargest: true });
+    const gap = ctx.sweepFeatureThickness(Uint8Array.from(kept, v => v > .5 ? 0 : 1), N).thin;
+    check('N3 ' + key + ' wall = sweep thinnest feature', got.wallVox === st.thinVox, got.wallVox + ' vs ' + st.thinVox + ' voxels (' + (got.wallVox / N * 5).toFixed(3) + ' mm at 5 mm cell)');
+    check('N3 ' + key + ' gap = direct measure', got.gapVox === gap, got.gapVox + ' voxels; voxels ' + tVox + ' ms single-thread, trim + measures ' + tNum + ' ms');
+    /* radius: the tile's field (buildRawField at 48³) and the tile's uniforms for a TPMS solid */
+    const params = ctx.KERNELS[recipe.family].parseRecipe(recipe), args = ctx.resolveBuildArgs(recipe), fr = ctx.buildRawField(recipe.family, params, 48);
+    const u = { topoMode: 1, halfInvert: 1, isoLevel: args.offset || 0, thickness: 0.3, pipeR: 0.1, pipeOffset: [0, 0, 0], normMode: 0, pairMode: 0 };
+    const rj = job({ type: 'georadius', N: 48, d: Float32Array.from(fr.data), dB: null, u }), rd = ctx.geomTightestRadius(fr.data, null, 48, u);
+    check('N3 ' + key + ' radius job = direct', rj.r5 === rd.r5 && rj.n === rd.n, 'r5 ' + rj.r5.toFixed(4) + ' world (' + (rj.r5 * 5 / TAU).toFixed(3) + ' mm at 5 mm cell), ' + rj.n + ' crossings');
+  }
+}
+
+console.log(fails ? fails + ' failed' : 'all passed');
+process.exit(fails ? 1 : 0);

@@ -1,13 +1,8 @@
 // F13LD.lab · Geometry tab curvature check (v0.35.0): is curvature baked from the viewer's field
-// accurate?  Runs the real labBakeCurvature from 21-raymarcher.js, then reads it as the shader does
-// (trilinear at the surface point).  Run: node proto/geom-views/curvature_check.js (from any folder)
-const fs = require('fs'), path = require('path');
-const rm = fs.readFileSync(path.join(__dirname, '..', '..', '21-raymarcher.js'), 'utf8').replace(/\r\n/g, '\n');
-const grab = name => { const at = rm.indexOf('function ' + name); return new Function(rm.slice(at, rm.indexOf('\n}\n', at) + 2) + ';return ' + name + ';')(); };
-const labBakeCurvature = grab('labBakeCurvature');
-const labBakeCompDistance = grab('labBakeCompDistance');   /* v0.35.1 */
-const labBakeCompCurvature = (() => { const at = rm.indexOf('function labBakeCompCurvature'), src = n => { const a = rm.indexOf('function ' + n); return rm.slice(a, rm.indexOf('\n}\n', a) + 2); };
-  return new Function(src('labBakeCurvature') + src('labBakeCompDistance') + rm.slice(at, rm.indexOf('\n}\n', at) + 2) + ';return labBakeCompCurvature;')(); })();
+// accurate?  Runs the real labBakeCurvature (14f-geom-curvature.js since v0.36.0), then reads it as the
+// shader does (trilinear at the surface point).  Run: node proto/geom-views/curvature_check.js (from any folder)
+const path = require('path');
+const { labBakeCurvature, labBakeCompDistance, labBakeCompCurvature } = require(path.join(__dirname, '..', '..', '14f-geom-curvature.js'));
 const TAU = 2 * Math.PI;
 
 function grid(f, N) {
