@@ -15,8 +15,17 @@
    iteration count, NOT equality with the old numbers.
    ============================================================ */
 
-const fs = require('fs');
-const L = require('./_willot.js');
+const fs = require('fs'), path = require('path');
+/* v0.35.1 — _willot.js (the extracted solver this was written against) is not in the repo; say so
+   instead of failing with a module error.  Put it next to this script to run the checks. */
+const WILLOT_FILE = path.join(__dirname, '_willot.js');
+if (!fs.existsSync(WILLOT_FILE)) {
+  console.log('validate-willot: needs _willot.js next to this script (' + WILLOT_FILE + '); it is not in the repo. Nothing checked.');
+  process.exit(0);
+}
+const L = require(WILLOT_FILE);
+/* Check 6 reads a recipe file; set WILLOT_WAVE_JSON to its path, or the check is skipped. */
+const WAVE_JSON = process.env.WILLOT_WAVE_JSON || '';
 
 const Es = 110000, nu = 0.34;   /* Ti-6Al-4V default */
 const C = (x) => (x / 1000).toFixed(2);   /* MPa → GPa string */
@@ -119,8 +128,9 @@ runRecipe('gyroid', gyroid(bestWt), 20, 'willot');
 
 /* ════ 6 · Attached wave recipe — vs MIL-HS card (45.18 GPa @ Es=100, E/Es≈0.452) ════ */
 console.log('── 6 · f13ld_wave recipe — vs MIL-HS card (E/Es≈0.452) & Lab card (E/Es≈0.135) ──');
-{
-  const wave = JSON.parse(fs.readFileSync('/mnt/user-data/uploads/f13ld_wave_2026-06-21T18-03-15.json','utf8'));
+if (!WAVE_JSON || !fs.existsSync(WAVE_JSON)) console.log('   skipped: set WILLOT_WAVE_JSON to the f13ld_wave recipe file');
+else {
+  const wave = JSON.parse(fs.readFileSync(WAVE_JSON, 'utf8'));
   wave.geometry = { mode: 'solid' };
   wave.material = { Es_MPa: 100000, nu: 0.3 };   /* match the MIL-HS card */
   for (const cfg of [['continuous',20],['willot',20],['willot',32]]) {

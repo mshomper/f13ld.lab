@@ -1495,3 +1495,26 @@ button.at-chip:hover { border-color:var(--ink-2); color:var(--ink); }
 .gl-v { color:var(--ink-2) }
 .gl-n { color:var(--ink-mute) }
 .gl-sw { width:10px; height:10px; border-radius:2px; flex:none; margin-left:6px }
+/* v0.35.1 — Turn again: an icon button inside the View group (.cp-seg button), next to Shaded */
+.cp-seg button.geom-turn { display:inline-flex; align-items:center; justify-content:center; padding:3px 7px }
+.cp-seg button.geom-turn svg { width:16px; height:16px }
+.cp-seg button.geom-turn svg .acc { fill:var(--neon); stroke:none }
+
+/* v0.35.1 — header at phone width: words hide (icons and hover labels stay), then the wordmark and
+   version; the Mesh button (markup stamped across the suite) reads "⬡ Mesh" by CSS only */
+@media (max-width: 760px) {
+  .f13ld-header { padding:0 10px }
+  .fh-right { gap:6px }
+  .fh-ib { font-size:0; gap:0; padding:6px 8px }
+  .fh-ib .fh-ico, .fh-ib .fh-ico svg { width:16px; height:16px }
+  .fh-ib .fh-prog:not(:empty), .fh-ib .fh-cnt:not(:empty) { font-size:9.5px; margin-left:4px }
+}
+@media (max-width: 480px) {
+  .fh-left { gap:8px }
+  .fh-wordmark, .fh-version { display:none }
+  .fh-right { gap:4px }
+  .fh-ib { padding:5px 6px }
+  #meshHandoffBtn { font-size:0; padding:5px 10px }
+  #meshHandoffBtn::after { content:'\2B21  Mesh'; font-size:11px; white-space:pre }
+}
+@media (max-width: 400px) { .fh-icon { display:none } }   /* the tool tile repeats "LAB"; room for 360 px phones */
