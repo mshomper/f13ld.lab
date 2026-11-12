@@ -10,6 +10,7 @@
         demos use, plus anisotropic shell, isotropic shell and PI-TPMS
      2. partial-volume fractions (voxelFractionsFromMargin with iRange,
         rows packed as the main thread sends them)
+     3. v0.35.2 — the crush grid (labPrepCrushParallel) against 16g upload's own build
    ============================================================ */
 const fs = require('fs'), vm = require('vm'), path = require('path');
 const out = [];
@@ -64,5 +65,41 @@ for (const name of Object.keys(recipes)) {
   let dp = 0; for (let p = 0; p < N3; p++) if (pv[p] !== pvFull[p]) dp++;
   check(name + ': margin + partial volume identical', dm === 0 && dp === 0, (dm || dp) ? dm + ' margin / ' + dp + ' fraction values differ' : '');
 }
-console.log(fails ? '\n' + fails + ' FAILED' : '\nall passed');
-process.exit(fails ? 1 : 0);
+/* 3. v0.35.2 — Crush prep on the pool (17c labPrepCrushParallel): the grid handed to the crush solver
+   must be bit-identical to what NonlinearSolverFull.upload builds on the main thread (16g: buildVoxels,
+   then pruneVoxels with the run's connectivity options when pruneLargest).  The pool is replaced by
+   the real message handler run in place; every recipe at 32³ and 64³, connectivity networks / largest
+   / off; plus the reuse of an elastic prep of the same recipe object. */
+(async () => {
+  L('_tvCanUseWorkers = function () { return true; }');
+  ctx.__call = call;
+  L('_tvRun = function (msg) { return Promise.resolve(__call(msg)); }');
+  for (const NC of [32, 64]) for (const conn of ['networks', 'largest', 'off']) {
+    let bad = [];
+    for (const name of Object.keys(recipes)) {
+      const r = recipes[name], fam = r.family, opts = { connectivity: conn, pruneLargest: conn !== 'off', partialVolume: false, voidContrast: 1e-4 };
+      const args = L('resolveBuildArgs')(r), params = L('KERNELS')[fam].parseRecipe(r);
+      let ref = L('buildVoxels')(fam, params, args.offset, NC, args.mode, args.wt, args.nWeights, args.pipeR, args.phaseShift);
+      if (opts.pruneLargest) ref = L('pruneVoxels')(ref, NC, fam, opts);   /* as 16g upload */
+      L('_TV_CRUSH_CACHE = null; _TV_PREP_CACHE = null;');
+      const got = await L('labPrepCrushParallel')(r, NC, opts);
+      let d = got && got.length === ref.length ? 0 : -1;
+      if (d === 0) for (let p = 0; p < ref.length; p++) if (got[p] !== ref[p]) d++;
+      if (d) bad.push(name + ' (' + (d < 0 ? 'no grid' : d + ' voxels') + ')');
+    }
+    check('crush grid ' + NC + '³, connectivity ' + conn + ': identical on ' + Object.keys(recipes).length + ' recipes', !bad.length, bad.join(', '));
+  }
+  /* reuse: the elastic prep of the same recipe object (one-entry cache) gives the same kept grid */
+  {
+    const r = recipes.schwarzP, opts = { connectivity: 'networks', pruneLargest: true, partialVolume: true, voidContrast: 1e-4 };
+    L('_TV_CRUSH_CACHE = null; _TV_PREP_CACHE = null;');
+    await L('labPrepElasticParallel')(r, 32, opts);
+    const reused = await L('labPrepCrushParallel')(r, 32, opts);
+    L('_TV_CRUSH_CACHE = null; _TV_PREP_CACHE = null;');
+    const fresh = await L('labPrepCrushParallel')(r, 32, opts);
+    let d = 0; for (let p = 0; p < fresh.length; p++) if (reused[p] !== fresh[p]) d++;
+    check('crush grid reused from the elastic prep: identical', d === 0, d ? d + ' voxels differ' : '');
+  }
+  console.log(fails ? '\n' + fails + ' FAILED' : '\nall passed');
+  process.exit(fails ? 1 : 0);
+})();
