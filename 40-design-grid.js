@@ -440,8 +440,68 @@ function flowShearRows(d, fr){
 var LAB_WARN_ICON = '<svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 3.2 V6.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="8.7" r="0.85" fill="currentColor"/></svg>';
 /* every Flow row takes the wide value column (X / Y / Z values on one line) */
 function flowStats(d){
-  var rows = _flowStats(d);
+  var rows = _flowStats(d).concat(flowHXRows(d));   /* v0.37.0 — pressure drop section */
   for (var i = 0; i < rows.length; i++) if (!rows[i].group) rows[i].wide = true;
+  return rows;
+}
+/* ── v0.37.0 — pressure drop (19i, FLOW_HX_BY_DESIGN; scope §19) ──
+   Shown when Pressure drop is on or a result exists.  Stored dimensionless; the fluid, cell size
+   and speed units of the Flow settings turn it into speeds and Pa/m live (no re-solve). */
+function fmtPaPerM(v){
+  if (!(v > 0) || !isFinite(v)) return '—';
+  if (v >= 1e6) return fmt3(v / 1e6) + ' MPa/m';
+  if (v >= 1e3) return fmt3(v / 1e3) + ' kPa/m';
+  return fmt3(v) + ' Pa/m';
+}
+function flowHXRows(d){
+  var rec = (typeof FLOW_HX_BY_DESIGN !== 'undefined') ? FLOW_HX_BY_DESIGN[d.id] : null;
+  var on = typeof FLOW_STATE !== 'undefined' && FLOW_STATE.hx;
+  if (!rec && !on) return [];
+  var dash = ['—', 'neut'];
+  var rows = [
+    { group:'Pressure drop' },
+    { lbl:'Inertial drag', val:'—', delta:dash, tip:'Forchheimer factor F = β√K: how fast the pressure drop grows past Darcy’s law as the flow speeds up. Fitted on the points where inertia is at least 10 % of the drop.' },
+    { lbl:'Inertia matters from', val:'—', delta:dash, tip:'The Reynolds number where inertia makes up 10 % of the pressure drop. Below it, Darcy’s law and the permeability are enough.' },
+    { lbl:'At the top point', val:'—', delta:dash }
+  ];
+  if (!rec){ rows[1].delta = [(typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'run to compute' : 'enable Flow + Run', 'neut']; return rows; }
+  if (rec.error){ rows[1].delta = [rec.error, 'warn']; return rows; }
+  var pk = flowHXPick(rec, FLOW_STATE.dir);
+  if (!pk){ rows[1].delta = ['no open pore path', 'neut']; return rows; }
+  var ax = 'XYZ'[pk.axis];
+  if (pk.missing){ rows[1].delta = ['re-run Flow for pressure drop along ' + ax, 'neut']; return rows; }
+  var fl = flowFluid(), cell = (typeof labCellMm === 'function') ? labCellMm(d) : null, unit = FLOW_STATE.speedUnit === 'm' ? 'm' : 'mm';
+  var Fs = [0, 1, 2].map(function(a){ var f = rec.axes[a] ? flowHXFit(rec, a) : null; return f && f.F != null ? (+f.F.toPrecision(2)).toString() : '—'; });
+  rows[1].val = Fs.join(' / ');
+  if (!(fl.mu > 0)){ rows[1].delta = ['enter the custom viscosity in Flow settings', 'neut']; return rows; }
+  if (!(cell > 0)){ rows[1].delta = ['no cell size for this design', 'neut']; return rows; }
+  var ph = flowHXPhysical(rec, pk.axis, { mu: fl.mu, rho: fl.rho, cellMm: cell }), fit = ph && ph.fit;
+  if (!ph || !fit.n){ rows[1].delta = ['no point solved along ' + ax, 'neut']; return rows; }
+  var along = 'along ' + ax + (pk.best ? ' (most permeable)' : '');
+  rows[1].delta = ['Forchheimer factor · X / Y / Z' + (ph.beta != null ? ' · β ' + fmt3(ph.beta) + ' 1/m ' + along : ''), 'neut'];
+  var w1 = [];
+  if (fit.F == null) w1.push('inertia stays under 10 % at every point · no fit');
+  else if (fit.nFit < 2) w1.push('fitted on one point');
+  if (fit.F != null && fit.worst > 0.05) w1.push('fit off by up to ' + Math.round(fit.worst * 100) + '% at a point');
+  if (w1.length) rows[1].warn = w1.join(' · ');
+  function rs(v){ return v >= 10 ? Math.round(v).toString() : (+v.toPrecision(2)).toString(); }
+  if (fit.onset != null){
+    rows[2].val = 'Re ' + rs(fit.onset);
+    rows[2].delta = ['10 % of the pressure drop · ' + fmtFlowSpeed(ph.onsetUs, unit) + ' in ' + fl.name.toLowerCase().replace(/^custom$/, 'your fluid') + ' · ' + along, 'neut'];
+  } else if (fit.onsetBelow){
+    rows[2].val = 'below Re ' + rs(fit.first.Re); rows[2].delta = ['inertia is already 10 % at the first point · ' + along, 'neut'];
+  } else {
+    rows[2].val = 'above Re ' + rs(fit.top.Re); rows[2].delta = ['inertia stays under 10 % up to the top point · ' + along, 'neut'];
+  }
+  var t = ph.top;
+  rows[3].val = fmtPaPerM(t.dpdx);
+  rows[3].delta = ['Re ' + rs(t.Re) + ' · ' + fmtFlowSpeed(t.Us, unit) + ' · friction factor ' + fmt3(t.f) + ' · ' + along, 'neut'];
+  var w3 = [];
+  if (fit.nSkipGrid) w3.push(fit.nSkipGrid + ' point' + (fit.nSkipGrid > 1 ? 's' : '') + ' beyond this grid, skipped · raise the flow grid');
+  if (fit.nUnstable) w3.push(fit.nUnstable + ' point' + (fit.nUnstable > 1 ? 's' : '') + ' unstable, skipped');
+  if (fit.nUnsteady) w3.push(fit.nUnsteady + ' point' + (fit.nUnsteady > 1 ? 's' : '') + ' unsteady, time-averaged, not fitted');
+  if (fit.nUnconv) w3.push(fit.nUnconv + ' point' + (fit.nUnconv > 1 ? 's' : '') + ' not converged');
+  if (w3.length) rows[3].warn = w3.join(' · ');
   return rows;
 }
 function _flowStats(d){
@@ -1815,6 +1875,7 @@ function removeDesign(designId){
   if (typeof NONLIN_BY_DESIGN !== 'undefined') delete NONLIN_BY_DESIGN[designId];
   if (typeof NONLIN_AXES !== 'undefined') delete NONLIN_AXES[designId];
   if (typeof FLOW_BY_DESIGN !== 'undefined') delete FLOW_BY_DESIGN[designId];   /* v0.28.0 */
+  if (typeof FLOW_HX_BY_DESIGN !== 'undefined') delete FLOW_HX_BY_DESIGN[designId];   /* v0.37.0 */
   if (typeof FLOW_PS !== 'undefined') delete FLOW_PS[designId];                 /* v0.29.0 */
 
   LAB_STATE.designs = LAB_STATE.designs.filter(function(d){ return d.id !== designId; });

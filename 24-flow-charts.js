@@ -9,6 +9,10 @@
       design's best speed (mPa) with the target band shaded; without one,
       per unit speed (mPa per mm/s, or Pa per m/s).
 
+   3. (v0.37.0) Pressure drop per metre against Reynolds number, both log:
+      the solved points, Darcy from the permeability (dashed) and the
+      Darcy–Forchheimer fit (solid), in the fluid and cell size of the cards.
+
    Everything follows the cards: each design's direction (Flow settings) and
    best speed (19h flowShearStats via 40 flowCardPick).  Plotly is the
    vendored basic bundle (20b ensurePlotly).
@@ -65,24 +69,35 @@ function renderFlowCharts() {
   var dirTxt = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.dir !== 'all') ? 'flow along ' + FLOW_STATE.dir.charAt(0).toUpperCase() : 'each design along its best direction';
   var sub = dirTxt + ' · ' + (fl ? fl.name.toLowerCase() : '') + ' · ' + (tg ? 'target ' + tg.label : 'no shear target');
   var h = '<div class="fc-head"><div class="fc-title">Flow · comparison<small>' + sub + '</small></div>' + _fcSwitch() + '</div>';
-  if (!ok.length) {
+  var hx = _fcHXRows(rows);   /* v0.37.0 — pressure drop */
+  if (!ok.length && !hx.length) {
     var why = rows.length ? (rows[0].cp.why || 'No wall shear data') : 'No designs loaded';
     host.innerHTML = h + '<div class="fc-empty">' + why + '</div>';
     return;
   }
-  h += '<div class="fc-legend">' + ok.map(function (r) {
-    return '<span><i style="background:' + r.color + '"></i>' + r.letter + ' · ' + (r.d.title || r.d.label || r.d.id) + ' · along ' + 'XYZ'[r.cp.pick.axis] + '</span>';
-  }).join('') + '</div>';
-  h += '<div class="fc-cap">Wall at the shear target against flow speed</div>';
-  h += tg ? '<div class="fc-plot" id="fcCover"></div>' : '<div class="fc-empty">Set a shear target in Flow settings to see how much wall each design keeps in it at every flow speed.</div>';
-  h += '<div class="fc-cap">' + (tg ? 'Shear distribution at each design’s best speed' : 'Shear distribution per unit flow speed') + '</div>';
-  h += '<div class="fc-plot" id="fcDist"></div>';
+  if (ok.length) {
+    h += '<div class="fc-legend">' + ok.map(function (r) {
+      return '<span><i style="background:' + r.color + '"></i>' + r.letter + ' · ' + (r.d.title || r.d.label || r.d.id) + ' · along ' + 'XYZ'[r.cp.pick.axis] + '</span>';
+    }).join('') + '</div>';
+    h += '<div class="fc-cap">Wall at the shear target against flow speed</div>';
+    h += tg ? '<div class="fc-plot" id="fcCover"></div>' : '<div class="fc-empty">Set a shear target in Flow settings to see how much wall each design keeps in it at every flow speed.</div>';
+    h += '<div class="fc-cap">' + (tg ? 'Shear distribution at each design’s best speed' : 'Shear distribution per unit flow speed') + '</div>';
+    h += '<div class="fc-plot" id="fcDist"></div>';
+  }
+  if (hx.length) {
+    if (!ok.length) h += '<div class="fc-legend">' + hx.map(function (r) {
+      return '<span><i style="background:' + r.color + '"></i>' + r.letter + ' · ' + (r.d.title || r.d.label || r.d.id) + ' · along ' + 'XYZ'[r.axis] + '</span>';
+    }).join('') + '</div>';
+    h += '<div class="fc-cap">Pressure drop against Reynolds number · dashed: Darcy from the permeability · solid: Darcy–Forchheimer fit</div>';
+    h += '<div class="fc-plot" id="fcHX"></div>';
+  }
   host.innerHTML = h;
   var draw = function () {
     if (typeof VIEW_STATE === 'undefined' || VIEW_STATE.mode !== 'flow' || VIEW_STATE.flowView !== 'charts') return;
-    if (typeof Plotly === 'undefined') { var e = document.getElementById('fcDist'); if (e) e.innerHTML = '<div class="fc-empty">The plotting library did not load</div>'; return; }
-    if (tg) _fcCoverPlot(document.getElementById('fcCover'), ok, unit);
-    _fcDistPlot(document.getElementById('fcDist'), ok, unit, tg);
+    if (typeof Plotly === 'undefined') { var e = document.getElementById(ok.length ? 'fcDist' : 'fcHX'); if (e) e.innerHTML = '<div class="fc-empty">The plotting library did not load</div>'; return; }
+    if (ok.length && tg) _fcCoverPlot(document.getElementById('fcCover'), ok, unit);
+    if (ok.length) _fcDistPlot(document.getElementById('fcDist'), ok, unit, tg);
+    if (hx.length) _fcHXPlot(document.getElementById('fcHX'), hx, unit);
   };
   if (typeof Plotly !== 'undefined') draw();
   else if (typeof ensurePlotly === 'function') ensurePlotly(function () { draw(); });
@@ -147,6 +162,41 @@ function _fcDistPlot(el, rows, unit, tg) {
   var extra = {};
   if (tg) extra.shapes = [{ type: 'rect', xref: 'x', yref: 'paper', x0: tg.lo, x1: tg.hi, y0: 0, y1: 1, fillcolor: 'rgba(29,158,117,0.10)', line: { width: 0 } }];
   Plotly.newPlot(el, traces, _fcLayout(xt, 'share of wall (%)', extra), FLOW_CHART_CONFIG);
+  FLOW_CHARTS.gds.push(el);
+}
+/* v0.37.0 — designs with pressure-drop points, in the fluid and cell size of the cards */
+function _fcHXRows(rows) {
+  if (typeof FLOW_HX_BY_DESIGN === 'undefined' || typeof flowHXPhysical !== 'function') return [];
+  var fl = flowFluid(), out = [];
+  rows.forEach(function (r) {
+    var rec = FLOW_HX_BY_DESIGN[r.d.id], pk = rec && !rec.error ? flowHXPick(rec, FLOW_STATE.dir) : null;
+    if (!pk || pk.missing || !(fl.mu > 0)) return;
+    var cell = (typeof labCellMm === 'function') ? labCellMm(r.d) : null;
+    var ph = cell > 0 ? flowHXPhysical(rec, pk.axis, { mu: fl.mu, rho: fl.rho, cellMm: cell }) : null;
+    if (ph && ph.points.length) out.push({ d: r.d, letter: r.letter, color: r.color, axis: pk.axis, ph: ph });
+  });
+  return out;
+}
+/* 3 — pressure drop per metre against Reynolds number (both log): points, Darcy, fit */
+function _fcHXPlot(el, rows, unit) {
+  if (!el) return;
+  var traces = [], su = flowSpeedUnit(unit), sc = unit === 'm' ? 1 : 1000;
+  rows.forEach(function (r) {
+    var ph = r.ph, pts = ph.points, lo = pts[0].Re / 1.5, hi = pts[pts.length - 1].Re * 1.5, x = [], yd = [], yf = [];
+    for (var i = 0; i <= 60; i++) {
+      var Re = lo * Math.pow(hi / lo, i / 60), Us = ph.UsOf(Re);
+      x.push(Re); yd.push(ph.darcy(Us)); yf.push(ph.forch(Us));
+    }
+    traces.push({ x: x, y: yd, mode: 'lines', line: { color: r.color, width: 1.4, dash: 'dash' }, hoverinfo: 'skip' });
+    if (ph.fit.F != null) traces.push({ x: x, y: yf, mode: 'lines', line: { color: r.color, width: 2.4 }, hoverinfo: 'skip' });
+    traces.push({ x: pts.map(function (p) { return p.Re; }), y: pts.map(function (p) { return p.dpdx; }), mode: 'markers',
+      marker: { color: pts.map(function (p) { return p.unsteady || !p.converged ? '#0b0c14' : r.color; }), size: 8, line: { color: r.color, width: 2 } },
+      customdata: pts.map(function (p) { return [p.Us * sc, p.f, (1 - 1 / p.Pi) * 100]; }),
+      hovertemplate: '<b>' + r.letter + '</b> Re %{x:.3~g} · %{customdata[0]:.3~g} ' + su + ' · %{y:.3~s}Pa/m · friction factor %{customdata[1]:.3~g} · inertia %{customdata[2]:.0f}%<extra></extra>' });
+  });
+  var L = _fcLayout('Reynolds number (hydraulic diameter, mean pore speed)', 'pressure drop (Pa/m)');
+  L.yaxis.type = 'log'; L.yaxis.rangemode = undefined; L.yaxis.exponentformat = 'SI'; L.hovermode = 'closest';
+  Plotly.newPlot(el, traces, L, FLOW_CHART_CONFIG);
   FLOW_CHARTS.gds.push(el);
 }
 function _fcRgba(hex, a) {

@@ -82,6 +82,7 @@ function labSnapshotSettings(){
            flowN: FLOW_STATE.N, flowTol: FLOW_STATE.tol,
            flowDir: FLOW_STATE.dir, flowFluid: FLOW_STATE.fluid, flowMu: FLOW_STATE.muCustom, flowTarget: FLOW_STATE.target,
            flowTLo: FLOW_STATE.tLo, flowTHi: FLOW_STATE.tHi, flowUnit: FLOW_STATE.speedUnit, flowChamber: FLOW_STATE.chamberMm,
+           flowHX: !!FLOW_STATE.hx, flowHXRe: FLOW_STATE.hxRe.slice(),   /* v0.37.0 */
            gridN: GRID_STATE.N, buckleN: BUCKLE_STATE.N, nonlinN: NONLIN_STATE.N, cap: NONLIN_STATE.cap, axis: NONLIN_STATE.axis,
            fillers: { air: !!THERMAL_STATE.fillers.air, water: !!THERMAL_STATE.fillers.water, tissue: !!THERMAL_STATE.fillers.tissue },
            conn: GEOM_STATE.connectivity, pv: !!GEOM_STATE.partialVolume };
@@ -96,7 +97,9 @@ function labApplySettings(s){
   if ([1e-6, 1e-7].indexOf(s.flowTol) >= 0) FLOW_STATE.tol = s.flowTol;
   /* v0.30.0 — wall shear settings */
   if (['zz', 'xx', 'yy', 'all'].indexOf(s.flowDir) >= 0) FLOW_STATE.dir = s.flowDir;
-  if (['water', 'medium', 'custom'].indexOf(s.flowFluid) >= 0) FLOW_STATE.fluid = s.flowFluid;
+  if (typeof FLOW_FLUIDS !== 'undefined' && FLOW_FLUIDS.hasOwnProperty(s.flowFluid)) FLOW_STATE.fluid = s.flowFluid;   /* v0.37.0 — the longer list */
+  if (typeof s.flowHX === 'boolean') FLOW_STATE.hx = s.flowHX;
+  if (Array.isArray(s.flowHXRe) && typeof flowHXParseRe === 'function'){ var re = flowHXParseRe(s.flowHXRe.join(',')); if (re.length) FLOW_STATE.hxRe = re; }
   if (s.flowMu > 0) FLOW_STATE.muCustom = s.flowMu;
   if (typeof FLOW_SHEAR_TARGETS !== 'undefined' && FLOW_SHEAR_TARGETS.some(function(t){ return t.id === s.flowTarget; })) FLOW_STATE.target = s.flowTarget;
   if (s.flowTLo > 0) FLOW_STATE.tLo = s.flowTLo;
@@ -214,12 +217,29 @@ function onSegClick(btn){
     if (group === 'flowDir') FLOW_STATE.dir = v;
     else if (group === 'flowFluid') FLOW_STATE.fluid = v;
     else FLOW_STATE.speedUnit = v;
+    if (group === 'flowDir' && FLOW_STATE.hx) recomputeEstimate();   /* v0.37.0 — pressure drop solves per direction */
+    paintDock();
+    if (typeof renderDesignGrid === 'function') renderDesignGrid();
+    return;
+  } else if (group === 'flowHX'){       /* v0.37.0 — pressure drop on / off */
+    FLOW_STATE.hx = v === 'on';
+    recomputeEstimate();
     paintDock();
     if (typeof renderDesignGrid === 'function') renderDesignGrid();
     return;
   }
   recomputeEstimate();
   paintDock();
+}
+
+/* v0.37.0 — the Reynolds points field: numbers 0.1–1000, sorted, at most 12; a bad entry snaps back */
+function onFlowHXRe(el){
+  var re = (typeof flowHXParseRe === 'function') ? flowHXParseRe(el.value) : [];
+  if (re.length) FLOW_STATE.hxRe = re;
+  el.value = FLOW_STATE.hxRe.join(', ');
+  recomputeEstimate();
+  paintDock();
+  if (typeof renderDesignGrid === 'function') renderDesignGrid();
 }
 
 /* v0.30.0 — Flow number fields (custom viscosity, custom target, chamber).
@@ -268,8 +288,18 @@ function dockShearTargetGroups(){
   var items = (typeof FLOW_SHEAR_TARGETS !== 'undefined') ? FLOW_SHEAR_TARGETS.map(function(t){ return { v: t.id, name: t.name, sub: t.sub }; }) : [];
   return [{ label: null, items: items }];
 }
-function ddGroups(key){ return key === 'material' ? dockMaterialGroups() : key === 'shearTarget' ? dockShearTargetGroups() : DOCK_CONN_GROUPS; }
-function ddValue(key){ return key === 'material' ? MATERIAL_STATE.id : key === 'shearTarget' ? FLOW_STATE.target : GEOM_STATE.connectivity; }
+/* v0.37.0 — one fluid list for wall shear and pressure drop (19h FLOW_FLUIDS): the first three as
+   before, then the heat-exchanger fluids */
+function dockFluidGroups(){
+  var F = (typeof FLOW_FLUIDS !== 'undefined') ? FLOW_FLUIDS : {}, a = [], b = [];
+  for (var k in F){
+    var f = F[k], sub = f.mu ? (+(f.mu * 1000).toPrecision(3)) + ' mPa·s · ' + (+f.rho.toPrecision(4)) + ' kg/m³' : 'Your own viscosity';
+    (f.hx ? b : a).push({ v: k, name: f.name, sub: sub });
+  }
+  return [{ label: null, items: a }, { label: 'Heat exchangers', items: b }];
+}
+function ddGroups(key){ return key === 'material' ? dockMaterialGroups() : key === 'shearTarget' ? dockShearTargetGroups() : key === 'flowFluid' ? dockFluidGroups() : DOCK_CONN_GROUPS; }
+function ddValue(key){ return key === 'material' ? MATERIAL_STATE.id : key === 'shearTarget' ? FLOW_STATE.target : key === 'flowFluid' ? FLOW_STATE.fluid : GEOM_STATE.connectivity; }
 function ddFind(key, v){
   var g = ddGroups(key);
   for (var i = 0; i < g.length; i++) for (var j = 0; j < g[i].items.length; j++) if (g[i].items[j].v === v) return g[i].items[j];
@@ -322,8 +352,8 @@ function pickDropdown(key, v, ev){
   if (ev) ev.stopPropagation();
   if (key === 'material') onMaterialChange(v);
   else if (key === 'conn') onConnectivityChange(v);
-  else if (key === 'shearTarget'){   /* v0.30.0 — display only */
-    FLOW_STATE.target = v;
+  else if (key === 'shearTarget' || key === 'flowFluid'){   /* v0.30.0 — display only (v0.37.0 fluid too) */
+    if (key === 'shearTarget') FLOW_STATE.target = v; else FLOW_STATE.fluid = v;
     closeDropdowns(); paintDock();
     if (typeof renderDesignGrid === 'function') renderDesignGrid();
     return;
@@ -356,7 +386,8 @@ function dockSummary(key){
   if (key === 'buckle')  return BUCKLE_STATE.N + '³';
   if (key === 'nonlin')  return NONLIN_STATE.N + '³ · ' + Math.round(NONLIN_STATE.cap * 100) + '% · ' + (NONLIN_STATE.axis === 'all' ? 'XYZ' : NONLIN_STATE.axis.toUpperCase());
   if (key === 'thermal') return thermalFillersOn().map(function(f){ return f.id; }).join(' · ') || 'no filler';
-  if (key === 'flow')    return FLOW_STATE.N + '³' + (FLOW_STATE.tol < 1e-6 ? ' · high' : '') + ' · ' + (FLOW_STATE.dir === 'all' ? 'best' : FLOW_STATE.dir.charAt(0).toUpperCase());
+  if (key === 'flow')    return FLOW_STATE.N + '³' + (FLOW_STATE.tol < 1e-6 ? ' · high' : '') + ' · ' + (FLOW_STATE.dir === 'all' ? 'best' : FLOW_STATE.dir.charAt(0).toUpperCase()) +
+                                (FLOW_STATE.hx ? ' · pressure drop' : '');   /* v0.37.0 */
   return '';
 }
 function dockMaterialShort(){
@@ -391,8 +422,12 @@ function paintDock(){
   paintSegGroup('flowTol', FLOW_STATE.tol < 1e-6 ? 'high' : 'std');
   /* v0.30.0 — wall shear settings */
   paintSegGroup('flowDir', FLOW_STATE.dir);
-  paintSegGroup('flowFluid', FLOW_STATE.fluid);
   paintSegGroup('flowUnit', FLOW_STATE.speedUnit);
+  /* v0.37.0 — pressure drop, its Reynolds points, the fluid list */
+  paintSegGroup('flowHX', FLOW_STATE.hx ? 'on' : 'off');
+  el = document.getElementById('flowHXReRow'); if (el) el.style.display = FLOW_STATE.hx ? '' : 'none';
+  el = document.getElementById('flowHXRe'); if (el && el !== document.activeElement) el.value = FLOW_STATE.hxRe.join(', ');
+  renderDropdown('flowFluid');
   els = document.querySelectorAll('input[data-k]');
   for (i = 0; i < els.length; i++){
     if (els[i] === document.activeElement) continue;

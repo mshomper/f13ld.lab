@@ -326,7 +326,8 @@ function flowHXPhysical(rec, axis, cfg) {
            /* Darcy and fitted pressure gradient at a superficial speed (for the chart) */
            darcy: function (Us) { return cfg.mu * Us / Km; },
            forch: function (Us) { return fit.F != null ? cfg.mu * Us / Km + fit.F / Math.sqrt(Km) * cfg.rho * Us * Us : null; },
-           ReOf: function (Us) { return Us / eps * dhm / nu; } };
+           ReOf: function (Us) { return Us / eps * dhm / nu; },
+           UsOf: function (Re) { return eps * Re * nu / dhm; } };
 }
 
 /* the axis the card reports: the Flow direction setting, All = the most permeable axis solved */
