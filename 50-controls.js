@@ -786,10 +786,21 @@ async function runRealSweep(N, runToken){
            The elastic setup (macro stiffness) depends only on design, grid,
            void and tolerance, so it is reused across axes (axStore._macro). */
         var runCrush = async function(tight, axisKey, store, voidC, stepCb){
+          /* v0.35.2 — the 0/1 grid and island trim come from the geometry pool (17c), built once per
+             design and grid and shared by every axis and retry; no workers → upload builds it as before */
+          var upOpts = Object.assign({}, connOpts(), { voidContrast: voidC });
+          if (typeof labPrepCrushParallel === 'function'){
+            try {
+              upOpts.solid = await labPrepCrushParallel(rcpN, nlN, upOpts, function(p){
+                if (!stale()) paintRunStatus('<span class="v">Nonlinear</span> · Design ' + dletter(dn, ni) + ' · N=' + nlN + ' · preparing voxels ' + Math.round(p.done / p.total * 100) + '%');
+              });
+            } catch (ePrep){ console.warn('[crush] parallel prep failed, using the main thread:', ePrep); upOpts.solid = null; }
+          }
+          if (stale()) throw new Error('run superseded');
           var s = new NonlinearSolverFull(nlN, nlfft);
           try {
             if (tight){ s.newtonTol = NL_TIGHT_NEWTON_TOL; if (NL_TIGHT_CG_TOL) s.cgTol = NL_TIGHT_CG_TOL; }
-            s.upload(rcpN, Object.assign({}, connOpts(), { voidContrast: voidC }));
+            s.upload(rcpN, upOpts);
             /* the elastic setup depends on void and cgTol only (it solves at newtonTol = cgTol),
                so a tight retry reuses the first attempt's setup (v0.17.2) */
             var mk = 'v' + voidC + '|cg' + s.cgTol;

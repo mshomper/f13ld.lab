@@ -39,6 +39,10 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 
 **Nonlinear crush** runs at its own resolution (Configure → Crush → Grid, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Load axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
 
+## What's new in v0.35.2
+
+- **Turning on Crush no longer freezes the page:** its voxels are built on the background workers, once per design, and shared by every load axis.
+
 ## What's new in v0.35.1
 
 - **Curvature on PI-TPMS and normalized shells** is baked from the exact field like every other design, so it no longer speckles at tight colour scales (normalized PI reads as before).
