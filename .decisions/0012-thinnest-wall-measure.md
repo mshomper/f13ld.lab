@@ -1,9 +1,14 @@
 # 0012 Which measure should 'thinnest wall' and 'tightest gap' use, now that the sweep's measure reads the thickest place on smooth TPMS?
 
-- Status: open
-- Date: 2026-11-11
+- Status: decided
+- Date: 2026-11-11, decided 2026-11-11
 - Lenses: solver, data-model
 - Builds on: 0010
+- Settles: thinnest wall measure = local thickness (largest inscribed ball containing each solid voxel, Hildebrand–Rüegsegger / BoneJ Tb.Th style), 5th percentile by volume; tightest gap = the same on the pore space
+
+## Decision
+
+**A: Local thickness, in Lab and the sweep.** Every solid voxel gets the diameter of the largest ball that fits in the solid and covers it (the trabecular-thickness method used by BoneJ). Report the 5th percentile by volume. Pore space the same way for the tightest gap. Replace the sweep's thinnest feature with it.
 
 ## Context
 
@@ -11,7 +16,7 @@ Building decision 0010 showed that the sweep's thinnest-feature measure (14d) ke
 
 ## Options
 
-### A: Local thickness, in Lab and the sweep (recommended)
+### A: Local thickness, in Lab and the sweep (chosen) (recommended)
 
 Every solid voxel gets the diameter of the largest ball that fits in the solid and covers it (the trabecular-thickness method used by BoneJ). Report the 5th percentile by volume. Pore space the same way for the tightest gap. Replace the sweep's thinnest feature with it.
 - Pro: The standard measure for bone and scaffolds; reads the neck on Schwarz P.

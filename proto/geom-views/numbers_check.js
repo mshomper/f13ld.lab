@@ -32,7 +32,7 @@ for (const N of [48, 96]) {
 {
   const N = 96, tv = 20, kept = new Float32Array(N * N * N);
   for (let x = 0; x < N; x++) if (Math.abs(x + 0.5 - N / 2) < tv / 2) for (let y = 0; y < N; y++) for (let z = 0; z < N; z++) kept[x * N * N + y * N + z] = 1;
-  const wall = ctx.sweepFeatureThickness(kept, N).thin, pore = Uint8Array.from(kept, v => v > .5 ? 0 : 1), gap = ctx.sweepFeatureThickness(pore, N).thin;
+  const wall = ctx.sweepLocalThickness(kept, N, [0.05])[0], pore = Uint8Array.from(kept, v => v > .5 ? 0 : 1), gap = ctx.sweepLocalThickness(pore, N, [0.05])[0];
   check('N2 plate wall ' + tv + ' voxels', Math.abs(wall - tv) <= 1, 'measured ' + wall.toFixed(2));
   check('N2 plate gap ' + (N - tv) + ' voxels', Math.abs(gap - (N - tv)) <= 1, 'measured ' + gap.toFixed(2));
 }
@@ -55,7 +55,7 @@ for (const N of [48, 96]) {
     const tNum = Date.now() - t1;
     const st = ctx.sweepGeometryStats(recipe, N, 'networks');   /* the sweep's own thinnest feature */
     const kept = ctx.pruneVoxels(raw, N, recipe.family, { connectivity: 'networks', pruneLargest: true });
-    const gap = ctx.sweepFeatureThickness(Uint8Array.from(kept, v => v > .5 ? 0 : 1), N).thin;
+    const gap = ctx.sweepLocalThickness(Uint8Array.from(kept, v => v > .5 ? 0 : 1), N, [0.05])[0];
     check('N3 ' + key + ' wall = sweep thinnest feature', got.wallVox === st.thinVox, got.wallVox + ' vs ' + st.thinVox + ' voxels (' + (got.wallVox / N * 5).toFixed(3) + ' mm at 5 mm cell)');
     check('N3 ' + key + ' gap = direct measure', got.gapVox === gap, got.gapVox + ' voxels; voxels ' + tVox + ' ms single-thread, trim + measures ' + tNum + ' ms');
     /* radius: the tile's field (buildRawField at 48³) and the tile's uniforms for a TPMS solid */
@@ -63,6 +63,35 @@ for (const N of [48, 96]) {
     const u = { topoMode: 1, halfInvert: 1, isoLevel: args.offset || 0, thickness: 0.3, pipeR: 0.1, pipeOffset: [0, 0, 0], normMode: 0, pairMode: 0 };
     const rj = job({ type: 'georadius', N: 48, d: Float32Array.from(fr.data), dB: null, u }), rd = ctx.geomTightestRadius(fr.data, null, 48, u);
     check('N3 ' + key + ' radius job = direct', rj.r5 === rd.r5 && rj.n === rd.n, 'r5 ' + rj.r5.toFixed(4) + ' world (' + (rj.r5 * 5 / TAU).toFixed(3) + ' mm at 5 mm cell), ' + rj.n + ' crossings');
+  }
+}
+
+// N4 — local thickness (decision 0012): the fast method against the definition, painted ball by ball
+// (every solid voxel takes the largest inscribed ball that holds it), at 32³; and timing at 64³ / 96³
+{
+  const lt = (solid, N) => {   /* brute force: paint every voxel's inscribed ball */
+    const N3 = N * N * N, NN = N * N, A = new Float32Array(N3); for (let i = 0; i < N3; i++) A[i] = solid[i] ? ctx.EDT_INF : 0; ctx.periodicEdt3d(A, N);
+    const T = new Float32Array(N3);
+    for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) for (let z = 0; z < N; z++) {
+      const id = x * NN + y * N + z; if (!solid[id] || !A[id]) continue; const r2 = A[id], r = Math.sqrt(r2), R = Math.floor(r);
+      for (let a = -R; a <= R; a++) for (let b = -R; b <= R; b++) for (let c = -R; c <= R; c++) if (a * a + b * b + c * c <= r2) {
+        const q = ((x + a + N) % N) * NN + ((y + b + N) % N) * N + ((z + c + N) % N); if (r > T[q]) T[q] = r; }
+    }
+    const v = []; for (let i = 0; i < N3; i++) if (solid[i]) v.push(2 * T[i] + 0.5); v.sort((p, q) => p - q);
+    return [v[Math.floor(v.length * 0.05)], v[Math.floor(v.length * 0.5)]];
+  };
+  for (const key of ['schwarzP', 'spinodoid']) {
+    const r = ctx.DEMO_RECIPES[key], p = ctx.KERNELS[r.family].parseRecipe(r), a = ctx.resolveBuildArgs(r), N = 32;
+    const kept = ctx.pruneVoxels(ctx.buildVoxels(r.family, p, a.offset, N, a.mode, a.wt, a.nWeights, a.pipeR, a.phaseShift), N, r.family, { connectivity: 'networks', pruneLargest: true });
+    const fast = ctx.sweepLocalThickness(kept, N, [0.05, 0.5]), ref = lt(kept, N);
+    check('N4 ' + key + ' 32³ thinnest wall, fast vs painted', Math.abs(fast[0] - ref[0]) <= 0.5, fast[0].toFixed(2) + ' vs ' + ref[0].toFixed(2) + ' voxels');
+    check('N4 ' + key + ' 32³ median wall, fast vs painted', Math.abs(fast[1] - ref[1]) <= 0.5, fast[1].toFixed(2) + ' vs ' + ref[1].toFixed(2) + ' voxels');
+  }
+  for (const N of [64, 96]) {
+    const r = ctx.DEMO_RECIPES.schwarzP, p = ctx.KERNELS[r.family].parseRecipe(r), a = ctx.resolveBuildArgs(r);
+    const kept = ctx.buildVoxels(r.family, p, a.offset, N, a.mode, a.wt, a.nWeights, a.pipeR, a.phaseShift), t0 = Date.now();
+    const v = ctx.sweepLocalThickness(kept, N, [0.05, 0.5]), ms = Date.now() - t0;
+    check('N4 Schwarz P ' + N + '³ time (one thread)', ms < 4000, ms + ' ms; thinnest ' + v[0].toFixed(1) + ', median ' + v[1].toFixed(1) + ' voxels (old measure gave the node, 82.5 at 96³)');
   }
 }
 

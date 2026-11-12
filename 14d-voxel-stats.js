@@ -43,7 +43,8 @@ function sweepGeometryStats(recipe, N, connectivity) {
   var trim = 0;
   for (var j = 0; j < N3; j++) trim += kept[j];
   var out = { N: N, vf_raw: raw / N3, vf_trim: trim / N3, spans: { x: false, y: false, z: false },
-              reach: { x: false, y: false, z: false }, networks: 0, islands: 0, thinVox: null, medVox: null };
+              reach: { x: false, y: false, z: false }, networks: 0, islands: 0, thinVox: null, medVox: null,
+              thinMeasure: 'local-thickness' };   /* v0.36.0 — decision 0012; the sweep CSV checks this */
   if (!trim) return out;
   /* v0.27.0 — spans = the straight reach (carries load along the axis);
      reach = any wrap, e.g. sheets tilted 45° (heat and fluid follow them) */
@@ -52,13 +53,92 @@ function sweepGeometryStats(recipe, N, connectivity) {
   out.spans = { x: !!(ax & 1), y: !!(ax & 2), z: !!(ax & 4) };
   out.reach = { x: !!(bits & 1), y: !!(bits & 2), z: !!(bits & 4) };
   if (trim < N3) {
-    var ft = sweepFeatureThickness(kept, N);
-    out.thinVox = ft.thin; out.medVox = ft.med;
+    var lt = sweepLocalThickness(kept, N, [0.05, 0.5]);   /* v0.36.0 — decision 0012 */
+    out.thinVox = lt[0]; out.medVox = lt[1];
   }
   return out;
 }
 
-/* Thickness at maximal-ball centers of the inside distance transform. */
+/* v0.36.0 — local thickness (decision 0012): every solid voxel gets the diameter of the largest ball
+   that fits inside the solid and contains it (Hildebrand & Rüegsegger 1997; BoneJ's Tb.Th).  Returns the
+   thickness (voxels, same 2r + 0.5 convention as before) below which the given fractions of the solid
+   volume lie, e.g. [0.05, 0.5] → thinnest wall and median wall.
+   Why not the old peaks of the distance map (sweepFeatureThickness, below): on smooth shapes only the
+   fattest points are peaks — Schwarz P gave 8 points, all node centres, so it reported the node, not the
+   neck.  Method, without painting balls one by one: a voxel's local thickness is at least 2r exactly
+   when some voxel c with its own inscribed radius ρ(c) ≥ r has the voxel inside its ball, i.e.
+   max over those c of ρ(c)² − |x − c|² ≥ 0.  That maximum is one separable lower-envelope pass (the
+   distance transform's algorithm run on −ρ², a "reverse distance transform"), so the solid fraction
+   thinner than 2r costs one pass per r, and each quantile is a short search on r (regula falsi with
+   a bisection guard, about 5–8 passes, shared between quantiles).  Same answer as painting every ball.
+   Pore space: pass the inverted grid.  node proto/geom-views/numbers_check.js */
+function sweepLocalThickness(solid, N, fracs) {
+  var N3 = N * N * N, A = new Float32Array(N3), n = 0, i, amax = 0;
+  for (i = 0; i < N3; i++) { if (solid[i]) { A[i] = EDT_INF; n++; } else A[i] = 0; }
+  if (!n) return fracs.map(function () { return 0; });
+  if (n === N3) return fracs.map(function () { return N; });
+  periodicEdt3d(A, N);   /* ρ² per voxel: squared distance to the nearest void voxel centre */
+  for (i = 0; i < N3; i++) if (solid[i] && A[i] > amax) amax = A[i];
+  var B = new Float32Array(N3), memo = {}, env = _ltEnvelope(N);
+  /* fraction of the solid with local thickness < 2r */
+  function below(r) {
+    var key = r.toFixed(5);
+    if (memo[key] != null) return memo[key];
+    var r2 = r * r, any = false;
+    for (var j = 0; j < N3; j++) { if (solid[j] && A[j] >= r2 && A[j] > 0) { B[j] = -A[j]; any = true; } else B[j] = EDT_INF; }
+    var cnt = n;
+    if (any) { env(B); cnt = 0; for (var k = 0; k < N3; k++) if (solid[k] && B[k] > 0) cnt++; }
+    return (memo[key] = cnt / n);
+  }
+  var rmax = Math.sqrt(amax);
+  return fracs.map(function (f) {
+    /* smallest r with below(r) >= f, to 1/8 voxel: regula falsi (Illinois) with a bisection guard */
+    var lo = 0, flo = below(0) - f, hi = rmax + 0.25, fhi = below(hi) - f, side = 0;
+    if (flo >= 0) return 0.5;
+    for (var it = 0; it < 24 && hi - lo > 0.125; it++) {
+      var mid = (flo !== fhi) ? (lo * fhi - hi * flo) / (fhi - flo) : 0.5 * (lo + hi);
+      if (!(mid > lo + 0.0625 && mid < hi - 0.0625) || it % 3 === 2) mid = 0.5 * (lo + hi);
+      var fm = below(mid) - f;
+      if (fm >= 0) { hi = mid; fhi = fm; if (side === -1) flo *= 0.5; side = -1; }
+      else { lo = mid; flo = fm; if (side === 1) fhi *= 0.5; side = 1; }
+    }
+    return 2 * lo + 0.5;
+  });
+}
+/* Periodic separable lower envelope, in place: B[x] ← min over c of (|x − c|² + B[c]) on an N³ torus.
+   With B = −ρ² at ball centres and EDT_INF elsewhere, B[x] ≤ 0 exactly where some ball holds x.  A
+   dedicated copy of 14c's periodicEdt3d pass (which assumes B ≥ 0 only in its clamp), on flat
+   Float64 scratch arrays; lines are padded by N/2 wrapped samples per side (a ball radius never
+   exceeds N/2 on a periodic cell). */
+function _ltEnvelope(N) {
+  var h = N >> 1, E = N + 2 * h, NN = N * N;
+  var f = new Float64Array(E), d = new Float64Array(E), v = new Int32Array(E), z = new Float64Array(E + 1), w = new Int32Array(E);
+  for (var t = 0; t < E; t++) w[t] = ((t - h) % N + N) % N;
+  function line(B, base, stride) {
+    var any = false, t2, q, k;
+    for (t2 = 0; t2 < E; t2++) { var val = B[base + w[t2] * stride]; f[t2] = val; if (val < EDT_INF) any = true; }
+    if (!any) return;
+    k = 0; v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
+    for (q = 1; q < E; q++) {
+      var s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+      while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+      k++; v[k] = q; z[k] = s; z[k + 1] = Infinity;
+    }
+    k = 0;
+    for (q = h; q < h + N; q++) { while (z[k + 1] < q) k++; var dq = q - v[k]; d[q] = dq * dq + f[v[k]]; }
+    for (q = 0; q < N; q++) B[base + q * stride] = Math.min(d[q + h], EDT_INF);
+  }
+  return function (B) {
+    var a, b;
+    for (a = 0; a < N; a++) for (b = 0; b < N; b++) line(B, a * NN + b * N, 1);
+    for (a = 0; a < N; a++) for (b = 0; b < N; b++) line(B, a * NN + b, N);
+    for (a = 0; a < N; a++) for (b = 0; b < N; b++) line(B, a * N + b, NN);
+  };
+}
+
+/* Thickness at maximal-ball centers of the inside distance transform.
+   v0.36.0 — kept for the flow solver's narrowest pore (19g); the sweep and the Geometry tiles use
+   sweepLocalThickness (decision 0012), because this reads the fattest point on smooth shapes. */
 function sweepFeatureThickness(solid, N) {
   var N3 = N * N * N, NN = N * N, A = new Float32Array(N3);
   for (var i = 0; i < N3; i++) A[i] = solid[i] ? EDT_INF : 0;
@@ -418,7 +498,7 @@ function sweepThinVoxAt(recipe, N, connectivity) {
   for (var i = 0; i < N3; i++) n += solid[i];
   if (!n) return 0;
   if (n === N3) return N;
-  return sweepFeatureThickness(solid, N).thin;
+  return sweepLocalThickness(solid, N, [0.05])[0];   /* v0.36.0 — decision 0012 */
 }
 /* Parameter values whose thinnest feature hits each target (voxels at N),
    by bisection across the parameter's range.  The measure moves in voxel
@@ -496,7 +576,7 @@ var SWEEP_WORKER_ONMESSAGE =
 
 /* node/test harness export (browser ignores this block) */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { sweepGeometryStats: sweepGeometryStats, sweepFeatureThickness: sweepFeatureThickness,
+  module.exports = { sweepGeometryStats: sweepGeometryStats, sweepFeatureThickness: sweepFeatureThickness, sweepLocalThickness: sweepLocalThickness,
     sweepThresholdField: sweepThresholdField, sweepParamsForFractions: sweepParamsForFractions,
     sweepThinVoxAt: sweepThinVoxAt, sweepParamsForFeatures: sweepParamsForFeatures,
     sweepParamCatalog: sweepParamCatalog, sweepParamGet: sweepParamGet, sweepParamSet: sweepParamSet, sweepReviewCombos: sweepReviewCombos };

@@ -5,7 +5,7 @@
   "date": "2026-11-11",
   "mode": "quick",
   "lenses": ["solver", "data-model"],
-  "status": "open",
+  "status": "decided",
   "context": "Building decision 0010 showed that the sweep's thinnest-feature measure (14d) keeps only local peaks of the distance map. On smooth shapes like Schwarz P those are just the node centres (8 points), so it reports 82.5 of 96 voxels (4.3 mm in a 5 mm cell) instead of the neck. It works on even struts and plates and on rough fields (spinodoid 2.5 voxels). The textbook maximal-ball test overshoots the other way (387,000 points, 5th percentile 3.3 voxels from surface noise). The sweep CSV column thinnest_feature and the sweep builder's 'by thinnest feature' already use the flawed number.",
   "depends_on": [10],
   "conflicts": [],
@@ -41,10 +41,12 @@
   "recommended": "A",
   "recommendation": "It is the established thickness measure, it fixes a wrong number already in sweep results, and it keeps the one-definition promise of 0010.",
   "confidence": "lean",
-  "chosen": null,
-  "reason": null,
-  "decided_on": null,
+  "chosen": "A",
+  "reason": "",
+  "decided_on": "2026-11-11",
   "superseded_by": null,
   "challenge": null,
-  "settles": []
+  "settles": [
+    { "key": "thinnest wall measure", "value": "local thickness (largest inscribed ball containing each solid voxel, Hildebrand–Rüegsegger / BoneJ Tb.Th style), 5th percentile by volume; tightest gap = the same on the pore space" }
+  ]
 }

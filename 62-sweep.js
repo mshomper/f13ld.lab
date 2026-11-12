@@ -833,7 +833,9 @@ function sweepExportCsv() {
   cols = cols.concat(['Ex', 'Ey', 'Ez', 'Gyz', 'Gxz', 'Gxy', 'nu_xy', 'nu_xz', 'nu_yz',
     'iters_total', 'iters_xx', 'iters_yy', 'iters_zz', 'iters_yz', 'iters_xz', 'iters_xy', 'final_residual_max', 'converged', 'wall_time_s',
     'ref_Ex', 'ref_Ey', 'ref_Ez', 'ratio_Ex', 'ratio_Ey', 'ratio_Ez',
-    'thinnest_feature_vox', 'median_feature_vox', 'thinnest_feature_T', 'median_feature_T', 'thinnest_feature_mm', 'median_feature_mm', 'cell_mm', 'spans', 'checks',
+    /* v0.36.0 — local thickness (decision 0012); renamed from thinnest_feature_* / median_feature_*,
+       which read the fattest point on smooth designs, so old and new sweeps cannot be mixed up */
+    'thinnest_wall_vox', 'median_wall_vox', 'thinnest_wall_T', 'median_wall_T', 'thinnest_wall_mm', 'median_wall_mm', 'cell_mm', 'spans', 'checks',
     'grid2_N', 'grid2_Ex', 'grid2_Ey', 'grid2_Ez', 'grid2_Gyz', 'grid2_Gxz', 'grid2_Gxy', 'grid2_iters', 'grid2_residual', 'grid2_wall_time_s',
     'grid2_vf_voxel_pct', 'grid2_vf_measured_pct', 'grid2_converged',
     'grid2_iters_xx', 'grid2_iters_yy', 'grid2_iters_zz', 'grid2_iters_yz', 'grid2_iters_xz', 'grid2_iters_xy',
@@ -928,14 +930,17 @@ function sweepExportCsv() {
     }
     var st = SWEEP_STATE.preview[run.id];
     if (st && !st.error) {
-      row.thinnest_feature_vox = st.thinVox; row.median_feature_vox = st.medVox;
+      /* v0.36.0 — only stats measured by local thickness fill these (a sweep kept from an older
+         version leaves them blank rather than relabel the old measure) */
+      var lt = st.thinMeasure === 'local-thickness';
+      if (lt) { row.thinnest_wall_vox = st.thinVox; row.median_wall_vox = st.medVox; }
       /* v0.19.0 — the same features in cell units (T = fraction of the cell edge)
          and in mm at the run's cell size */
       var rc = null; try { rc = sweepRecipeForRun(run); } catch (e) { rc = null; }
       var cellMm = sweepCellMm(rc);
       row.cell_mm = cellMm;
-      if (st.thinVox != null) { row.thinnest_feature_T = st.thinVox / run.N; row.thinnest_feature_mm = st.thinVox / run.N * cellMm; }
-      if (st.medVox != null) { row.median_feature_T = st.medVox / run.N; row.median_feature_mm = st.medVox / run.N * cellMm; }
+      if (lt && st.thinVox != null) { row.thinnest_wall_T = st.thinVox / run.N; row.thinnest_wall_mm = st.thinVox / run.N * cellMm; }
+      if (lt && st.medVox != null) { row.median_wall_T = st.medVox / run.N; row.median_wall_mm = st.medVox / run.N * cellMm; }
       row.spans = ['x', 'y', 'z'].filter(function (a) { return st.spans[a]; }).join('');
       row.checks = sweepFlags(run, st).map(function (f) { return f.text; }).join('; ');
     }

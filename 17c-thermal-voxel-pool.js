@@ -124,16 +124,16 @@ var THERMAL_VOXEL_ONMESSAGE =
   '      postMessage({ id: job.id, ok: true, data: fr.data, fieldMin: fr.fieldMin, fieldMax: fr.fieldMax }, [fr.data.buffer]); return;\n' +
   '    }\n' +
   /* v0.36.0 — per-design geometry numbers (decision 0010, 31-geom-views.js).  geomnums: island trim as
-     the solvers do, then the sweep's thinnest feature (14d, largest inscribed ball, 5th percentile)
-     on the solid and on the pore.  georadius: tightest bend radius of the drawn surface (14f). */
+     the solvers do, then local thickness (14d sweepLocalThickness, decision 0012: the largest ball
+     that fits and holds each point, 5th percentile by volume) on the solid and on the pore.  georadius: tightest bend radius of the drawn surface (14f). */
   '    if (job.type === "geomnums"){\n' +
   '      var keptG = job.prune ? pruneVoxels(job.raw, N, job.family, job.conn) : job.raw, N3g = NN*N, nS = 0;\n' +
   '      for (var g0 = 0; g0 < N3g; g0++) if (keptG[g0] > 0.5) nS++;\n' +
   '      var wallV = null, gapV = null;\n' +
   '      if (nS > 0 && nS < N3g){\n' +
-  '        wallV = sweepFeatureThickness(keptG, N).thin;\n' +
+  '        wallV = sweepLocalThickness(keptG, N, [0.05])[0];\n' +
   '        var poreG = new Uint8Array(N3g); for (var g1 = 0; g1 < N3g; g1++) poreG[g1] = keptG[g1] > 0.5 ? 0 : 1;\n' +
-  '        gapV = sweepFeatureThickness(poreG, N).thin;\n' +
+  '        gapV = sweepLocalThickness(poreG, N, [0.05])[0];\n' +
   '      }\n' +
   '      postMessage({ id: job.id, ok: true, wallVox: wallV, gapVox: gapV, solid: nS / N3g }); return;\n' +
   '    }\n' +
