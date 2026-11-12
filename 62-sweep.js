@@ -44,6 +44,7 @@ var SWEEP_STATE = {
   precision: 'standard',
   thermal: false,                  /* v0.23.0 — also thermal κ per filler (was physics: 'thermal'; v0.32.0 split into ticks) */
   flow: false,                     /* v0.32.0 — also flow (19g permeability, 19h wall shear) on the Configure flow grid */
+  hx: false,                       /* v0.37.0 — also pressure drop (19i) at the Configure Reynolds points; needs flow */
   preview: {},                     /* run_id → geometry stats (14d-voxel-stats.js) */
   builder: {},                     /* last builder settings (kept across redraws and reloads) */
   voidRatio: 1e-6,                 /* void stiffness ÷ solid (Matt, 2026-10-01: 1e-6 for sweeps) */
@@ -76,7 +77,7 @@ function sweepSnapshot() {
     results: SWEEP_STATE.results, selected: SWEEP_STATE.selected, precision: SWEEP_STATE.precision,
     preview: SWEEP_STATE.preview, builder: SWEEP_STATE.builder,
     voidRatio: SWEEP_STATE.voidRatio, refine: SWEEP_STATE.refine, order: SWEEP_STATE.order, timing: SWEEP_STATE.timing,
-    partialVolume: SWEEP_STATE.partialVolume, thermal: SWEEP_STATE.thermal, flow: SWEEP_STATE.flow,
+    partialVolume: SWEEP_STATE.partialVolume, thermal: SWEEP_STATE.thermal, flow: SWEEP_STATE.flow, hx: SWEEP_STATE.hx,
     physics: SWEEP_STATE.thermal ? 'thermal' : 'stiffness' };   /* physics: read by labs before v0.32.0 */
 }
 function sweepSave() {
@@ -106,6 +107,7 @@ function sweepApplySaved(p) {
   SWEEP_STATE.partialVolume = p.partialVolume === true;
   SWEEP_STATE.thermal = p.thermal != null ? !!p.thermal : p.physics === 'thermal';
   SWEEP_STATE.flow = !!p.flow;
+  SWEEP_STATE.hx = !!p.hx && SWEEP_STATE.flow;   /* v0.37.0 — saved sweeps without it load as before */
   SWEEP_STATE.timing = p.timing || SWEEP_STATE.timing || {};
   return true;
 }
@@ -497,6 +499,8 @@ async function sweepRunOne(run) {
   if (SWEEP_STATE.flow) {
     try { res.flow = await sweepFlowOne(run, recipe); res.wall_s += res.flow.wall_s || 0; }
     catch (e) { res.flow = { error: (e && e.message) || String(e) }; }
+    /* v0.37.0 — pressure drop rides on the flow solve; kept as its own block (decision 0004) */
+    if (res.flow && res.flow.hx) { res.hx = res.flow.hx; delete res.flow.hx; }
   }
   res.notes = sweepNotesFor(run, res);
   return res;
@@ -541,7 +545,13 @@ async function sweepFlowOne(run, recipe) {
   if (typeof homogenizeFlowGPU !== 'function') throw new Error('flow solver not loaded');
   var N = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.N) || 64, tol = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.tol) || 1e-6;
   var t0 = performance.now();
-  var FR = await homogenizeFlowGPU(recipe, N, Object.assign({}, connOpts(), { tol: tol, keepFields: false }));
+  /* v0.37.0 — pressure drop on the same wall tables (19i), at the Configure Reynolds points and direction */
+  var hxSink = {}, hxOn = SWEEP_STATE.hx && typeof flowHXHook === 'function';
+  var hook = hxOn ? (function () {
+    var h = flowHXHook({ ReList: FLOW_STATE.hxRe.slice(), axes: flowHXAxesFor(FLOW_STATE.dir) }, hxSink);
+    return async function (c) { try { await h(c); } catch (e) { hxSink.err = e; } };
+  })() : undefined;
+  var FR = await homogenizeFlowGPU(recipe, N, Object.assign({}, connOpts(), { tol: tol, keepFields: false, afterSolve: hook }));
   if (!FR) throw new Error('flow solve stopped');
   var out = { N: N, tol: tol, porosity: FR.porosity, openPorosity: FR.openPorosity, sealedPorosity: FR.sealedPorosity,
               throatVox: FR.throatVox, medPoreVox: FR.medPoreVox, kL2: FR.kL2.slice(), asym: FR.asym,
@@ -553,8 +563,94 @@ async function sweepFlowOne(run, recipe) {
   }
   if (typeof flowShearSummary === 'function') out.shear = flowShearSummary(FR);
   if (out.shear) for (var b = 0; b < 3; b++) if (out.shear.axes[b]) out.residual[b] = out.shear.axes[b].residual;
+  if (hxOn) out.hx = hxSink.rec || { v: FLOW_HX_VERSION, error: 'pressure drop failed: ' + ((hxSink.err && hxSink.err.message) || hxSink.err || 'no result') };
   out.wall_s = (performance.now() - t0) / 1000;
   return out;
+}
+/* v0.37.0 — the pressure drop of one run under the current fluid and the run's cell size:
+   { rec, axis, best, ph } or null.  A block from another version reads as no pressure drop. */
+function sweepHXFor(run, r) {
+  var rec = r && r.hx;
+  if (!rec || rec.error || rec.v !== (typeof FLOW_HX_VERSION !== 'undefined' ? FLOW_HX_VERSION : '') || typeof flowHXPhysical !== 'function') return null;
+  var pk = flowHXPick(rec, FLOW_STATE.dir);
+  if (!pk || pk.missing) return { rec: rec, axis: pk ? pk.axis : null, ph: null };
+  var rc = null; try { rc = sweepRecipeForRun(run); } catch (e) { rc = null; }
+  var fl = flowFluid(), cell = sweepCellMm(rc);
+  return { rec: rec, axis: pk.axis, best: pk.best, fluid: fl, cell: cell,
+           ph: (fl.mu > 0 && cell > 0) ? flowHXPhysical(rec, pk.axis, { mu: fl.mu, rho: fl.rho, cellMm: cell }) : null };
+}
+var SWEEP_HX_COLS = ['hx_points', 'hx_dir', 'forchheimer_F_x', 'forchheimer_F_y', 'forchheimer_F_z', 'forchheimer_beta_1m_x', 'forchheimer_beta_1m_y', 'forchheimer_beta_1m_z',
+  'inertia_onset_Re_x', 'inertia_onset_Re_y', 'inertia_onset_Re_z', 'inertia_onset_speed_m_s', 'hx_fit_points', 'hx_fit_worst_pct',
+  'hx_top_Re', 'hx_top_speed_m_s', 'hx_top_dpdx_Pa_m', 'hx_top_fanning_f', 'hx_fluid', 'hx_fluid_rho_kgm3', 'hx_skipped', 'hx_unsteady', 'hx_converged', 'hx_wall_time_s'];
+/* v0.37.0 — the pressure-drop CSV cells of one run (wide format) */
+function sweepHXCsvRow(run, r, row) {
+  if (r.hx && r.hx.error) { row.hx_points = 'error'; return; }
+  var H = sweepHXFor(run, r);
+  if (!H) return;
+  var rec = H.rec, ax = ['x', 'y', 'z'];
+  row.hx_points = rec.ReList.join(' ');
+  row.hx_wall_time_s = rec.t_ms / 1000;
+  var Km = function (a) { return rec.K[a] * Math.pow(H.cell / 1000 / rec.N, 2); };
+  [0, 1, 2].forEach(function (a) {
+    if (!rec.axes[a]) return;
+    var f = flowHXFit(rec, a);
+    if (!f) return;
+    if (f.F != null) { row['forchheimer_F_' + ax[a]] = f.F; if (H.cell > 0) row['forchheimer_beta_1m_' + ax[a]] = f.F / Math.sqrt(Km(a)); }
+    if (f.onset != null) row['inertia_onset_Re_' + ax[a]] = f.onset;
+  });
+  if (H.axis == null) return;
+  row.hx_dir = 'XYZ'[H.axis] + (H.best ? ' (most permeable)' : '');
+  var A = rec.axes[H.axis];
+  if (A) {
+    var pts = A.points;
+    row.hx_skipped = pts.filter(function (p) { return p.skipped; }).map(function (p) { return p.ReT + ':' + p.skipped; }).join(' ');
+    row.hx_unsteady = pts.filter(function (p) { return p.unsteady; }).length;
+    row.hx_converged = pts.every(function (p) { return p.skipped || p.converged || p.unsteady; }) ? 'yes' : 'no';
+  }
+  if (!H.ph) return;
+  var ph = H.ph;
+  row.hx_fluid = H.fluid.name; row.hx_fluid_rho_kgm3 = H.fluid.rho;
+  row.hx_fit_points = ph.fit.nFit; row.hx_fit_worst_pct = ph.fit.F != null ? ph.fit.worst * 100 : null;
+  if (ph.onsetUs != null) row.inertia_onset_speed_m_s = ph.onsetUs;
+  if (ph.top) { row.hx_top_Re = ph.top.Re; row.hx_top_speed_m_s = ph.top.Us; row.hx_top_dpdx_Pa_m = ph.top.dpdx; row.hx_top_fanning_f = ph.top.f; }
+}
+/* v0.37.0 — long format: one row per run × axis × Reynolds point (scope §11.4, Matt 2026-10-07),
+   in the fluid of Configure → Flow and each run's cell size */
+function sweepExportHXCsv() {
+  var cols = ['run_id', 'param_name', 'param_value', 'param2_name', 'param2_value', 'cell_mm', 'flow_N', 'axis', 'Re_target', 'status',
+              'Re', 'Re_K', 'resistance_over_darcy', 'inertia_pct', 'superficial_speed_m_s', 'pore_speed_m_s', 'dpdx_Pa_m', 'fanning_f', 'apparent_K_m2',
+              'K_m2', 'open_porosity', 'hydraulic_diameter_mm', 'fluid', 'mu_mPas', 'rho_kgm3', 'converged', 'unsteady', 'mach', 'tau_plus', 'steps'];
+  var lines = [cols.join(",")], fl = flowFluid();
+  SWEEP_STATE.runs.forEach(function (run) {
+    var r = SWEEP_STATE.results[run.id];
+    if (!r || !r.hx || r.hx.error || r.hx.v !== FLOW_HX_VERSION) return;
+    var rec = r.hx, rc = null; try { rc = sweepRecipeForRun(run); } catch (e) { rc = null; }
+    var cell = sweepCellMm(rc), dx = cell / 1000 / rec.N, nu = fl.mu > 0 ? fl.mu / fl.rho : null;
+    [0, 1, 2].forEach(function (a) {
+      var A = rec.axes[a];
+      if (!A) return;
+      var Km = rec.K[a] * dx * dx, dhm = rec.dh * dx;
+      A.points.forEach(function (p) {
+        var row = { run_id: run.id, param_name: run.param && run.param.name, param_value: run.param && run.param.value,
+          param2_name: run.params && run.params[1] ? run.params[1].key : '', param2_value: run.params && run.params[1] ? run.params[1].value : '',
+          cell_mm: cell, flow_N: rec.N, axis: 'XYZ'[a], Re_target: p.ReT, K_m2: Km, open_porosity: rec.eps, hydraulic_diameter_mm: dhm * 1000,
+          fluid: fl.name, mu_mPas: fl.mu > 0 ? fl.mu * 1000 : null, rho_kgm3: fl.rho };
+        if (p.skipped) { row.status = p.skipped === 'grid' ? 'beyond grid' : 'unstable'; lines.push(cols.map(function (c) { return sweepCsvCell(row[c]); }).join(',')); return; }
+        row.status = p.unsteady ? 'unsteady' : p.converged ? 'ok' : 'not converged';
+        row.Re = p.Re; row.Re_K = p.ReK; row.resistance_over_darcy = p.Pi; row.inertia_pct = (1 - 1 / p.Pi) * 100;
+        row.fanning_f = p.Pi * rec.eps * rec.dh * rec.dh / (2 * rec.K[a] * p.Re); row.apparent_K_m2 = Km / p.Pi;
+        if (nu) { var Ui = p.Re * nu / dhm, Us = rec.eps * Ui; row.pore_speed_m_s = Ui; row.superficial_speed_m_s = Us; row.dpdx_Pa_m = p.Pi * fl.mu * Us / Km; }
+        row.converged = p.converged ? 'yes' : 'no'; row.unsteady = p.unsteady ? 'yes' : 'no'; row.mach = p.mach; row.tau_plus = p.tau; row.steps = p.steps;
+        lines.push(cols.map(function (c) { return sweepCsvCell(row[c]); }).join(','));
+      });
+    });
+  });
+  var blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
+  var el = document.createElement('a');
+  el.href = URL.createObjectURL(blob);
+  el.download = (sweepTitle() || 'sweep').replace(/\.csv$/i, '').replace(/[^\w.-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') + '_pressure_drop.csv';
+  document.body.appendChild(el); el.click();
+  setTimeout(function () { URL.revokeObjectURL(el.href); el.remove(); }, 1000);
 }
 /* v0.32.0 — the flow CSV cells of one run */
 function sweepFlowCsvRow(run, F, row) {
@@ -639,6 +735,14 @@ function sweepNotesFor(run, r) {
     var fw = (typeof FLOW_FORCE_WARN !== 'undefined') ? FLOW_FORCE_WARN : 0.05;
     var fb = [0, 1, 2].filter(function (a) { return F.residual[a] != null && Math.abs(F.residual[a]) > fw; });
     if (fb.length) n.push('wall force balance off by more than ' + Math.round(fw * 100) + ' % along ' + fb.map(function (a) { return 'XYZ'[a]; }).join(', ') + ' — wall shear approximate');
+  }
+  /* v0.37.0 — pressure drop */
+  if (r.hx && r.hx.error) n.push(r.hx.error);
+  else if (r.hx && r.hx.axes) {
+    var hs = [], hu = 0;
+    r.hx.axes.forEach(function (A, a) { if (A) A.points.forEach(function (p) { if (p.skipped) hs.push('Re ' + p.ReT + ' ' + 'XYZ'[a] + (p.skipped === 'grid' ? ' beyond the grid' : ' unstable')); if (p.unsteady) hu++; }); });
+    if (hs.length) n.push('pressure drop skipped: ' + hs.join(', '));
+    if (hu) n.push('pressure drop: ' + hu + ' point' + (hu > 1 ? 's' : '') + ' unsteady, time-averaged, not fitted');
   }
   if (r.noLoad) n.push('no load on ' + r.noLoad.map(function (b) { return b.axis; }).join(', ') + ': ' +
     r.noLoad.map(function (b) { return 'E' + b.axis + ' reads ' + b.E.toExponential(1); }).join(', ') +
@@ -867,6 +971,9 @@ function sweepExportCsv() {
       'best_speed_mm_s', 'best_flow_ml_min', 'chamber_mm', 'wall_at_target_pct', 'wall_under_pct', 'wall_over_pct', 'usable_speed_lo_mm_s', 'usable_speed_hi_mm_s', 'reynolds_at_best',
       'force_balance_pct_x', 'force_balance_pct_y', 'force_balance_pct_z', 'flow_converged', 'flow_steps', 'flow_wall_time_s']);
   }
+  /* v0.37.0 — pressure-drop columns, only when a run has them (exports without stay byte-identical) */
+  var anyHX = SWEEP_STATE.runs.some(function (run) { var r = SWEEP_STATE.results[run.id]; return r && r.hx; });
+  if (anyHX) cols = cols.concat(SWEEP_HX_COLS);
   cols = cols.concat(['notes', 'error']);
   var lines = [cols.join(',')];
   SWEEP_STATE.runs.forEach(function (run) {
@@ -925,6 +1032,7 @@ function sweepExportCsv() {
         }
       }
       if (r.flow && !r.flow.error) sweepFlowCsvRow(run, r.flow, row);
+      if (r.hx) sweepHXCsvRow(run, r, row);   /* v0.37.0 */
     }
     var st = SWEEP_STATE.preview[run.id];
     if (st && !st.error) {
@@ -1323,7 +1431,14 @@ function sweepClearResults(onlySelected) {
   SWEEP_STATE.runs.forEach(function (r) { if (!onlySelected || SWEEP_STATE.selected[r.id]) delete SWEEP_STATE.results[r.id]; });
   sweepSave(); sweepRender();
 }
-function sweepSetOpt(k, v) { if (!SWEEP_STATE.running) { SWEEP_STATE[k] = v; sweepSave(); sweepRenderBar(); sweepRender(); } }
+function sweepSetOpt(k, v) {
+  if (SWEEP_STATE.running) return;
+  SWEEP_STATE[k] = v;
+  if (k === 'flow' && !v) SWEEP_STATE.hx = false;   /* v0.37.0 — pressure drop rides on flow */
+  sweepSave(); sweepRenderBar(); sweepRender();
+}
+function sweepSetHX(v) { if (SWEEP_STATE.running) return; SWEEP_STATE.hx = v; if (v) SWEEP_STATE.flow = true; sweepSave(); sweepRenderBar(); sweepRender(); }
+function sweepAnyHX() { return SWEEP_STATE.runs.some(function (run) { var r = SWEEP_STATE.results[run.id]; return r && r.hx && !r.hx.error; }); }
 function sweepSetPrecision(v) { if (!SWEEP_STATE.running) { SWEEP_STATE.precision = v; sweepSave(); sweepRenderBar(); } }
 
 /* Seconds per solve by grid on this machine: a running average kept across
@@ -1352,7 +1467,9 @@ function sweepEta(todoRuns) {
 function sweepFlowSec() {
   if (!SWEEP_STATE.flow || typeof gridScale !== 'function' || typeof FLOW_STATE === 'undefined') return 0;
   var cal = (typeof RUN_CALIB !== 'undefined') ? RUN_CALIB.flow : null, ref = (typeof RUN_REF !== 'undefined') ? RUN_REF.flow : null;
-  return cal ? cal.sec * gridScale(FLOW_STATE.N, cal.N) : (ref ? ref.sec * gridScale(FLOW_STATE.N, ref.refN) : 1);
+  var s = cal ? cal.sec * gridScale(FLOW_STATE.N, cal.N) : (ref ? ref.sec * gridScale(FLOW_STATE.N, ref.refN) : 1);
+  if (SWEEP_STATE.hx && typeof modePerDesignSec === 'function') s += modePerDesignSec('hx');   /* v0.37.0 */
+  return s;
 }
 /* v0.23.0 — thermal seconds per run: measured per-filler time (RUN_CALIB) or the default, × ticked fillers */
 function sweepThermalSec(N) {
@@ -1392,6 +1509,7 @@ function sweepRenderBar() {
           '<button class="fh-action-btn ghost" onclick="SWEEP_STATE.stopRequested=true;this.disabled=true;this.textContent=\'Stopping after this run…\'">Stop</button>'
         : '<button class="fh-action-btn ghost" onclick="sweepClearResults(true)" title="Delete the results of the ticked runs so they run again; the runs stay in the list">Clear results of selected</button>' +
           '<button class="fh-action-btn ghost" onclick="sweepExportCsv()"' + (nDone ? '' : ' disabled') + '>Export CSV</button>' +
+          (sweepAnyHX() ? '<button class="fh-action-btn ghost" onclick="sweepExportHXCsv()" title="One row per run, direction and Reynolds number, in the fluid set in Configure → Flow: speeds, pressure drop per metre, friction factor, apparent permeability. The shape surrogate-model pipelines read.">Export pressure drop</button>' : '') +
           (nTodo.length ? '<span class="imp-sub">' + nTodo.length + ' to run · ~' + sweepFmtDur(sweepEta(nTodo)) + '</span>' : '') +
           '<button class="fh-action-btn" onclick="sweepStart()"' + (nTodo.length && !SWEEP_STATE.previewing ? '' : ' disabled') + '>' + (typeof DOCK_RUN_IDLE !== 'undefined' ? DOCK_RUN_IDLE.replace(/Run all$/, '') : '') + 'Run ' + nTodo.length + '</button>') +
     '</div></div>';
@@ -1411,6 +1529,9 @@ function sweepRenderSettings() {
         ' title="Also solve thermal conductivity for every run, with the material and pore fillers set in Configure (Model, Thermal κ). About 1–3 s per filler at 64³.">thermal' + (thFill ? ' · ' + thFill : '') + '</button>' +
       '<button aria-pressed="' + !!SWEEP_STATE.flow + '" onclick="sweepSetOpt(\'flow\', ' + !SWEEP_STATE.flow + ')"' + dis +
         ' title="Also solve flow for every run on the Configure flow grid (' + flN + '³): permeability, tortuosity, pore sizes and wall shear. Fluid, shear target and direction come from Configure → Flow and can change after the sweep without a re-solve.">flow · ' + flN + '³</button>' +
+      /* v0.37.0 — pressure drop needs flow; turning it on turns flow on */
+      '<button aria-pressed="' + !!SWEEP_STATE.hx + '" onclick="sweepSetHX(' + !SWEEP_STATE.hx + ')"' + dis +
+        ' title="Also solve pressure drop at the Reynolds points in Configure → Flow (' + ((typeof FLOW_STATE !== 'undefined' && FLOW_STATE.hxRe) ? FLOW_STATE.hxRe.join(', ') : '') + '), along the Flow direction set there. About 2–5 s per direction at 64³. Fluid changes after the sweep without a re-solve.">pressure drop</button>' +
     '</span></span>' +
     '<label class="imp-sub">Precision <select id="swPrec" onchange="sweepSetPrecision(this.value)"' + dis + '>' +
       Object.keys(SWEEP_PRECISION).map(function (k) { return '<option value="' + k + '"' + (k === SWEEP_STATE.precision ? ' selected' : '') + '>' + SWEEP_PRECISION[k].label + '</option>'; }).join('') +

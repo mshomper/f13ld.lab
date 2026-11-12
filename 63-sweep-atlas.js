@@ -114,6 +114,9 @@ function atlasMetricDefs() {
     { k: 'perm_z', label: 'Permeability Z', unit: '×10⁻⁹ m²', phys: 'flow' },
     { k: 'kL2', label: 'Permeability ÷ cell²', unit: 'k/L²', phys: 'flow' }, { k: 'tort', label: 'Tortuosity · mean', unit: '', phys: 'flow' },
     { k: 'wss_med', label: 'Median wall shear', unit: 'mPa per mm/s', phys: 'flow' }, { k: 'wall_target', label: 'Wall at shear target', unit: '%', phys: 'flow' },
+    /* v0.37.0 — pressure drop (19i) */
+    { k: 'hx_F', label: 'Inertial drag · Forchheimer factor', unit: '', phys: 'flow' }, { k: 'hx_beta', label: 'Forchheimer β', unit: '1/m', phys: 'flow' },
+    { k: 'hx_onset', label: 'Inertia matters from', unit: 'Re', phys: 'flow' }, { k: 'hx_dpdx', label: 'Pressure drop at the top point', unit: 'kPa/m', phys: 'flow' },
     { k: 'vf', label: 'Solid fraction', unit: '%', phys: 'geo', pct: 1 }, { k: 'porosity', label: 'Porosity', unit: '%', phys: 'geo', pct: 1 },
     { k: 'sad', label: 'Surface area density', unit: 'm²/m³', phys: 'geo' }, { k: 'dh', label: 'Hydraulic diameter', unit: 'mm', phys: 'geo' });
   return out;
@@ -324,6 +327,13 @@ function atlasRows() {
         if (stA) row.wss_med = stA.median;            /* Pa per m/s = mPa per mm/s */
         if (sh.cfg.target && sh.pick.stats) row.wall_target = (sh.pick.stats.inTarget || 0) * 100;
       }
+    }
+    /* v0.37.0 — pressure drop along the Flow direction (most permeable with All), current fluid */
+    var H = (typeof sweepHXFor === 'function') ? sweepHXFor(run, r) : null;
+    if (H && H.ph) {
+      if (H.ph.fit.F != null) { row.hx_F = H.ph.fit.F; row.hx_beta = H.ph.beta; }
+      if (H.ph.fit.onset != null) row.hx_onset = H.ph.fit.onset;
+      if (H.ph.top) row.hx_dpdx = H.ph.top.dpdx / 1000;
     }
   });
   return rows;
