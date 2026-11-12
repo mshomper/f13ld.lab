@@ -132,9 +132,11 @@ function cylDh(N, R) { var eps = 1 - PI * R * R / (N * N); return { eps: eps, dh
 
   /* ---------- H8: the 19i driver on the CPU ---------- */
   if (on('H8')) {
-    var f8 = out('H8'), N8 = 48, R8 = 12, g8 = cylDh(N8, R8), L8 = cylLinks(N8, R8), d8 = H.prepareFlowDomain(L8, {}), K8 = darcyK(d8, 0), t8 = now();
+    /* dense array (porosity 0.56, gap 12 voxels) so inertia passes 10 % inside the list; the open
+       one of H2/H3 (porosity 0.80) stays under 10 % up to Re 50 and never reaches the fit */
+    var f8 = out('H8'), N8 = 48, R8 = 18, g8 = cylDh(N8, R8), L8 = cylLinks(N8, R8), d8 = H.prepareFlowDomain(L8, {}), K8 = darcyK(d8, 0), t8 = now();
     var rec8 = await flowHXRun({ S: cpuSolver(d8), N: N8, eps: g8.eps, epsTot: g8.eps, dh: g8.dh, K: [K8, 0, 0], openBits: 1 },
-                               { ReList: [2, 5, 10, 20, 50], axes: [0] });
+                               { ReList: [5, 10, 20, 50, 100], axes: [0] });
     var fit8 = flowHXFit(rec8, 0), pts8 = rec8.axes[0].points, off = 0;
     pts8.forEach(function (p) { if (!p.skipped) off = Math.max(off, Math.abs(p.Re / p.ReT - 1)); });
     H.emit(f8, { test: 'H8 driver, cylinder array 48 × 48, dh ' + g8.dh.toFixed(1) + ' voxels',

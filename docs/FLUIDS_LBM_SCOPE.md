@@ -682,3 +682,46 @@ The card warns when the force balance is off by more than 5 % (`FLOW_FORCE_WARN`
 **Built (`63-sweep-atlas.js`)**: `ATLAS.phys` / `.focus` / `.bone`, per-mode metric memory (`mapBy`, `s3By`, `scBy`); metric catalogue `atlasMetricDefs` + `atlasMetricList(purpose)` (mode metrics + geometry; design space adds stiffness); `atlasFitAxis` (padded data range, auto log past ~1 decade, 1-2-5 ticks); `atlasTensor` (κ for the focused filler, K from `Kl2`) drawn through the cards' `kappaAsCompliance`; `atlasReadoutThermal` / `atlasReadoutFlow`; `atlasLineThermal` (Hashin–Shtrikman bounds via `thermalHSUpper/Lower` when a run predates v0.33.0) / `atlasLineFlow` (bands in `atlasChart`); `atlasScatter` rewritten; `atlasChecksThermal` / `atlasChecksFlow`; drawn icons (`ATLAS_ICON`). Sweep records now keep `byFiller[f].K / hsUp / hsLo / kF` and `flow.Kl2`. Retired: `ATLAS_GEO_THERMAL_METRICS`, `ATLAS_S3_METRICS`, `atlasMetricsWithData`, `atlasS3Val`, `atlasFmtM`.
 
 **Checks:** headless render of the real page with a synthetic 7 × 5 sweep carrying all three physics — every mode draws, no page errors, no Atlas element wider than a 390 px phone (the lab page behind still overflows at phone width, pre-existing). WebGL views and interaction are Matt's click-test.
+
+## 19. HX-1 — inertial pressure drop (2026-11-12, v0.37.0)
+
+**Decisions (Matt, 2026-11-11; `.decisions/0003`–`0005`):** 0003 A — the same TRT kernel, viscosity set per point, no new collision operator. 0004 A — pressure-drop results in their own record, stored dimensionless, next to the creeping-flow record. 0005 A — six Reynolds points to 100, along the chosen flow direction, at 64³. Orchestrator, 2026-11-11: one Fluid list for wall shear and pressure drop (the first three entries as before, heat-exchanger fluids after); no `FLOW_GPU_VERSION` bump, since creeping-flow output is unchanged (check H7).
+
+**What the user sees**
+- Flow settings: **Pressure drop** Off / On; **Reynolds points** (default 2, 5, 10, 20, 50, 100; up to 12; shown when on); **Fluid** is now a drop-down: water 37 °C, culture medium, custom, then air 25 / 80 °C, water 25 / 60 °C, ethylene glycol–water 50/50, light mineral oil (ρ, μ, k, c_p each). Fluid only rescales.
+- Flow card, section **Pressure drop**: *Inertial drag* (Forchheimer factor X / Y / Z; β in 1/m along the reported direction in the note), *Inertia matters from* (Reynolds number and speed where inertia is 10 % of the drop), *At the top point* (pressure drop per metre, speed, friction factor). Amber marks for skipped, unstable, unsteady or unconverged points and a poor fit.
+- Flow charts view: pressure drop per metre against Reynolds number (log–log), the solved points, the Darcy line from the permeability (dashed), the fit (solid).
+- Sweep: **pressure drop** Physics button (turns flow on); wide CSV columns (`forchheimer_F_*`, `forchheimer_beta_1m_*`, `inertia_onset_Re_*`, `hx_top_*`, …) only when a run has them; **Export pressure drop**: the long format, one row per run × direction × point. Atlas Flow mode: Forchheimer factor, β, inertia onset, pressure drop at the top point.
+
+**Physics (`19i-flow-hx.js`)**
+- Kernel unchanged: D3Q19, TRT (Λ = 3/16), CLI walls, Guo force. Its equilibrium keeps the quadratic terms, so it already solves Navier–Stokes; creeping flow only looked linear because it ran slow and viscous.
+- Each point keeps the mean pore lattice speed at 0.03 and sets ν = 0.03 · d_h / Re (relaxation time capped at 1.5 for the low points). TRT with CLI walls keeps the wall in place as viscosity changes (F3), so only Re matters (H2).
+- Re on the hydraulic diameter d_h = 4ε/a (marching-tetrahedra wall area of 14e) with the interstitial speed.
+- Guards: a point is skipped when the relaxation time would fall below 0.51 or the boundary layer d_h / √Re below 2.5 voxels; if the peak speed passes Mach 0.3 the point re-runs at a lower lattice speed; a mean flow above 4× its target or a NaN stops the point as unstable (later points on that axis are skipped); at most 60,000 steps per solve at 64³ (× (N/64)²).
+- Driving: the force is predicted from the drag the earlier points measured (Darcy × their Forchheimer slope), the run starts from the previous point's flow, and up to two warm re-aims bring a point within 10 % of its Reynolds number. The fit uses the Reynolds number reached.
+- Unsteady: when the mean flow stops settling (the smallest change over 8 checks is no smaller than 70 % of the 8 before) the point is averaged over a window and flagged; shown, not fitted.
+
+**Fit**
+- Stored per point: Re and Π = pressure gradient ÷ Darcy's at that speed (Π = 1 is pure Darcy).
+- Π = 1 + F · Re_K, Re_K = U_s √K / ν, K from the creeping run; F by least squares on relative error over points where inertia is ≥ 10 % of the drop (Π ≥ 1.11). Weaker points follow the cubic weak-inertia law (Mei & Auriault 1991, H3): shown, not fitted.
+- β = F / √K (1/m); inertia onset where Π = 1.11 (log–log between points); Fanning friction factor f = Π · ε · d_h² / (2 K Re); apparent permeability K / Π.
+
+**Record (`FLOW_HX_BY_DESIGN[id]`, sweep `res.hx`)**: `{ v: 'hx-1', base, N, eps (open porosity), epsTot, dh (voxels), K [3] (voxels²), kL2 [3], ReList, openBits, axes [3]: null | { points: [{ ReT, Re, Pi, ReK, steps, converged, unsteady, tau, mach, slowed, t_ms } | { ReT, skipped: 'grid' | 'unstable' }], t_ms }, steps, t_ms }`. Display: U_i = Re · ν / d_h, U_s = ε U_i, dp/dx = Π μ U_s / K, with K = K_vox (L/N)² and d_h = dh · L/N. A missing block or another `v` reads as "no pressure drop", so saved sweeps from v0.36 and earlier load unchanged. Cache key: geometry, grid, connectivity, tolerance, `FLOW_HX_VERSION`, the Reynolds list; directions already solved under the same key are kept.
+- Run All: when creeping flow is solved fresh, the points run on the same GPU wall tables through the new `afterSolve` hook in 19g (no second link build); when creeping flow is cached, `homogenizeFlowHX` builds the links and reuses the cached K.
+
+**Matt's bench (2026-11-12, `hx1Bench(0)` on main, 64³, axis Z, design A: open porosity 95.4 %, d_h 79.4 voxels, k/L² 6.865e-3).** Six points from rest in 1.7 s (2,500–7,500 steps each), against the 3–5 s per direction estimated. The bench's fixed force guess (Forchheimer factor 1) overshot Re by 1.1–3.4× on this very open design (F ≈ 0.05), which pushed the peak to Mach 0.34 at Re 341; the build aims from measured drag and adds the Mach guard. Re 200 at relaxation time 0.536 diverged, but only after 231,500 steps, still finite until then; the build adds the runaway test and a 60,000-step cap per solve. Run time estimate for six points, 64³: 2–5 s per direction, 6–15 s for All (to be confirmed on a 70 % gyroid, `runFlowCastroHXCheck()`).
+
+**Checks (`node proto/flow/hx_checks.js`, Float64 CPU through the lab's own driver and fit)**
+
+| # | Case | Result |
+|---|---|---|
+| H1 | Straight channel (walls off the grid, gap 29.4) and round pipe (R 14), Re 1–200: no inertia exists | Channel Π = 1 to the printed digits at every Re (relaxation time down to 0.527); pipe within 0.11 % up to Re 100 (Re 200 beyond the grid, skipped). Pass (< 0.5 %) |
+| H2 | Square cylinder array (porosity 0.80), Re 20 at relaxation times 0.60 / 0.55 / 0.52 | Π 1.01801 / 1.01799 / 1.01799: spread 0.002 % · pass (< 0.5 %) — only the Reynolds number matters |
+| H3 | Same array, Re 0.25 / 0.5 / 1: excess resistance against Re | slope 2.000 (expected 2, Mei & Auriault) · pass |
+| H5 | Sheet gyroid 70 %, 24³ vs 32³, Re 4–20 (d_h = 0.472 L) | F 0.157 → 0.162 (3.4 %), inertia onset Re 14.1 → 13.8, fit within 1.9 %; every point within 3.5 % of its Re in 1,500–2,500 steps (warm starts) · pass (< 5 %). Inertia is 10 % of the drop from about Re 14 on this gyroid, so Castro's Re 29–145 is well inside the inertial range |
+| H6 | Fit, onset, β, Pa/m, friction factor, parser, direction pick on synthetic points | exact to 3e-16 · no fit when inertia < 10 % · pass |
+| H7 | Creeping flow unchanged | 19f untouched; 19g gains only the optional hook after the creeping result is complete; sweep CSV columns and card rows appear only with pressure drop. GPU: `runFlowGPUCheck(i)` on Matt's machine |
+| H8 | The 19i driver end to end (CPU stand-in for the GPU solver), dense cylinder array (porosity 0.56, d_h 45.5), Re 5–100 | every point within 4.2 % of its Reynolds number; F = 0.0766 from 2 points, fit within 0.01 %; inertia onset Re 45 · pass |
+| H4 | Published moderate-Re periodic arrays (Koch & Ladd 1997; Hill, Koch & Ladd 2001) | not run: table values not confirmed (paywalled) |
+
+**For Matt (GPU, browser console):** `runFlowHXGPUCheck()` (GPU vs CPU at Re 50, 24³; pass true), `runFlowCastroHXCheck()` (sheet gyroid / P / D at 70 %: β ranking D > P > G as in Tupin & Ohta 2020, β 5,390 / 4,035 / 3,044 1/m; ratios informational — their gyroid permeability is about 14× the sheet value at 3.25 mm, and their refit keeps P 45 % below gyroid even with inertia removed, so inertia alone may not close the F12 P gap), then a Run All with Pressure drop on and the console timing line.

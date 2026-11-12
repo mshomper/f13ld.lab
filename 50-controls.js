@@ -1047,7 +1047,9 @@ async function runRealSweep(N, runToken){
          creeping run's wall tables when both are due, or on its own when creeping flow is cached */
       var hxBase = doHX ? flowHXBase(fN, recipeFp[fi]) : null, hxAxes = flowHXAxesFor(FLOW_STATE.dir);
       var hxDue = doHX && !flowHXHave(FLOW_HX_BY_DESIGN[df.id], hxBase, hxAxes);
-      var hxSink = {}, hxOpts = hxDue ? flowHXRunOpts(df, fi, hxAxes, stale) : null;
+      var hxOld = FLOW_HX_BY_DESIGN[df.id];   /* only the directions not yet solved under this cache key */
+      var hxSolve = hxAxes.filter(function(a){ return !(hxOld && !hxOld.error && hxOld.base === hxBase && hxOld.axes[a]); });
+      var hxSink = {}, hxOpts = hxDue ? flowHXRunOpts(df, fi, hxSolve, stale) : null;
       if (flEx && !flEx.error && flEx.base === flBase){
         if (hxDue){
           try {

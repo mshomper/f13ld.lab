@@ -29,7 +29,7 @@
    Record (decision 0004 A) — FLOW_HX_BY_DESIGN[id], dimensionless, so fluid,
    cell size and units are display-only:
      { v: 'hx-1', base, N, eps (open porosity), epsTot, dh (voxels), K [3]
-       (voxels², creeping-flow diagonal), kL2 [3], ReList, axes [3]: null |
+       (voxels², creeping-flow diagonal), kL2 [3], ReList, openBits, axes [3]: null |
        { points: [{ ReT, Re, Pi, ReK, steps, converged, unsteady, tau, mach,
        t_ms } | { ReT, skipped: 'grid' | 'unstable' }], t_ms }, t_ms }
    Pi = pressure gradient ÷ Darcy's at that speed (1 = pure Darcy).
@@ -175,7 +175,7 @@ async function flowHXRun(ctx, opts) {
   opts = opts || {};
   var t0 = performance.now(), S = ctx.S, N = ctx.N, ReList = (opts.ReList || FLOW_HX_RE_DEFAULT).slice();
   var rec = { v: FLOW_HX_VERSION, N: N, eps: ctx.eps, epsTot: ctx.epsTot, dh: ctx.dh, K: ctx.K.slice(), kL2: ctx.K.map(function (k) { return k / (N * N); }),
-              ReList: ReList, axes: [null, null, null], uI: opts.uI || FLOW_HX_U, lambda: opts.lambda || FLOW_HX_LAMBDA, steps: 0, t_ms: 0 };
+              ReList: ReList, axes: [null, null, null], openBits: ctx.openBits, uI: opts.uI || FLOW_HX_U, lambda: opts.lambda || FLOW_HX_LAMBDA, steps: 0, t_ms: 0 };
   if (!(ctx.dh > 0)) return rec;
   var axes = (opts.axes || [0, 1, 2]).filter(function (a) { return (ctx.openBits & (1 << a)) && ctx.K[a] > 0; });
   var total = axes.length * ReList.length, done = 0;
