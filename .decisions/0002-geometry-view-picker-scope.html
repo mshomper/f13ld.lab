@@ -90,12 +90,20 @@ svg{max-width:100%}
 .warn-read{border-color:var(--warn)}.warn-read .icon{color:var(--warn)}
 .bad-read{border-color:var(--bad)}.bad-read .icon{color:var(--bad)}
 .ruled{margin-top:12px}
+.pics{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px}
+.pic{margin:0;display:grid;gap:6px;min-width:0}
+.pic a{display:block;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface2)}
+.pic a:hover{border-color:var(--accent)}
+.pic img{display:block;width:100%;height:auto;max-height:70vh;object-fit:contain}
+.pic.small img{max-height:220px}
+.pic figcaption{font-size:13px;color:var(--muted)}
 .deep-chip{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.hub-nav{display:flex;gap:8px;align-items:center}.hub-nav a{display:inline-flex;align-items:center;gap:7px;padding:6px 14px 6px 11px;border-radius:999px;border:1px solid var(--line2);background:var(--surface);color:var(--text);font-size:13.5px;font-weight:500;text-decoration:none;transition:border-color .15s,background .15s,color .15s}.hub-nav a[hidden]{display:none}.hub-nav a svg{width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.hub-nav a:hover{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}.hub-nav a.hub{background:var(--accent-bg);border-color:transparent;color:var(--accent)}.hub-nav a.hub:hover{border-color:var(--accent)}
 </style>
 </head>
 <body>
 <main id="app"></main>
-<script id="data" type="application/json">{"id":2,"slug":"geometry-view-picker-scope","title":"Which views should the Geometry tab's picker offer first?","date":"2026-11-06","mode":"quick","lenses":["ui","solver"],"status":"decided","context":"The Geometry tab only shows the shaded view. A scratch test showed curvature can be read from the viewer's stored field to 1–2 % at 48³ with a two-voxel sampling step, so geometry readouts need no solver or re-bake.","depends_on":[1],"conflicts":[],"options":[{"key":"A","name":"Four-view picker","summary":"Shaded plus Curvature, Overhang, Wall thickness and Pore size, sharing one colour bar and control row. About 1–2 sessions.","pros":["All four concern printability and pore geometry and are built the same way."],"cons":["Thickness and pore size add a shader loop, which needs a compile check on Windows."],"source":"claude"},{"key":"B","name":"Curvature only","summary":"The smallest version, under a session.","pros":["Quickest answer to a curvature question."],"cons":["The picker work gets revisited as soon as a second view arrives."],"source":"claude"},{"key":"C","name":"All seven views","summary":"Also Surface direction, X-ray and Networks. About 3–4 sessions.","pros":["Most complete."],"cons":["X-ray and Networks each need their own mechanism."],"source":"claude"}],"recommended":"A","recommendation":"All four share one purpose and one mechanism.","confidence":"lean","chosen":"A","reason":"","decided_on":"2026-11-06","superseded_by":null,"challenge":null,"settles":[{"key":"curvature sign","value":"positive = convex solid, outward normal out of the solid"}],"_file":"0002-geometry-view-picker-scope.html","_links":{"1":"0001-next-up-after-v0-34.html","2":"0002-geometry-view-picker-scope.html"}}</script>
+<script id="data" type="application/json">{"id":2,"slug":"geometry-view-picker-scope","title":"Which views should the Geometry tab's picker offer first?","date":"2026-11-06","mode":"quick","lenses":["ui","solver"],"status":"decided","context":"The Geometry tab only shows the shaded view. A scratch test showed curvature can be read from the viewer's stored field to 1–2 % at 48³ with a two-voxel sampling step, so geometry readouts need no solver or re-bake.","depends_on":[1],"conflicts":[],"options":[{"key":"A","name":"Four-view picker","summary":"Shaded plus Curvature, Overhang, Wall thickness and Pore size, sharing one colour bar and control row. About 1–2 sessions.","pros":["All four concern printability and pore geometry and are built the same way."],"cons":["Thickness and pore size add a shader loop, which needs a compile check on Windows."],"source":"claude"},{"key":"B","name":"Curvature only","summary":"The smallest version, under a session.","pros":["Quickest answer to a curvature question."],"cons":["The picker work gets revisited as soon as a second view arrives."],"source":"claude"},{"key":"C","name":"All seven views","summary":"Also Surface direction, X-ray and Networks. About 3–4 sessions.","pros":["Most complete."],"cons":["X-ray and Networks each need their own mechanism."],"source":"claude"}],"recommended":"A","recommendation":"All four share one purpose and one mechanism.","confidence":"lean","chosen":"A","reason":"","decided_on":"2026-11-06","superseded_by":null,"challenge":null,"settles":[{"key":"curvature sign","value":"positive = convex solid, outward normal out of the solid"}],"_file":"0002-geometry-view-picker-scope.html","_links":{"1":"0001-next-up-after-v0-34.html","2":"0002-geometry-view-picker-scope.html","3":"0003-hx1-reaching-reynolds.html","4":"0004-hx1-results-storage.html","5":"0005-hx1-default-run.html"},"_images":[]}</script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
 const I = {
@@ -125,7 +133,7 @@ function refLinks(list){
 }
 function fileOf(n){ return (D._links || {})[n] || 'index.html'; }
 
-let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></div>`;
+let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><span class="row" style="gap:14px"><nav class="hub-nav"><a id="hub-link" class="hub" hidden href="http://localhost:4747/" title="Back to the Crux hub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h10a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2H8.5L5 16.5V14H4a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2z"/><path d="M18.5 8.5H20a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2h-1v2.5L15.5 18H12"/></svg>Open hub</a></nav><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></span></div>`;
 h += `<div class="row" style="margin-top:14px"><span class="muted">${pad(D.id)}</span><span class="chip ${esc(D.status)}">${esc(D.status)}</span><span class="chip">${I.clock}${esc(D.date)}</span>${(D.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}${D.deep?'<span class="chip deep-chip">deep</span>':''}</div>`;
 h += `<h1>${esc(D.title)}</h1><p>${esc(D.context)}</p>`;
 if ((D.depends_on||[]).length) h += `<p class="muted row" style="gap:6px">${I.link}Builds on ${refLinks(D.depends_on)}</p>`;
@@ -145,6 +153,11 @@ if (D.status === 'parked'){
 if ((D.log_refs||[]).length) h += `<p class="muted row" style="gap:6px">${I.book}Also in the repo's log: ${D.log_refs.map(r=>`<span class="code">${esc(r.file)}</span> ${esc(r.entry||'')}`).join(', ')}</p>`;
 if (D.status === 'superseded' && D.superseded_by) h += `<div class="callout bad">Replaced by decision ${refLinks([D.superseded_by])}.</div>`;
 
+// Decision 43: pictures stored with the record (images/...), shared ones before the options, the rest in their option.
+const pics = D._images || [], optKeys = new Set(opts.map(o => o.key));
+const fig = (i, small) => `<figure class="pic${small?' small':''}"><a href="${esc(i.file)}" target="_blank" rel="noopener" title="Open the full picture"><img src="${esc(i.file)}" alt="${esc(i.caption||'Picture')}" loading="lazy"></a>${i.caption?`<figcaption>${esc(i.caption)}</figcaption>`:''}</figure>`;
+const sharedPics = pics.filter(i => !optKeys.has(i.option));
+if (sharedPics.length) h += `<h2>Pictures</h2><div class="pics">${sharedPics.map(i => fig(i)).join('')}</div>`;
 h += `<h2>Options</h2><div class="options">`;
 for (const o of opts){
   const rec = o.key === D.recommended, ch = decided && o.key === D.chosen;
@@ -153,6 +166,7 @@ for (const o of opts){
     ${(rec||ch||o.source==='human')?`<div class="row">${rec?`<span class="badge rec">${I.star}${(D.status==='found'||D.deliberate)?'In the code now':'Recommended'}</span>`:''}${ch?`<span class="badge ch">${I.check}Chosen</span>`:''}${o.source==='human'?'<span class="chip">Your option</span>':''}</div>`:''}
     ${o.sketch?`<div class="sketch">${o.sketch}</div>`:''}
     <p style="margin:0">${esc(o.summary)}</p>
+    ${pics.filter(i => i.option === o.key).map(i => fig(i, true)).join('')}
     <ul class="pc">${(o.pros||[]).map(p=>`<li class="pro">${I.plus}<span>${esc(p)}</span></li>`).join('')}${(o.cons||[]).map(c=>`<li class="con">${I.minus}<span>${esc(c)}</span></li>`).join('')}</ul>
     ${o.effort?`<p class="note" style="margin:0">Effort: ${esc(o.effort)}</p>`:''}
     ${(o.assumptions||[]).length?`<div class="sub">Assumes</div><ul class="mini">${o.assumptions.map(a=>`<li>${I.dot}<span>${esc(a)}</span></li>`).join('')}</ul>`:''}
@@ -266,6 +280,14 @@ if (rev) rev.addEventListener('click', async () => {
   catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
 });
 document.getElementById('why')?.addEventListener('input', () => document.getElementById('err').textContent = '');
+</script>
+<script>
+// Links to the Crux hub: shown when the page comes from the hub, or when a running hub answers on this machine.
+(() => {
+  const show = (id, href) => { const a = document.getElementById(id); if (a) { if (href) a.href = href; a.hidden = false; } };
+  if (location.protocol !== 'file:') { show('hub-link', '/'); show('all-link', '/all'); return; }
+  fetch('http://localhost:4747/api/ping').then(r => { if (r.ok) show('hub-link'); }).catch(() => {});
+})();
 </script>
 </body>
 </html>

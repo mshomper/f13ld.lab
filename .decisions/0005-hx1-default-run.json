@@ -1,0 +1,136 @@
+{
+ "id": 5,
+ "slug": "hx1-default-run",
+ "title": "What should one pressure-drop run cover by default?",
+ "date": "2026-11-11",
+ "mode": "full",
+ "lenses": [
+  "research",
+  "solver",
+  "ui"
+ ],
+ "status": "decided",
+ "context": "Run time is set by how many Reynolds points, how many flow directions and which grid. Low points are cheap (the lattice fluid stays viscous and settles in a few thousand steps); the top point dominates, because a less viscous lattice fluid settles slowly. Rough figures at 64³ on Matt's RTX (about 27,000 steps a second from the 2026-10-14 bench): Re up to 10 well under 0.2 s a point, Re 20–50 about 1 s, Re 100 about 1.5–3 s with a warm start from the previous point. At 128³ the same top point is one to two minutes. These are estimates for the bench to confirm. The scope (§11.7, 2026-10-07) said to wait for the database user's operating range before fixing defaults; this sets a provisional, editable default and needs no answer from him to start.",
+ "depends_on": [
+  3,
+  4
+ ],
+ "conflicts": [],
+ "log_refs": [
+  {
+   "file": "docs/FLUIDS_LBM_SCOPE.md",
+   "entry": "§11.2 default list 1, 10, 50, 100, 200; §11.7 Reynolds list waits for the user's answer"
+  },
+  {
+   "file": "docs/FLUIDS_LBM_SCOPE.md",
+   "entry": "§15 Flow direction setting: Z / X / Y / All"
+  }
+ ],
+ "options": [
+  {
+   "key": "A",
+   "name": "Six points to Re 100, chosen direction, 64³",
+   "summary": "Reynolds numbers 2, 5, 10, 20, 50 and 100 (editable list), solved along the Flow direction setting (All = the three axes), on the flow grid. Points above what the grid resolves are skipped with a note; 128³ is allowed with a time warning.",
+   "sketch": "<svg viewBox='0 0 320 180'><line x1='20' y1='120' x2='304' y2='120' stroke='currentColor'/><text x='20' y='140' font-size='11' fill='currentColor'>1</text><text x='106' y='140' font-size='11' fill='currentColor'>10</text><text x='190' y='140' font-size='11' fill='currentColor'>100</text><text x='276' y='140' font-size='11' fill='currentColor'>1000</text><text x='162' y='166' font-size='12' fill='currentColor' text-anchor='middle'>Reynolds number</text><rect x='20' y='92' width='175' height='16' fill='var(--good)' opacity='0.35'/><text x='26' y='86' font-size='11' fill='currentColor'>64³ resolves</text><circle cx='45' cy='100' r='5' fill='var(--accent)'/><circle cx='79' cy='100' r='5' fill='var(--accent)'/><circle cx='105' cy='100' r='5' fill='var(--accent)'/><circle cx='131' cy='100' r='5' fill='var(--accent)'/><circle cx='165' cy='100' r='5' fill='var(--accent)'/><circle cx='190' cy='100' r='5' fill='var(--accent)'/><text x='230' y='40' font-size='11' fill='currentColor' text-anchor='middle'>about 10–20 s</text><text x='230' y='56' font-size='11' fill='currentColor' text-anchor='middle'>all three axes</text></svg>",
+   "pros": [
+    "Fits the 10–20 s budget: about 3–6 s per direction, 10–20 s with All, plus the wall links Flow already builds.",
+    "Dense where inertia switches on (Re about 2–20), which is where the inertia-onset number and the fit's quality are decided.",
+    "Covers Castro et al.'s 29–145 except its top, and the bottom half of the heat-exchanger range.",
+    "A heat exchanger has a known flow direction, so one axis is often all a user needs (3× faster)."
+   ],
+   "cons": [
+    "Stops at Re 100: the upper heat-exchanger range (200–500) needs 128³ and minutes per design.",
+    "Six points, not the scope's five; the list differs from the 2026-10-07 draft."
+   ],
+   "effort": "Same build as the others.",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Scope list on all three axes",
+   "summary": "Reynolds numbers 1, 10, 50, 100 and 200 as written in the scope, on every open axis, with Re 200 on a 128³ grid.",
+   "sketch": "<svg viewBox='0 0 320 180'><line x1='20' y1='120' x2='304' y2='120' stroke='currentColor'/><text x='20' y='140' font-size='11' fill='currentColor'>1</text><text x='106' y='140' font-size='11' fill='currentColor'>10</text><text x='190' y='140' font-size='11' fill='currentColor'>100</text><text x='276' y='140' font-size='11' fill='currentColor'>1000</text><text x='162' y='166' font-size='12' fill='currentColor' text-anchor='middle'>Reynolds number</text><rect x='20' y='92' width='175' height='16' fill='var(--good)' opacity='0.35'/><rect x='195' y='92' width='26' height='16' fill='var(--warn)' opacity='0.45'/><circle cx='20' cy='100' r='5' fill='var(--accent)'/><circle cx='105' cy='100' r='5' fill='var(--accent)'/><circle cx='165' cy='100' r='5' fill='var(--accent)'/><circle cx='190' cy='100' r='5' fill='var(--accent)'/><circle cx='216' cy='100' r='5' fill='var(--warn)'/><text x='240' y='40' font-size='11' fill='var(--warn)' text-anchor='middle'>Re 200 needs 128³</text><text x='240' y='56' font-size='11' fill='var(--warn)' text-anchor='middle'>minutes per design</text></svg>",
+   "pros": [
+    "Matches the scope as written in 2026-10-07.",
+    "Reaches Re 200, further into the heat-exchanger range."
+   ],
+   "cons": [
+    "Re 200 on all three axes at 128³ is several minutes per design: outside the 10–20 s budget.",
+    "Only one point (Re 1–10) where inertia switches on, so the onset number is poorly placed.",
+    "Re 1 adds nothing the creeping-flow run does not already give."
+   ],
+   "effort": "Same build; much longer runs.",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Automatic to what the grid resolves",
+   "summary": "No list: points spaced evenly on a log scale from Re 1 up to the highest Reynolds number the chosen grid resolves for that design (about 100 at 64³, about 400 at 128³), on every open axis.",
+   "sketch": "<svg viewBox='0 0 320 180'><line x1='20' y1='120' x2='304' y2='120' stroke='currentColor'/><text x='20' y='140' font-size='11' fill='currentColor'>1</text><text x='106' y='140' font-size='11' fill='currentColor'>10</text><text x='190' y='140' font-size='11' fill='currentColor'>100</text><text x='276' y='140' font-size='11' fill='currentColor'>1000</text><text x='162' y='166' font-size='12' fill='currentColor' text-anchor='middle'>Reynolds number</text><rect x='20' y='72' width='175' height='14' fill='var(--good)' opacity='0.35'/><text x='200' y='83' font-size='11' fill='currentColor'>64³</text><rect x='20' y='96' width='226' height='14' fill='var(--accent)' opacity='0.35'/><text x='250' y='107' font-size='11' fill='currentColor'>128³</text><text x='160' y='40' font-size='11' fill='currentColor' text-anchor='middle'>range follows the grid and design</text></svg>",
+   "pros": [
+    "Nothing to set: every design gets the widest range its grid supports.",
+    "The top point is always one the grid can resolve."
+   ],
+   "cons": [
+    "Designs in a sweep end up on different Reynolds points, so columns at a fixed Re need interpolation.",
+    "All axes at 128³ runs into minutes per design.",
+    "Less predictable for a user who wants a specific operating point."
+   ],
+   "effort": "Same build plus a grid-cap estimate per design.",
+   "source": "claude"
+  }
+ ],
+ "criteria": [
+  {
+   "name": "Run time within 10–20 s",
+   "scores": {
+    "A": 3,
+    "B": 1,
+    "C": 2
+   }
+  },
+  {
+   "name": "Reynolds range covered",
+   "scores": {
+    "A": 2,
+    "B": 3,
+    "C": 3
+   }
+  },
+  {
+   "name": "Inertia onset well placed",
+   "scores": {
+    "A": 3,
+    "B": 1,
+    "C": 2
+   }
+  },
+  {
+   "name": "Sweep columns comparable across designs",
+   "scores": {
+    "A": 3,
+    "B": 3,
+    "C": 1
+   }
+  },
+  {
+   "name": "Predictable for the user",
+   "scores": {
+    "A": 3,
+    "B": 3,
+    "C": 2
+   }
+  }
+ ],
+ "recommended": "A",
+ "recommendation": "It keeps a normal Lab run inside the 10–20 s budget, puts its points where inertia switches on, and leaves Re 200 and above as a deliberate, slower 128³ choice. Confirm with the bench numbers before building.",
+ "confidence": "lean",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  { "key": "default Reynolds points for pressure drop", "value": "2, 5, 10, 20, 50, 100 (hydraulic diameter, interstitial speed), editable, along the chosen flow direction (All = three axes), 64³ flow grid; higher points only at 128³ with a time warning" }
+ ]
+}
