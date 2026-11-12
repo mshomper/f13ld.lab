@@ -1,6 +1,7 @@
 /* F13LD.lab v0.35.1 — Geometry views, browser-console check (Matt's GPU).
    1. Open Lab, add a PI-TPMS design and a normalized-shell design (plus any others), open the Geometry tab.
-   2. Press F12, paste this whole file into the Console, press Enter.  Takes about 20 s.
+   2. Press F12 and paste this one line into the Console, then press Enter (takes about 20 s):
+        fetch('proto/geom-views/console_check.js').then(r => r.text()).then(eval)
    Prints: the curvature bake time per design, then for every view, each tile's shader result and
    gl.getError after drawing (Direct3D can link a shader and still fail at the first draw).
    All rows should read ok / NO_ERROR.  Your view choice is put back at the end. */
