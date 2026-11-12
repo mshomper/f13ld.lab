@@ -458,3 +458,47 @@ async function buildFlowLinksParallel(recipe, N, opts, onProgress) {
            probes: mergeWallProbes(probeSlabs), nWall: nWall, nThin: nThin, nExamined: nEx, t_ms: linkNowMs() - t0,
            workers: Math.min(slabs.length, thermalVoxelPoolInfo().size), reused: reused.join('+') || 'none' };
 }
+
+/* ── v0.35.2 — Crush prep on the pool (decision 0011) ───────────────────
+   The crush solver used to build its 0/1 grid and trim islands on the main
+   thread for every axis and every retry (16g NonlinearSolverFull.upload), so
+   turning Crush on froze the page.  Now: the elastic 'voxels' job in x-slabs
+   over the pool, then the same island trim (pruneVoxels, same options) here.
+   0/1 only: crush does not use partial volume.  Reuses the elastic run's grid
+   when it is the same recipe object, grid and connectivity (_TV_PREP_CACHE or
+   the Run All stash), and keeps its own one-entry cache so the three axes and
+   any tight retry share one build.  Result handed to upload as opts.solid.
+   labPrepCrushParallel(recipe, N, opts, onProgress)
+     → Promise<Float32Array kept | null>   null = no workers (upload builds it)
+   Check: node validate-prep.js (crush section) — bit-identical. */
+var _TV_CRUSH_CACHE = null;
+async function labPrepCrushParallel(recipe, N, opts, onProgress) {
+  opts = opts || {};
+  if (!_tvCanUseWorkers() || opts.noWorkers) return null;
+  var prune = !!opts.pruneLargest, conn = opts.connectivity || 'networks';
+  var ck = N + '|' + (prune ? 1 : 0) + '|' + conn;
+  if (_TV_CRUSH_CACHE && _TV_CRUSH_CACHE.recipe === recipe && _TV_CRUSH_CACHE.ck === ck) return _TV_CRUSH_CACHE.kept;
+  var kept = null, P = _TV_PREP_CACHE;
+  /* the elastic prep of this recipe object at this grid: its kept grid is the same trim of the same voxels */
+  if (P && P.recipe === recipe && P.res && P.res.kept && P.ck.indexOf(N + '|' + (prune ? 1 : 0) + '|' + conn + '|') === 0) kept = P.res.kept;
+  if (!kept) {
+    var st = _tvStashFor(recipe, N, opts);
+    if (st && st.kept && _tvConnKey(opts) !== 'off' && prune) kept = st.kept;
+    else if (st && st.raw && !prune) kept = st.raw;
+  }
+  if (!kept) {
+    var NN = N * N, raw = new Float32Array(NN * N), family = recipe.family, done = 0;
+    var key = (typeof recipeFingerprint === 'function' ? recipeFingerprint(recipe) : String(linkNowMs())) + '|' + N;
+    var importGrid = (family === 'import' && typeof importGridMessage === 'function') ? importGridMessage(recipe) : null;
+    var slabs = _tvSlabs(N, _tvPoolSize());
+    await Promise.all(slabs.map(function (sl) {
+      return _tvRun({ type: 'voxels', recipe: recipe, N: N, key: key, i0: sl[0], i1: sl[1], importGrid: importGrid }).then(function (r) {
+        raw.set(r.v, sl[0] * NN); done++;
+        if (onProgress) onProgress({ stage: 'voxels', done: done, total: slabs.length });
+      });
+    }));
+    kept = (prune && typeof pruneVoxels === 'function') ? pruneVoxels(raw, N, family, opts) : raw;   /* as 16g upload */
+  }
+  _TV_CRUSH_CACHE = { recipe: recipe, ck: ck, kept: kept };
+  return kept;
+}
