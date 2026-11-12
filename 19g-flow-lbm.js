@@ -37,7 +37,8 @@
      homogenizeFlowGPU(recipe, N, opts) → result (below)
        opts: { connectivity, pruneLargest, tol (1e-6), tauPlus (1.5),
                maxSteps (200000), isStale(), onVoxelProgress(p),
-               onProgress({ axis, index, total, step, rel }) }
+               onProgress({ axis, index, total, step, rel }),
+               afterSolve({ S, N, dom, probes, out }) (v0.37.0, 19i pressure drop) }
      result: { N, K[9] (cells², column j = force along j), Ksym[9], asym,
                kL2 [x, y, z], tort [x, y, z], perAxis [{ open, converged,
                steps, t_ms, U }], porosity, openPorosity, sealedPorosity,
@@ -541,6 +542,13 @@ async function _homogenizeFlowGPU(recipe, N, opts, st) {
   for (var a1 = 0; a1 < 3; a1++) out.kL2[a1] = out.Ksym[a1 * 4] / (N * N);
   out.t_solve_ms = performance.now() - tS;
   out.t_ms = performance.now() - t0;
+  /* v0.37.0 — HX-1 (19i): pressure-drop points on the same wall tables while they are on the GPU.
+     The hook keeps its own result; nothing above changes, so creeping-flow results are as before. */
+  if (typeof opts.afterSolve === 'function') {
+    st.step = 'pressure drop';
+    await opts.afterSolve({ S: S, N: N, dom: dom, probes: probes, out: out });
+    if (opts.isStale && opts.isStale()) return null;
+  }
   return out;
 }
 

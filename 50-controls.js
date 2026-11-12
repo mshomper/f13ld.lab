@@ -80,8 +80,48 @@ var FLOW_STATE = { N: 64, tol: 1e-6,
      direction and viscosity.  dir: zz / xx / yy / all (all = the best direction); target: 19h
      FLOW_SHEAR_TARGETS id, none by default (Matt, 2026-10-14: the tool is not only for biomed);
      tLo / tHi: custom target, mPa; muCustom: mPa·s; speedUnit: mm (mm/s) or m (m/s); chamberMm. */
-  dir: 'all', fluid: 'water', muCustom: 1.0, target: 'none', tLo: 10, tHi: 30, speedUnit: 'mm', chamberMm: 10 };
+  dir: 'all', fluid: 'water', muCustom: 1.0, target: 'none', tLo: 10, tHi: 30, speedUnit: 'mm', chamberMm: 10,
+  /* v0.37.0 — HX-1 pressure drop (19i, decisions 0003–0005): off by default; Reynolds points solved
+     along the Flow direction setting (All = three axes).  Fluid, cell size and units only rescale. */
+  hx: false, hxRe: [2, 5, 10, 20, 50, 100] };
 var FLOW_BY_DESIGN = {};
+/* v0.37.0 — pressure-drop cache and run plumbing (FLOW_HX_BY_DESIGN lives in 19i) */
+function flowHXBase(fN, fp){
+  return 'N' + fN + '|p' + GEOM_STATE.connectivity + '|tol' + FLOW_STATE.tol + '|' + FLOW_HX_VERSION + '|Re' + FLOW_STATE.hxRe.join(',') + '|r' + fp;
+}
+/* every wanted axis is either solved or has no open path */
+function flowHXHave(rec, base, axes){
+  if (!rec || rec.error || rec.base !== base) return false;
+  return axes.every(function(a){ return rec.axes[a] || !(rec.openBits & (1 << a)); });
+}
+function flowHXRunOpts(df, fi, axes, stale){
+  var lbl = function(){ return '<span class="v">Flow</span> · Design ' + (df.label ? df.label : String.fromCharCode(65 + fi)) + ' · N=' + FLOW_STATE.N; };
+  return { ReList: FLOW_STATE.hxRe.slice(), axes: axes, isStale: stale,
+    onProgress: function(p){ if (!stale()) paintRunStatus(lbl() + ' · pressure drop along ' + p.axis.toUpperCase() + ' · Re ' + p.Re + ' (' + (p.point + 1) + '/' + p.total + ')…'); } };
+}
+/* the hook keeps a failure to itself, so the creeping-flow result is still stored */
+function flowHXSafeHook(opts, sink){
+  var h = flowHXHook(opts, sink);
+  return async function(c){ try { await h(c); } catch (err){ sink.err = err; console.error('[run] pressure drop failed:', err); } };
+}
+/* merge with the axes already solved under the same cache key, time it, log it */
+function flowHXStore(df, rec, base){
+  var old = FLOW_HX_BY_DESIGN[df.id];
+  if (old && !old.error && old.base === base) for (var a = 0; a < 3; a++) if (!rec.axes[a] && old.axes[a]) rec.axes[a] = old.axes[a];
+  rec.base = base;
+  FLOW_HX_BY_DESIGN[df.id] = rec;
+  var nPts = 0;
+  for (var b = 0; b < 3; b++) if (rec.axes[b]) nPts += rec.axes[b].points.filter(function(p){ return !p.skipped; }).length;
+  RUN_TIMING.hx += rec.t_ms || 0;
+  if (nPts && typeof RUN_CALIB !== 'undefined'){ _flowHXFresh.points += nPts; _flowHXFresh.ms += rec.t_ms || 0; }
+  console.log('[flow] ' + (df.label || df.id) + ' · pressure drop ' + ((rec.t_ms || 0) / 1000).toFixed(2) + ' s · d_h ' + (rec.dh ? rec.dh.toFixed(1) : '—') + ' voxels · ' +
+    [0, 1, 2].filter(function(c){ return rec.axes[c]; }).map(function(c){
+      return 'XYZ'[c] + ': ' + rec.axes[c].points.map(function(p){
+        return p.skipped ? 'Re ' + p.ReT + ' skipped (' + p.skipped + ')' : 'Re ' + p.ReT + '→' + p.Re.toPrecision(3) + ' Π ' + p.Pi.toFixed(3) + ' ' + p.steps + (p.converged ? '' : p.unsteady ? ' unsteady' : '!') + ' Ma ' + p.mach.toFixed(2);
+      }).join(', ');
+    }).join(' · '));
+}
+var _flowHXFresh = { points: 0, ms: 0 };
 var FLOW_THROAT_PERM = 8;   /* cells across the narrowest pore for permeability within ~2 % */
 var FLOW_THROAT_WSS = 15;   /* … and for wall shear stress (Phase 2) */
 function thermalFillersOn(){
@@ -250,7 +290,7 @@ var RUN_STATE = {
 
 /* Phase-6 tie-up #4 — last run's measured per-mode wall-times (ms), surfaced
    to the console and folded into the next estimate via RUN_CALIB. */
-var RUN_TIMING = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0, flow: 0 };
+var RUN_TIMING = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0, flow: 0, hx: 0 };
 
 /* ============================================================
    PHYSICS TOGGLES
@@ -374,7 +414,8 @@ var RUN_REF = {
                                            slow single-thread sandbox, axes in parallel; sheets ~12 s */
   nonlinear: { sec: 90.0, refN: 16, refCap: 0.05 }, /* sync-bound crush @ N=16, 5% cap */
   thermal:   { sec: 2.0,  refN: 64 },   /* v0.20.0 — per filler, incl. its share of the wall-voxel build (uncalibrated guess) */
-  flow:      { sec: 1.0,  refN: 64 }   /* v0.28.0 — wall links + three axes at 64³ on Matt's RTX ≈ 0.8 s; steps grow ~N², so cost ~N⁴ */
+  flow:      { sec: 1.0,  refN: 64 },  /* v0.28.0 — wall links + three axes at 64³ on Matt's RTX ≈ 0.8 s; steps grow ~N², so cost ~N⁴ */
+  hx:        { sec: 0.4,  refN: 64 }   /* v0.37.0 — per axis and Reynolds point; Matt's bench 2026-11-12: six points 1.7 s from rest */
 };
 
 /* Calibration: measured seconds-per-design keyed by mode → { sec, N, cap }.
@@ -419,6 +460,10 @@ function modePerDesignSec(mode){
     var fN = FLOW_STATE.N, fr = cal ? fN / cal.N : fN / ref.refN;
     return (cal ? cal.sec : ref.sec) * fr * fr * fr * fr;
   }
+  if (mode === 'hx'){     /* v0.37.0 — per point × points × axes */
+    var hN = FLOW_STATE.N, hr = cal ? hN / cal.N : hN / ref.refN;
+    return (cal ? cal.sec : ref.sec) * hr * hr * hr * hr * FLOW_STATE.hxRe.length * (FLOW_STATE.dir === 'all' ? 3 : 1);
+  }
   return 0;
 }
 
@@ -432,6 +477,7 @@ function estimateSeconds(){
   if (PHYS_STATE.buckle)  total += modePerDesignSec('buckling')  * n;
   if (PHYS_STATE.thermal) total += modePerDesignSec('thermal')   * n;
   if (PHYS_STATE.flow)    total += modePerDesignSec('flow')      * n;
+  if (PHYS_STATE.flow && FLOW_STATE.hx) total += modePerDesignSec('hx') * n;   /* v0.37.0 */
   return total;
 }
 
@@ -580,7 +626,7 @@ async function runRealSweep(N, runToken){
      shared RUN_STATE.cancelled flag (which a new run used to reset to false,
      letting a cancelled sweep resume alongside it). */
   function stale(){ return runToken !== RUN_STATE.token; }
-  var nFresh = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0, flow: 0 };   /* Sprint A — calibrate on fresh solves only (thermal: per filler) */
+  var nFresh = { elastic: 0, nonlinear: 0, buckling: 0, thermal: 0, flow: 0, hx: 0 };   /* Sprint A — calibrate on fresh solves only (thermal: per filler) */
 
   var doElastic = !!PHYS_STATE.elastic;
   var doBuckle  = !!PHYS_STATE.buckle;
@@ -602,6 +648,9 @@ async function runRealSweep(N, runToken){
       return;
     }
   }
+
+  var doHX = doFlow && !!FLOW_STATE.hx && typeof flowHXRun === 'function';   /* v0.37.0 — pressure drop rides on Flow */
+  RUN_TIMING.hx = 0; _flowHXFresh = { points: 0, ms: 0 };
 
   /* Resolve recipes once; designs without a recipe can't run real physics. */
   var recipes = [];
@@ -994,9 +1043,26 @@ async function runRealSweep(N, runToken){
       RUN_STATE.currentIndex = fi;
       var flBase = 'N' + fN + '|p' + GEOM_STATE.connectivity + '|tol' + FLOW_STATE.tol + '|' + FLOW_GPU_VERSION + '|r' + recipeFp[fi];
       var flEx = FLOW_BY_DESIGN[df.id];
+      /* v0.37.0 — HX-1 pressure drop (19i): its own record and cache (decision 0004), solved on the
+         creeping run's wall tables when both are due, or on its own when creeping flow is cached */
+      var hxBase = doHX ? flowHXBase(fN, recipeFp[fi]) : null, hxAxes = flowHXAxesFor(FLOW_STATE.dir);
+      var hxDue = doHX && !flowHXHave(FLOW_HX_BY_DESIGN[df.id], hxBase, hxAxes);
+      var hxSink = {}, hxOpts = hxDue ? flowHXRunOpts(df, fi, hxAxes, stale) : null;
       if (flEx && !flEx.error && flEx.base === flBase){
+        if (hxDue){
+          try {
+            var Kc = [0, 1, 2].map(function(a){ return (flEx.perAxis[a] && flEx.perAxis[a].open) ? flEx.Ksym[4 * a] : 0; });
+            var hrec = await homogenizeFlowHX(rf, fN, Object.assign({}, connOpts(), hxOpts, { tol: FLOW_STATE.tol, Kvox: Kc }));
+            if (stale() || !hrec) return;
+            flowHXStore(df, hrec, hxBase);
+          } catch (err){
+            if (stale()) return;
+            console.error('[run] design ' + df.id + ' pressure drop failed:', err);
+            FLOW_HX_BY_DESIGN[df.id] = { error: 'pressure drop failed: ' + ((err && err.message) || err), N: fN };
+          }
+        } else paintRunStatus('<span class="v">Flow</span> · Design ' + dletter(df, fi) + ' · cached');
         doneUnits += 3; bumpProgress();
-        paintRunStatus('<span class="v">Flow</span> · Design ' + dletter(df, fi) + ' · cached');
+        if (hxDue) renderDesignGrid();
         continue;
       }
       paintRunStatus('<span class="v">Flow</span> · Design ' + dletter(df, fi) + ' · N=' + fN + ' · building wall links…');
@@ -1005,6 +1071,7 @@ async function runRealSweep(N, runToken){
       try {
         var FR = await homogenizeFlowGPU(rf, fN, Object.assign({}, connOpts(), {
           tol: FLOW_STATE.tol, isStale: stale,
+          afterSolve: hxDue ? flowHXSafeHook(hxOpts, hxSink) : undefined,
           onVoxelProgress: (function(dd, ii){ return function(p){
             if (!stale()) paintRunStatus('<span class="v">Flow</span> · Design ' + dletter(dd, ii) + ' · N=' + fN + ' · wall links ' + p.done + '/' + p.total);
           }; })(df, fi),
@@ -1025,6 +1092,10 @@ async function runRealSweep(N, runToken){
                     (FR.wss ? ' · wall probes ' + FR.wss.n + ' (' + (FR.wss.t_ms / 1000).toFixed(2) + ' s) · force balance ' +
                       FR.wss.axes.map(function(a){ return a ? (a.residual * 100).toFixed(2) + '%' : '—'; }).join(' / ') +
                       ' · fallback ' + FR.wss.axes.map(function(a){ return a ? a.nNear + '+' + a.nSingle + ' drop ' + a.nDrop : '—'; }).join(' / ') : ''));
+        if (hxDue){
+          if (hxSink.rec) flowHXStore(df, hxSink.rec, hxBase);
+          else if (hxSink.err) FLOW_HX_BY_DESIGN[df.id] = { error: 'pressure drop failed: ' + ((hxSink.err && hxSink.err.message) || hxSink.err), N: fN };
+        }
       } catch (err){
         if (stale()) return;
         console.error('[run] design ' + df.id + ' flow solve failed:', err);
@@ -1034,7 +1105,7 @@ async function runRealSweep(N, runToken){
       renderDesignGrid();
     }
   }
-  RUN_TIMING.flow = performance.now() - tFl0;
+  RUN_TIMING.flow = performance.now() - tFl0 - RUN_TIMING.hx;   /* v0.37.0 — pressure drop timed on its own */
 
   /* ---------- Unimplemented modes: honest status, no fake numbers ---------- */
   var notWired = [];
@@ -1049,6 +1120,7 @@ async function runRealSweep(N, runToken){
     if (doBuckle && nFresh.buckling > 0)   RUN_CALIB.buckling  = { sec: (RUN_TIMING.buckling  / 1000) / nFresh.buckling,  N: BUCKLE_STATE.N };
     if (doThermal && nFresh.thermal > 0)   RUN_CALIB.thermal   = { sec: (RUN_TIMING.thermal   / 1000) / nFresh.thermal,   N: N };   /* per filler solve */
     if (doFlow && nFresh.flow > 0)         RUN_CALIB.flow      = { sec: (RUN_TIMING.flow      / 1000) / nFresh.flow,      N: FLOW_STATE.N };
+    if (doHX && _flowHXFresh.points > 0)   RUN_CALIB.hx        = { sec: (_flowHXFresh.ms / 1000) / _flowHXFresh.points,  N: FLOW_STATE.N };   /* v0.37.0 — per axis and point */
     saveRunCalib();
     console.log('[run] per-mode wall-time (s) — elastic ' + (RUN_TIMING.elastic/1000).toFixed(1) +
                 ' · nonlinear ' + (RUN_TIMING.nonlinear/1000).toFixed(1) +

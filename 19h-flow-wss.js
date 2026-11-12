@@ -61,10 +61,20 @@ var FLOW_SHEAR_TARGETS = [
   { id: 'custom',   name: 'Custom',               sub: 'Your own range' }
 ];
 var FLOW_METAL_IMPLANT = { 'Titanium': 1, 'Cobalt-chrome': 1, 'Stainless steel': 1, 'Refractory': 1, 'Shape memory': 1 };
+/* v0.37.0 — one list for wall shear and pressure drop (orchestrator, 2026-11-11): the first three
+   as before, then the heat-exchanger fluids of scope §11.2, each with conductivity k (W/m·K) and heat
+   capacity cp (J/kg·K) for HX-2.  1 atm; water and air from standard property tables (Çengel), glycol
+   and oil representative values. */
 var FLOW_FLUIDS = {
-  water:  { name: 'Water, 37 °C',               mu: 0.69e-3, rho: 993 },
+  water:  { name: 'Water, 37 °C',               mu: 0.69e-3, rho: 993, k: 0.628, cp: 4178 },
   medium: { name: 'Culture medium, 10 % serum', mu: 0.93e-3, rho: 1007 },   /* Poon 2020 */
-  custom: { name: 'Custom',                     mu: null,    rho: 1000 }
+  custom: { name: 'Custom',                     mu: null,    rho: 1000 },
+  air25:   { name: 'Air, 25 °C',                 mu: 1.849e-5, rho: 1.184, k: 0.02551, cp: 1007, hx: true },
+  air80:   { name: 'Air, 80 °C',                 mu: 2.096e-5, rho: 0.9994, k: 0.02953, cp: 1008, hx: true },
+  water25: { name: 'Water, 25 °C',               mu: 0.891e-3, rho: 997.0, k: 0.607, cp: 4180, hx: true },
+  water60: { name: 'Water, 60 °C',               mu: 0.467e-3, rho: 983.3, k: 0.654, cp: 4185, hx: true },
+  glycol:  { name: 'Ethylene glycol–water 50/50, 25 °C', mu: 3.4e-3, rho: 1067, k: 0.38, cp: 3300, hx: true },
+  oil:     { name: 'Light mineral oil (ISO VG 10), 40 °C', mu: 8.5e-3, rho: 850, k: 0.13, cp: 1950, hx: true }
 };
 function flowShearTargetDef(id) {
   for (var i = 0; i < FLOW_SHEAR_TARGETS.length; i++) if (FLOW_SHEAR_TARGETS[i].id === id) return FLOW_SHEAR_TARGETS[i];
