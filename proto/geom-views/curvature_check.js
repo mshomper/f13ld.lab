@@ -1,10 +1,13 @@
 // F13LD.lab · Geometry tab curvature check (v0.35.0): is curvature baked from the viewer's field
 // accurate?  Runs the real labBakeCurvature from 21-raymarcher.js, then reads it as the shader does
-// (trilinear at the surface point).  Run from the repo root: node proto/geom-views/curvature_check.js
-const fs = require('fs');
-const rm = fs.readFileSync('21-raymarcher.js', 'utf8').replace(/\r\n/g, '\n');
-const at = rm.indexOf('function labBakeCurvature');
-const labBakeCurvature = new Function(rm.slice(at, rm.indexOf('\n}\n', at) + 2) + ';return labBakeCurvature;')();
+// (trilinear at the surface point).  Run: node proto/geom-views/curvature_check.js (from any folder)
+const fs = require('fs'), path = require('path');
+const rm = fs.readFileSync(path.join(__dirname, '..', '..', '21-raymarcher.js'), 'utf8').replace(/\r\n/g, '\n');
+const grab = name => { const at = rm.indexOf('function ' + name); return new Function(rm.slice(at, rm.indexOf('\n}\n', at) + 2) + ';return ' + name + ';')(); };
+const labBakeCurvature = grab('labBakeCurvature');
+const labBakeCompDistance = grab('labBakeCompDistance');   /* v0.35.1 */
+const labBakeCompCurvature = (() => { const at = rm.indexOf('function labBakeCompCurvature'), src = n => { const a = rm.indexOf('function ' + n); return rm.slice(a, rm.indexOf('\n}\n', a) + 2); };
+  return new Function(src('labBakeCurvature') + src('labBakeCompDistance') + rm.slice(at, rm.indexOf('\n}\n', at) + 2) + ';return labBakeCompCurvature;')(); })();
 const TAU = 2 * Math.PI;
 
 function grid(f, N) {
@@ -85,6 +88,83 @@ for (const N of [48, 96]) for (const rv of [2, 4, 8]) {
 {
   const d = grid(gyroid, 96), t0 = Date.now(); labBakeCurvature(d, 96); const ms = Date.now() - t0;
   check('C3 bake at 96³', ms, 150, ' ms');
+}
+
+// C4 (v0.35.1) — PI-TPMS and normalized shells at the viewer's 48³: curvature of their own distance,
+// baked from the 32-bit field (labBakeCompDistance + labBakeCurvature), against the analytic distance.
+// For comparison, the v0.35.0 path: a one-texel stencil on the distance rebuilt from the stored
+// 16-bit texture, as the shader did.  Errors as RMS on the surface's curvature scale.
+{
+  const N = 48, h = TAU / N;
+  const gG = (x, y, z) => [Math.cos(x) * Math.cos(y) - Math.sin(z) * Math.sin(x), -Math.sin(x) * Math.sin(y) + Math.cos(y) * Math.cos(z), -Math.sin(y) * Math.sin(z) + Math.cos(z) * Math.cos(x)];
+  const len = g => Math.hypot(g[0], g[1], g[2]);
+  const cases = [
+    { name: 'normalized gyroid shell, t 0.3', u: { topoMode: 0, normMode: 1, isoLevel: 0, thickness: 0.3 } },
+    { name: 'normalized gyroid shell, t 0.15', u: { topoMode: 0, normMode: 1, isoLevel: 0.2, thickness: 0.15 } },
+    { name: 'PI gyroid, normalized, r 0.35', u: { topoMode: 3, normMode: 2, isoLevel: 0, pipeR: 0.35, pipeOffset: [0.5 * Math.PI, 0.3, 0.7], pairMode: 0 }, same: true },
+    { name: 'PI gyroid, plain, r 0.4', u: { topoMode: 3, normMode: 0, isoLevel: 0, pipeR: 0.4, pipeOffset: [Math.PI, 0, 0], pairMode: 0 } }
+  ];
+  /* the shader's implicit0 for these modes, on any field sampler F and gradient G */
+  const implicit = (u, F, G) => (x, y, z) => {
+    if (u.topoMode > 2.5) {
+      const o = u.pipeOffset, a = F(x, y, z) - u.isoLevel, b = F(x + o[0], y + o[1], z + o[2]) - u.isoLevel;
+      if (u.normMode < 1.5) return Math.max(Math.abs(a), Math.abs(b)) - u.pipeR;
+      const gA = G(x, y, z), gB = G(x + o[0], y + o[1], z + o[2]), mA = Math.max(len(gA), .08), mB = Math.max(len(gB), .08);
+      const dA = a / mA, dB = b / mB, ca = Math.max(-.95, Math.min(.95, (gA[0] * gB[0] + gA[1] * gB[1] + gA[2] * gB[2]) / (mA * mB)));
+      return Math.sqrt(Math.max(dA * dA - 2 * ca * dA * dB + dB * dB, 0) / (1 - ca * ca)) - u.pipeR;
+    }
+    return Math.abs(F(x, y, z) - u.isoLevel) / Math.max(len(G(x, y, z)), .08) - u.thickness;
+  };
+  /* the stored texture: field normalized to 0..1 and rounded to half precision, read trilinear */
+  const toHalf = v => { if (v <= 0) return 0; const e = Math.floor(Math.log2(v)), s = Math.pow(2, Math.max(e, -14) - 10); return Math.round(v / s) * s; };
+  const field = grid(gyroid, N); let lo = Infinity, hi = -Infinity; for (const v of field) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const tex = Float32Array.from(field, v => toHalf((v - lo) / (hi - lo)));
+  const R16 = reader(Float32Array.from({ length: 2 * N * N * N }, (_, i) => i % 2 ? 0 : tex[i >> 1]), N, 0);
+  const F16 = (x, y, z) => R16(x, y, z) * (hi - lo) + lo, e = 0.75 * h;
+  const G16 = (x, y, z) => [(F16(x + e, y, z) - F16(x - e, y, z)) / (2 * e), (F16(x, y + e, z) - F16(x, y - e, z)) / (2 * e), (F16(x, y, z + e) - F16(x, y, z - e)) / (2 * e)];
+  /* the plain PI pipe is square in section: real edges where |a| = |b|, unbounded curvature there.
+     Keep points more than a texel and a half (in field units) from an edge. */
+  const awayFromEdge = u => u.topoMode > 2.5 && u.normMode < 1.5
+    ? p => { const o = u.pipeOffset; return Math.abs(Math.abs(gyroid(...p) - u.isoLevel) - Math.abs(gyroid(p[0] + o[0], p[1] + o[1], p[2] + o[2]) - u.isoLevel)) > 1.5 * h; }
+    : () => true;
+  /* a surface point about one texel away, along the surface: speckle is texel-scale */
+  const neighbour = (F, p) => {
+    const e = 1e-4, g = [(F(p[0] + e, p[1], p[2]) - F(p[0] - e, p[1], p[2])) / (2 * e), (F(p[0], p[1] + e, p[2]) - F(p[0], p[1] - e, p[2])) / (2 * e), (F(p[0], p[1], p[2] + e) - F(p[0], p[1], p[2] - e)) / (2 * e)];
+    const a = Math.abs(g[0]) < .9 * len(g) ? [1, 0, 0] : [0, 1, 0], t = [g[1] * a[2] - g[2] * a[1], g[2] * a[0] - g[0] * a[2], g[0] * a[1] - g[1] * a[0]], tl = len(t);
+    let q = p.map((v, i) => v + h * t[i] / tl);
+    for (let it = 0; it < 20; it++) {
+      const v = F(...q), gq = [(F(q[0] + e, q[1], q[2]) - F(q[0] - e, q[1], q[2])) / (2 * e), (F(q[0], q[1] + e, q[2]) - F(q[0], q[1] - e, q[2])) / (2 * e), (F(q[0], q[1], q[2] + e) - F(q[0], q[1], q[2] - e)) / (2 * e)];
+      const g2 = gq[0] ** 2 + gq[1] ** 2 + gq[2] ** 2; if (g2 < 1e-9) break; q = q.map((w, i) => w - v * gq[i] / g2); if (Math.abs(v) < 1e-9) break;
+    }
+    return q;
+  };
+  for (const c of cases) {
+    const truthF = implicit(c.u, gyroid, gG), keep = awayFromEdge(c.u);
+    const pts = surfacePoints(truthF, 0, 2400).filter(keep).slice(0, 800), nbr = pts.map(p => neighbour(truthF, p));
+    const H0 = p => curvature(truthF, ...p, 2e-3).H, truth = pts.map(H0), truthN = nbr.map(H0);
+    const scale = Math.sqrt(pts.reduce((a, p) => { const t = curvature(truthF, ...p, 2e-3); return a + Math.max(t.H * t.H - t.K, 0) + t.H * t.H; }, 0) / pts.length);
+    const t0 = Date.now(), bk = labBakeCompCurvature(field, null, N, c.u), ms = Date.now() - t0;
+    /* read as the shader does (21 buildLabGeomFS, curvc) */
+    const st = bk.rgba ? 4 : 2, rd = ch => reader(Float32Array.from({ length: 2 * N * N * N }, (_, i) => i % 2 ? 0 : bk.data[st * (i >> 1) + ch]), N, 0);
+    const RA = rd(0), RB = bk.rgba ? rd(2) : null, sg = v => v >= 0 ? 1 : -1;
+    const readNew = p => {
+      if (bk.rgba) { const o = c.u.pipeOffset, a = gyroid(...p) - c.u.isoLevel, b = gyroid(p[0] + o[0], p[1] + o[1], p[2] + o[2]) - c.u.isoLevel; return Math.abs(a) >= Math.abs(b) ? sg(a) * RA(...p) : sg(b) * RB(...p); }
+      return (c.u.topoMode > 2.5 ? 1 : sg(gyroid(...p) - c.u.isoLevel)) * RA(...p);
+    }, oldF = implicit(c.u, F16, G16), readOld = p => Math.max(-1 / h, Math.min(1 / h, curvature(oldF, ...p, h).H));
+    const stats = read => {
+      let e = 0, s = 0;
+      pts.forEach((p, i) => { const r = read(p); e += (r - truth[i]) ** 2; s += ((r - read(nbr[i])) - (truth[i] - truthN[i])) ** 2; });
+      return { err: 100 * Math.sqrt(e / pts.length) / scale, speckle: 100 * Math.sqrt(s / pts.length) / scale };
+    };
+    const sn = stats(readNew), so = stats(readOld);
+    console.log('      C4 ' + c.name + ' (' + pts.length + ' points): error ' + sn.err.toFixed(1) + ' %, speckle ' + sn.speckle.toFixed(1) + ' %  |  v0.35.0 stencil: error ' + so.err.toFixed(1) + ' %, speckle ' + so.speckle.toFixed(1) + ' %  |  bake ' + ms + ' ms');
+    /* normalized PI: its texel-scale roughness comes from the grid (a distance built from the field's
+       gradient, then differenced twice), not from the stored texture, so the bake only has to match it */
+    if (c.same) check('C4 ' + c.name + ' speckle no worse than the old + 0.5 pt', sn.speckle - so.speckle, 0.5, ' pt');
+    else check('C4 ' + c.name + ' speckle, at most half the old', 100 * sn.speckle / Math.max(so.speckle, 1e-9), 50, ' % of old');
+    check('C4 ' + c.name + ' error no worse than the old + 1 pt', sn.err - so.err, 1, ' pt');
+    check('C4 ' + c.name + ' bake time', ms, 100, ' ms');
+  }
 }
 
 console.log(fails ? fails + ' failed' : 'all passed');

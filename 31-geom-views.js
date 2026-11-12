@@ -98,10 +98,29 @@ function geomPickBtns(label, items, cur, fn){
   return h + '</div>';
 }
 
+/* v0.35.1 — Turn again: Shaded stops turning once a tile is grabbed (v0.35.0); this starts it again.
+   Shown on Shaded only, and only once the tiles hold still.  Lab's icon style (40×40, round caps,
+   neon accent node). */
+var GEOM_TURN_ICON = '<svg viewBox="0 0 40 40" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M33 21 A 13 13 0 1 1 29.5 11.5"/><path d="M30.5 4.5 V12 H23"/>' +
+  '<path d="M20 13.5 L26 17 V23.5 L20 27 L14 23.5 V17 Z" stroke-width="2" opacity=".75"/><circle class="acc" cx="20" cy="20.3" r="2.8"/></svg>';
+function geomTurnBtn(){
+  return '<button type="button" class="geom-turn" title="Turn again" aria-label="Turn again" onclick="onGeomTurnAgain()">' + GEOM_TURN_ICON + '</button>';
+}
+function onGeomTurnAgain(){
+  LAB_GEOM_HELD = false;   /* 21 — every Geometry tile turns again until the next grab */
+  for (var id in LAB_RM_REGISTRY) if (LAB_RM_REGISTRY[id]) LAB_RM_REGISTRY[id]._dirty = true;
+  geomViewRowBuild();
+}
+
 function geomViewRowBuild(){
   var row = document.getElementById('geomViewRow');
   if (!row) return;
   var g = VIEW_STATE.geom, h = geomPickBtns('View', GEOM_VIEWS, g.view, 'onGeomViewPick');
+  if (g.view === 'shaded' && typeof LAB_GEOM_HELD !== 'undefined' && LAB_GEOM_HELD){
+    var cut = h.indexOf('</button>') + 9;   /* right after Shaded, inside the same group */
+    h = h.slice(0, cut) + geomTurnBtn() + h.slice(cut);
+  }
   if (g.view === 'curvature'){
     h += geomPickBtns('Measure', GEOM_KINDS, g.kind, 'onGeomKindPick');
     h += g.kind === 'tightest'
