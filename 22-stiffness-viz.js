@@ -383,6 +383,17 @@ function StiffnessViz() {
   this.failed = !this.gl;
   if (this.failed) { return; }
 
+  /* UI refresh stage 4 — drawn by the shared loop (21 labRenderFrame) only when its view key changes;
+     _dirty is a setter that wakes it.  The auto-turn steps at <= 30 fps and holds during a solve. */
+  this.__dirty = false; this._drawnKey = null; this._valVer = 0; this._animLast = 0;
+  this.drawStats = { draws: 0, anim: 0, skipped: 0 };
+  Object.defineProperty(this, '_dirty', { configurable: true,
+    get: function () { return this.__dirty; },
+    set: function (v) { this.__dirty = !!v; if (v && typeof labRenderWake === 'function') labRenderWake(); } });
+  var selfL = this;
+  this.canvas.addEventListener('webglcontextlost', function (e) { if (selfL.failed) return; e.preventDefault(); selfL._lost = true; });
+  this.canvas.addEventListener('webglcontextrestored', function () { selfL._onContextRestored(); });
+
   this._prog       = null;
   this._uloc       = {};
   this._vboPos     = null;
@@ -426,6 +437,7 @@ function StiffnessViz() {
   if (!this._compileShader())  { this.failed = true; return; }
   this._uploadMesh();
   this._attachInteractionHandlers();
+  if (typeof labRenderRegister === 'function') labRenderRegister(this);
 }
 
 StiffnessViz.prototype._setupGL = function() {
@@ -594,6 +606,7 @@ StiffnessViz.prototype.uploadScalar = function(vals, cmin, cmax, mark) {
   if (!this._vboVal) this._vboVal = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, this._vboVal);
   gl.bufferData(gl.ARRAY_BUFFER, vals instanceof Float32Array ? vals : Float32Array.from(vals), gl.DYNAMIC_DRAW);
+  this._vals = vals; this._valVer++;   /* stage 4 — kept for a context restore; part of the view key */
   this._scalar = true;
   this._Cmin = cmin; this._Cmax = cmax > cmin ? cmax : cmin + 1e-6;
   this._mark = mark || null;
@@ -638,36 +651,49 @@ StiffnessViz.prototype.getStats = function() {
    ════════════════════════════════════════════════════════════ */
 StiffnessViz.prototype.setActive = function(b) {
   if (this.failed) return;
-  if (b && !this._active) {
-    this._active = true;
-    this._lastTickMs = performance.now();
-    var self = this;
-    this._raf = requestAnimationFrame(function tick(ts){
-      if (!self._active) return;
-      self._tick(ts);
-      self._raf = requestAnimationFrame(tick);
-    });
-  } else if (!b && this._active) {
-    this._active = false;
-    if (this._raf) cancelAnimationFrame(this._raf);
-    this._raf = null;
-  }
+  if (b && !this._active) { this._active = true; this._animLast = 0; this._dirty = true; }
+  else if (!b && this._active) this._active = false;
 };
 
-StiffnessViz.prototype._tick = function(ts) {
-  /* Slow auto-rotation — about half the speed of the raymarcher's geom
-     mode so the lobes are readable.  Push 5.3 — stops permanently once
-     the user has interacted with the tile (drag, pinch); the initial
-     auto-rotate on tab open is the only animated phase, after that the
-     user is in control. */
+/* Slow auto-rotation — about half the speed of the raymarcher's geom mode so the lobes are readable.
+   Push 5.3 — stops permanently once the user has interacted with the tile (drag, pinch).
+   Stage 4 — one share of the shared loop (21 labRenderFrame); returns ms until it needs it again. */
+StiffnessViz.prototype._frame = function(ts, now, animOK, busy) {
+  if (this.failed || this._lost || !this._active || !this._meshUploaded) return Infinity;
+  var cv = this.canvas;
+  if (!cv || !cv.isConnected || !cv.clientWidth || !cv.clientHeight) return Infinity;
+  var wait = Infinity, step = false, R = LAB_RENDER;
   if (!this._pointerDown && !this._userInteracted) {
-    var dt = (ts - this._lastTickMs) * 0.001;
-    if (dt > 0.1) dt = 0.1;
-    this._rotY += dt * 0.25;
-    this._dirty = true;
+    if (!animOK) { this._animLast = 0; if (busy) wait = R.BUSY_POLL_MS; }
+    else if (!this._animLast) { this._animLast = now; wait = R.ANIM_MS; }
+    else if (now - this._animLast >= R.ANIM_MS - 4) { this._rotY += Math.min(now - this._animLast, 100) * 0.001 * 0.25; this._animLast = now; step = true; wait = R.ANIM_MS; }
+    else wait = R.ANIM_MS - (now - this._animLast);
+  } else this._animLast = 0;
+  if (this.__dirty || step) {
+    this.__dirty = false;
+    var key = this._viewKey();
+    if (!step && key === this._drawnKey) this.drawStats.skipped++;
+    else { this._render(); this._drawnKey = key; if (step) this.drawStats.anim++; }
   }
-  this._lastTickMs = ts;
-  if (this._dirty) this._render();
+  return wait;
+};
+StiffnessViz.prototype._viewKey = function() {
+  var dpr = Math.min(2, window.devicePixelRatio || 1);
+  return [Math.floor(this.canvas.clientWidth * dpr), Math.floor(this.canvas.clientHeight * dpr), this._rotX, this._rotY,
+          this._rotM ? Array.prototype.join.call(this._rotM, ',') : '', this._u.zoom, this._u.panX || 0, this._u.panY || 0,
+          Array.prototype.join.call(this._S, ','), this._REmax, this._Cmin, this._Cmax, this._scalar ? 1 : 0, this._valVer,
+          this._mark ? Array.prototype.join.call(this._mark, ',') : ''].join('|');
+};
+/* Lost context: rebuild program and mesh; the tensor (_S) and scalar values are kept on the CPU. */
+StiffnessViz.prototype._onContextRestored = function() {
+  if (this.failed || !this.gl) return;
+  this._lost = false;
+  this._vboVal = null; this._meshUploaded = false; this._drawnKey = null;
+  this._setupGL();
+  if (!this._compileShader()) { this.failed = true; return; }
+  this._uploadMesh();
+  if (this._scalar && this._vals) this.uploadScalar(this._vals, this._Cmin, this._Cmax, this._mark);
+  this._dirty = true;
 };
 
 StiffnessViz.prototype._render = function() {
@@ -731,12 +757,15 @@ StiffnessViz.prototype._render = function() {
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this._iboTris);
 
   gl.drawElements(gl.TRIANGLES, LAB_SV_MESH.nTris * 3, gl.UNSIGNED_SHORT, 0);
-  this._dirty = false;
+  this.__dirty = false;
+  this.drawStats.draws++;
+  if (typeof LAB_RENDER !== 'undefined') LAB_RENDER.stats.draws++;
 };
 
 StiffnessViz.prototype.destroy = function() {
   if (this.failed) return;
   this.setActive(false);
+  if (typeof labRenderUnregister === 'function') labRenderUnregister(this);
   var gl = this.gl;
   if (this._vboPos)  { gl.deleteBuffer(this._vboPos);   this._vboPos = null; }
   if (this._vboVal)  { gl.deleteBuffer(this._vboVal);   this._vboVal = null; }
@@ -757,6 +786,7 @@ StiffnessViz.prototype._attachInteractionHandlers = function() {
     if (self._extControl) return;
     self._pointerDown = true;
     self._userInteracted = true;     /* push 5.3 — disables auto-rotate permanently */
+    if (typeof labRenderWake === 'function') labRenderWake();
     self._lastPointerX = e.clientX;
     self._lastPointerY = e.clientY;
     self.canvas.setPointerCapture(e.pointerId);

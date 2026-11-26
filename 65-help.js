@@ -55,8 +55,8 @@
         why:'Preview only.' },
       { id:'renderq', label:'render quality · automatic',
         what:'The tiles pick their own detail. There is no quality switch.',
-        see:'The view draws only when something changes or moves.',
-        why:'Keeps the GPU free for the solvers.' }
+        see:'A tile draws only when its view changes. While you turn it or drag a slider it draws at a lower resolution that adapts to the GPU, then sharpens a moment after you stop. The spin, pulse, particles and crush loop run at 30 frames a second and hold while a run is solving.',
+        why:'Keeps the GPU and the processor free for the solvers.' }
     ]},
     { title:'Model', items:[
       { id:'material', label:'material', anchor:{row:'#materialSel'},
@@ -133,9 +133,9 @@
         see:'The estimate is sharpened by the times measured on this machine. A result that is already solved with the same settings is reused.',
         why:'One run fills every tab.' },
       { id:'clearing', label:'results and settings',
-        what:'A card keeps its numbers until the next run. Changing the grid, the material, connectivity, surface voxels, strain cap or flow tolerance does not update them.',
-        see:'Run all again to refresh. Readout settings (flow direction, fluid, units) never need a run.',
-        why:'Check the settings before you trust the numbers.' }
+        what:'A result shows only while it matches the settings and the design that made it. Change the grid, the material, connectivity, surface voxels, the strain cap or the flow tolerance and that mode’s numbers, maps and plots hide: the card says "settings changed · Run", the tile "Run to update" and the status chip "settings changed · Run".',
+        see:'The results are kept: set the setting back and they show again; Run all reuses them without solving. Deltas, the buckling-to-yield ratio and Load Capacity show only while every result they use is shown; Export PDF and Open in F13LD.mesh wait for a new run.',
+        why:'Readout settings (flow direction, fluid, viscosity, shear target, units, chamber), views and sweep runs never hide anything.' }
     ]},
     { title:'Card metrics', items:[
       { id:'modulus', label:'modulus X / Y / Z', anchor:{match:/^Modulus/},

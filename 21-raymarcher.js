@@ -35,7 +35,9 @@
      var rm = new LabRaymarcher();   // creates rm.canvas internally
      rm.canvas                       // <canvas> to insert in DOM
      rm.setRecipe(recipe)            // bakes raw field, kicks render
-     rm.setActive(bool)              // start/stop animation loop
+     rm.setActive(bool)              // on / off screen (the shared loop skips it when off)
+     rm._dirty = true                // the view changed: wakes the shared loop (labRenderFrame)
+     rm.render()                     // one full frame now (tests)
      rm.destroy()                    // release GL resources
    ============================================================ */
 
@@ -1126,12 +1128,33 @@ function LabRaymarcher() {
   this.canvas.style.height = '100%';
   this.canvas.style.display = 'block';
 
-  this.gl = this.canvas.getContext('webgl2', { antialias: true, alpha: false, preserveDrawingBuffer: false });
+  /* UI refresh stage 4 — antialias off: it does nothing for a full-screen ray-march quad, and the
+     moving tier blits into the canvas (blitting into a multisampled canvas is an error). */
+  this.gl = this.canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: false });
   if (!this.gl) {
     /* WebGL2 not available — caller falls back to SVG mock */
     this.failed = true;
     return;
   }
+
+  /* UI refresh stage 4 — render tiers.  _dirty is written in ~40 places, so it is a property whose
+     setter wakes the shared loop (labRenderFrame); a burst of changes in one task counts once. */
+  this.__dirty = false;
+  this._chgAt = -1e9; this._chgPrev = -1e9;
+  this._texVer = 0; this._drawnKey = null; this._restPending = false; this._animLast = 0; this._animDt = 0;
+  this._lowFB = null; this._lost = false;
+  this.drawStats = { int: 0, rest: 0, anim: 0, skipped: 0 };
+  Object.defineProperty(this, '_dirty', { configurable: true,
+    get: function () { return this.__dirty; },
+    set: function (v) {
+      this.__dirty = !!v;
+      if (!v) return;
+      if (!LAB_RENDER.inTick) { var now = performance.now(); if (now - this._chgAt > 8) this._chgPrev = this._chgAt; this._chgAt = now; }
+      labRenderWake();
+    } });
+  var selfL = this;
+  this.canvas.addEventListener('webglcontextlost', function (e) { selfL._onContextLost(e); }, false);
+  this.canvas.addEventListener('webglcontextrestored', function () { selfL._onContextRestored(); }, false);
 
   this._setupGL();
   /* v0.35.0 — compiled when needed: the small shader on first draw, the main one from a queue */
@@ -1141,6 +1164,7 @@ function LabRaymarcher() {
   this._dirty = true;
   this._running = false;
   this._rafId = null;
+  labRenderRegister(this);
   this._rotY = 0.7;
   this._rotX = -0.4;
   this._gimbal = null;            /* #5 — axis-gimbal overlay refs (set by setGimbal) */
@@ -1563,18 +1587,7 @@ LabRaymarcher.prototype._applyBake = function(fr, N, tBake) {
       if (bg > gB) gB = bg;
     }
     this._u.lipschitz = Math.max(this._u.lipschitz, gB * 1.1);   /* B may vary k× faster than A */
-    var rB = Math.max(fb.fieldMax - fb.fieldMin, 1e-6), bNorm = new Float32Array(N*N*N);
-    for (var ib = 0; ib < fb.data.length; ib++) bNorm[ib] = (fb.data[ib] - fb.fieldMin) / rB;
-    if (!this._fieldBTex) this._fieldBTex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_3D, this._fieldBTex);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R16F, N, N, N, 0, gl.RED, gl.FLOAT, bNorm);   /* R16F like field A */
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
-    gl.bindTexture(gl.TEXTURE_3D, null);
+    this._uploadFieldB(fb.data, N, fb.fieldMin, fb.fieldMax);
     this._u.fieldBMin = fb.fieldMin;
     this._u.fieldBMax = fb.fieldMax;
     this._u.pairMode  = 1;
@@ -1586,6 +1599,23 @@ LabRaymarcher.prototype._applyBake = function(fr, N, tBake) {
   this._dirty = true;
   this._tBakeMs = tBake;
   if (LAB_GEOM_N_FINE[family]) labQueueRefine(this);
+};
+/* Field B of a field-pair PI-TPMS (raw values, normalized here), on its own R16F texture. */
+LabRaymarcher.prototype._uploadFieldB = function(data, N, fMin, fMax) {
+  var gl = this.gl;
+  var rB = Math.max(fMax - fMin, 1e-6), bNorm = new Float32Array(N*N*N);
+  for (var ib = 0; ib < data.length; ib++) bNorm[ib] = (data[ib] - fMin) / rB;
+  if (!this._fieldBTex) this._fieldBTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, this._fieldBTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.R16F, N, N, N, 0, gl.RED, gl.FLOAT, bNorm);   /* R16F like field A */
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+  gl.bindTexture(gl.TEXTURE_3D, null);
+  this._texVer++;
 };
 
 /* Upload a baked raw field as the geometry texture and derive the march
@@ -1629,6 +1659,7 @@ LabRaymarcher.prototype._uploadGeomField = function(fr, N) {
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
   gl.bindTexture(gl.TEXTURE_3D, null);
+  this._texVer++;
 };
 
 /* ─── Background refinement of the geometry grid ──────────────
@@ -1776,6 +1807,10 @@ function fieldsetToTexOrder(fs) {
 
 LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
   if (this.failed || !fieldsObj) return;
+  /* UI refresh stage 4 — the grid re-uploads on every render (each run stage); the same fieldset
+     and cap give the same textures, so skip the re-encode and the redraw */
+  if (fieldsObj === this._fieldsSrc && stressMaxOverride === this._fieldsCap) return;
+  this._fieldsSrc = fieldsObj; this._fieldsCap = stressMaxOverride;
   /* v0.25.0 — declared here, not only inside the u' branch: shear fieldsets
      (u' null) left it undefined, so the σ_VM cap became NaN and every
      shear-axis surface painted the bottom colour (navy). */
@@ -1929,6 +1964,7 @@ LabRaymarcher.prototype.uploadFields = function(fieldsObj, stressMaxOverride) {
     this._u.stressMax = svMax;
   }
 
+  this._texVer++;
   this._dirty = true;
 };
 
@@ -1942,6 +1978,8 @@ LabRaymarcher.prototype.updateScalarField = function(arr, N, capOverride) {
   var gl = this.gl, N3 = N * N * N;
   if (arr.length !== N3) { console.warn('[LabRaymarcher] updateScalarField: size mismatch'); return; }
   arr = solverToTexOrder(arr, N);   /* solver order → texture order (x fastest) */
+  this._fieldsSrc = null;           /* stage 4 — the stress texture no longer holds the last uploadFields set */
+  this._texVer++;
   this._u.texN = N;
   var svArr = dilateSigmaVMByOneVoxel(arr, N);
   var svMin = 0;
@@ -1989,6 +2027,7 @@ LabRaymarcher.prototype.uploadThermal = function(arr, N) {
   gl.bindTexture(gl.TEXTURE_3D, null);
   this._thermUploaded = true;
   this._thermN = N;
+  this._texVer++;
   this._dirty = true;
 };
 LabRaymarcher.prototype.setThermalParams = function(p) {
@@ -2018,7 +2057,7 @@ LabRaymarcher.prototype.uploadFlowSpeed = function(spd, M) {
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
   gl.bindTexture(gl.TEXTURE_3D, null);
-  this._flowUploaded = true; this._flowN = M; this._dirty = true;
+  this._flowUploaded = true; this._flowN = M; this._texVer++; this._dirty = true;
 };
 LabRaymarcher.prototype.setFlowParams = function(p) {
   if (this.failed || !p) return;
@@ -2043,6 +2082,7 @@ LabRaymarcher.prototype.uploadFlowShear = function(v, M) {
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
   gl.bindTexture(gl.TEXTURE_3D, null);
+  this._texVer++;
   this._dirty = true;
 };
 LabRaymarcher.prototype.setFlowParticles = function(ps) {
@@ -2147,6 +2187,10 @@ function onLabClipPill(axis) {
   if (LAB_CLIP.axis === axis) LAB_CLIP.axis = 0;
   else { LAB_CLIP.axis = axis; LAB_CLIP.pos = 0.0; LAB_CLIP.side = 1; }
   labUpdateClipPills();
+  labClipChanged();
+}
+function labClipChanged() {
+  for (var id in LAB_RM_REGISTRY) { var r = LAB_RM_REGISTRY[id]; if (r && (r._viewMode === 'thermal' || r._viewMode === 'flow')) r._dirty = true; }
 }
 function labUpdateClipPills() {
   var nm = { 1: 'x', 2: 'y', 3: 'z' }, pills = document.querySelectorAll('.lab-clip-pill');
@@ -2378,6 +2422,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
       if (Math.hypot(e.clientX - rc.left - hs.x, e.clientY - rc.top - hs.y) < 16) self._scrub = true;
     }
     self._pointerDown = true;
+    labRenderWake();
     self._lastPointerX = e.clientX;
     self._lastPointerY = e.clientY;
     self.canvas.setPointerCapture(e.pointerId);
@@ -2394,6 +2439,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
       if (hs2 && C.axis > 0) {
         var pd = dx * hs2.dirx + dy * hs2.diry;
         C.pos = Math.max(-1, Math.min(1, C.pos + (pd * (hs2.axisStep / (hs2.len || 1))) / Math.PI));
+        labClipChanged();   /* stage 4 — the plane is shared: every thermal / flow tile redraws */
       }
       return;
     }
@@ -2416,6 +2462,7 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
     self._scrub = false;
     try { self.canvas.releasePointerCapture(e.pointerId); } catch (_e) { /* fine */ }
     self.canvas.style.cursor = '';
+    labRenderWake();   /* stage 4 — the rest frame follows IDLE_MS after the last move; held animations resume */
   };
   this.canvas.addEventListener('pointerup', onPointerUp);
   this.canvas.addEventListener('pointercancel', onPointerUp);
@@ -2437,33 +2484,282 @@ LabRaymarcher.prototype._attachInteractionHandlers = function() {
 };
 
 
-/* ─── Render loop ─────────────────────────────────────────── */
+/* ─── Render tiers and the on-demand loop (UI refresh stage 4) ─────────────
+   liquid-ui templates/f13ld/render-quality.md, as F13LD.mesh 20-raymarcher.js.
+   • One loop for every viewer (design tiles, crush cubes, Import / Atlas previews, the stiffness
+     surfaces of 22): labRenderFrame, at most one requestAnimationFrame queued (labRenderWake), none
+     while idle.  _dirty is a setter that wakes it; a tile draws only when its view key (pose, size,
+     program, uniforms, textures, shading menu, section plane) differs from the frame on screen, so a
+     grid rebuild that changes nothing draws nothing.
+   • Moving tier: while a tile is held, or on a second change within IDLE_MS (slider drags, wheel,
+     linked Geometry poses), frames go to an offscreen buffer at the shared adaptive scale
+     LAB_RENDER.AQ (0.4–0.85, from the frame-to-frame time of back-to-back moving frames) and are
+     blitted up LINEAR; soft shadows pause (f13View moving()).  IDLE_MS after the last change one
+     rest frame is drawn at full size, in one pass: at tile size (460 × 285 px) a rest frame took
+     under 0.4 ms of GPU time on the RTX (Shaded and the Stress main shader, timer queries), so
+     strips would buy nothing (render-quality.md §3 is for frames over ~16 ms).  A single still change goes straight to the rest frame.
+   • Animations (Shaded spin before the first grab, buckling pulse, flow particles, crush loop via
+     labRenderAddTicker, stiffness auto-turn) step at ≤ 30 fps and draw full size; they hold while a
+     solve runs (Run all or a sweep), while any tile is held, and under Reduce Motion (still frame).
+   • March steps stay the literal 192 of the main shader: both tiers use them, so nothing ever
+     recompiles for a drag or a tier (0 compiles per drag; Direct3D takes 12–66 s for the main shader).
+   • Lost context: _onContextRestored rebuilds the quad, programs (main from the queue) and the
+     geometry textures from the CPU copy of the bake; result textures come back on the next grid
+     render (labRenderAfterRestore). */
+var LAB_RENDER = {
+  viewers: [], tickers: [], raf: 0, timer: 0, timerAt: 0, tickLast: 0, inTick: false, movingNow: false, moved: false,
+  IDLE_MS: 150, ANIM_MS: 33, DPR_MAX: 1.5, BUSY_POLL_MS: 500, COMPILE_POLL_MS: 150,
+  AQ: { scale: 0.7, min: 0.4, max: 0.85, cap: 0.85, ema: 0, prev: 0, vsync: 16.7, lastTick: 0 },
+  stats: { raf: 0, draws: 0, int: 0, rest: 0, anim: 0, skipped: 0, lost: 0, restored: 0 },
+  reduce: (typeof window !== 'undefined' && window.matchMedia) ? window.matchMedia('(prefers-reduced-motion: reduce)') : null,
+  ro: null, restoreTimer: 0
+};
+/* A solve is using the GPU (Run all or a sweep): animations hold. */
+function labRenderBusy() {
+  return (typeof RUN_STATE !== 'undefined' && !!RUN_STATE.running) || (typeof SWEEP_STATE !== 'undefined' && !!SWEEP_STATE.running);
+}
+function labRenderWake() {
+  var R = LAB_RENDER;
+  if (R.timer) { clearTimeout(R.timer); R.timer = 0; }
+  if (!R.raf) R.raf = requestAnimationFrame(labRenderFrame);
+}
+function labRenderWakeIn(ms) {
+  var R = LAB_RENDER, at = performance.now() + ms;
+  if (R.raf || (R.timer && R.timerAt <= at)) return;
+  if (R.timer) clearTimeout(R.timer);
+  R.timerAt = at;
+  R.timer = setTimeout(function () { R.timer = 0; labRenderWake(); }, Math.max(0, ms));
+}
+function labRenderRegister(v) {
+  var R = LAB_RENDER;
+  if (R.viewers.indexOf(v) < 0) R.viewers.push(v);
+  if (typeof ResizeObserver !== 'undefined' && v.canvas) {
+    if (!R.ro) R.ro = new ResizeObserver(function (es) { for (var i = 0; i < es.length; i++) { var vv = es[i].target.__labViewer; if (vv && !vv.failed) vv._dirty = true; } });
+    v.canvas.__labViewer = v;
+    R.ro.observe(v.canvas);
+  }
+}
+function labRenderUnregister(v) {
+  var R = LAB_RENDER, i = R.viewers.indexOf(v);
+  if (i >= 0) R.viewers.splice(i, 1);
+  if (R.ro && v.canvas) { try { R.ro.unobserve(v.canvas); } catch (e) {} }
+}
+/* fn(ts) → true to keep ticking; called at ≤ 30 fps while animations may run (the crush loop) */
+function labRenderAddTicker(fn) { if (LAB_RENDER.tickers.indexOf(fn) < 0) LAB_RENDER.tickers.push(fn); labRenderWake(); }
+function labRenderRemoveTicker(fn) { var i = LAB_RENDER.tickers.indexOf(fn); if (i >= 0) LAB_RENDER.tickers.splice(i, 1); }
+/* Something a tile reads may have changed without a setter (a click, a key, a field): every tile
+   compares its view key on the next frame and draws only if it changed. */
+function labRenderCheckAll() {
+  var vs = LAB_RENDER.viewers;
+  for (var i = 0; i < vs.length; i++) if (!vs[i].failed) vs[i].__dirty = true;
+  if (vs.length) labRenderWake();
+}
+function labRenderHeld() {
+  var vs = LAB_RENDER.viewers;
+  for (var i = 0; i < vs.length; i++) if (vs[i]._pointerDown) return true;
+  return false;
+}
+/* Adaptive scale from back-to-back moving frames (EMA): slower than ~20 ms (1.6 display frames)
+   lowers it; at the display rate it creeps back up, never above the last scale that was too slow. */
+function labAqSample(ts) {
+  var AQ = LAB_RENDER.AQ;
+  if (AQ.prev && ts - AQ.prev < 1000) {
+    var d = ts - AQ.prev; AQ.ema = AQ.ema ? AQ.ema * 0.7 + d * 0.3 : d;
+    var fast = Math.max(12, AQ.vsync * 1.2), slow = Math.max(20, AQ.vsync * 1.6);
+    if (AQ.ema > slow) { AQ.cap = Math.max(AQ.min, AQ.scale - 0.03); AQ.scale = Math.max(AQ.min, AQ.scale * 0.88); AQ.ema = 0; }
+    else if (AQ.ema < fast && AQ.scale < AQ.cap) AQ.scale = Math.min(AQ.cap, AQ.scale + 0.01);
+  }
+  AQ.prev = ts;
+}
+function labRenderFrame(ts) {
+  var R = LAB_RENDER, AQ = R.AQ, i, wait = Infinity, now = performance.now();
+  R.raf = 0; R.stats.raf++;
+  if (AQ.lastTick) { var dd = ts - AQ.lastTick; if (dd > 4 && dd < AQ.vsync) AQ.vsync = dd; } AQ.lastTick = ts;
+  var busy = labRenderBusy(), still = !!(R.reduce && R.reduce.matches), held = labRenderHeld();
+  var animOK = !busy && !still && !held;
+  if (R.tickers.length) {
+    if (!animOK) { R.tickLast = 0; if (busy) wait = R.BUSY_POLL_MS; }   /* held: pointerup wakes; Reduce Motion: stays still */
+    else if (R.tickLast && now - R.tickLast < R.ANIM_MS - 4) wait = R.ANIM_MS - (now - R.tickLast);
+    else {
+      R.tickLast = now; R.inTick = true;
+      var keep = [];
+      for (i = 0; i < R.tickers.length; i++) { var k = false; try { k = R.tickers[i](ts); } catch (e) { console.error('[render] ticker', e); } if (k) keep.push(R.tickers[i]); }
+      R.tickers = keep; R.inTick = false;
+      if (keep.length) wait = R.ANIM_MS;
+    }
+  }
+  R.moved = false;
+  var vs = R.viewers.slice();
+  for (i = 0; i < vs.length; i++) {
+    var w = Infinity;
+    try { w = vs[i]._frame(ts, now, animOK, busy); } catch (e) { console.error('[render]', e); }
+    if (w < wait) wait = w;
+  }
+  if (R.moved) labAqSample(ts); else AQ.prev = 0;
+  /* animation clocks run on performance.now() at the callback (a frame asked for mid-frame can carry an older
+     timestamp), so the frame a timer asks for is the one that steps: one rAF per animation step */
+  if (wait <= 0) labRenderWake(); else if (wait < Infinity) labRenderWakeIn(Math.max(0, wait - 2));
+}
+/* Offscreen colour (+ depth for the flow streaks) target, reallocated only on a size change. */
+function labEnsureFB(gl, F, w, h) {
+  if (F.fb && F.w === w && F.h === h) return true;
+  if (!F.fb) { F.fb = gl.createFramebuffer(); F.rb = gl.createRenderbuffer(); F.db = gl.createRenderbuffer(); }
+  gl.bindRenderbuffer(gl.RENDERBUFFER, F.rb);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, w, h);
+  gl.bindRenderbuffer(gl.RENDERBUFFER, F.db);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, F.fb);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, F.rb);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, F.db);
+  var ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+  F.w = w; F.h = h;
+  if (!ok) { gl.deleteFramebuffer(F.fb); gl.deleteRenderbuffer(F.rb); gl.deleteRenderbuffer(F.db); F.fb = null; F.rb = null; F.db = null; }
+  return ok;
+}
+if (typeof document !== 'undefined') {
+  ['pointerup', 'keyup', 'input', 'change'].forEach(function (ev) { document.addEventListener(ev, labRenderCheckAll, true); });
+  if (LAB_RENDER.reduce && LAB_RENDER.reduce.addEventListener) LAB_RENDER.reduce.addEventListener('change', labRenderCheckAll);
+}
 
-LabRaymarcher.prototype._render = function(t) {
-  if (!this._running) return;
-  this._rafId = requestAnimationFrame(this._render.bind(this));
-
+/* Shaded spin (until the first grab), buckling pulse, flow particles playing */
+LabRaymarcher.prototype._animates = function() {
+  return this._geomSpins() || !!this._u.pulse || (this._viewMode === 'flow' && !!this._flowPs && !!this._flowPs.playing && this._flowPs.ready());
+};
+LabRaymarcher.prototype._animStep = function(dt, ts) {
+  this._animDt = dt;
+  if (this._geomSpins()) this._rotY += dt * 0.30;
+  /* Buckling tab: full-cycle amplitude pulse (A*sin), 2.5 s period.  Swings the mode through the
+     undeformed shape and back; the fitted envelope (uWarpExpand) is fixed so the box stays steady. */
+  if (this._u.pulse) this._u.deformAmp = this._u.pulseAmpMax * Math.sin(((ts % 2500) / 2500) * 6.2831853);
+};
+/* Canvas buffer = tile CSS size × min(DPR, 1.5); resized only when the tile really changes size. */
+LabRaymarcher.prototype._sizeCanvas = function() {
+  var dpr = Math.min(window.devicePixelRatio || 1, LAB_RENDER.DPR_MAX);
+  var cssW = this.canvas.clientWidth || 400, cssH = this.canvas.clientHeight || 320;
+  var w = Math.max(1, Math.floor(cssW * dpr)), h = Math.max(1, Math.floor(cssH * dpr));
+  if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; this._drawnKey = null; }
+  return [w, h, dpr, cssW];
+};
+/* Everything a frame shows, as one string: equal keys = the frame on screen is still right. */
+LabRaymarcher.prototype._viewKey = function(sz) {
+  var V = this._viewSet(), f = (typeof f13View !== 'undefined' && f13View) ? f13View : null;
+  var C = (this._viewMode === 'thermal' || this._viewMode === 'flow') ? LAB_CLIP : null, ps = this._flowPs;
+  return [sz[0], sz[1], V ? (V.variant || 'main') : '-', this._rotX, this._rotY, this._rotM ? Array.prototype.join.call(this._rotM, ',') : '',
+          this._texVer, this._viewMode, this._thermUploaded ? 1 : 0, this._flowUploaded ? 1 : 0, this._shearTex ? 1 : 0,
+          f ? JSON.stringify(f.opts) + (f.interacting ? 'i' : '') : '', C ? C.axis + ',' + C.pos + ',' + C.side : '',
+          (this._viewMode === 'flow' && ps && ps.ready()) ? [ps.size, ps.count, ps.speed, ps.playing ? 1 : 0, ps.n].join(',') : '',
+          JSON.stringify(this._u)].join('|');
+};
+LabRaymarcher.prototype._drawMoving = function(sz) {
+  var gl = this.gl, AQ = LAB_RENDER.AQ, W = sz[0], H = sz[1];
+  var F = this._lowFB || (this._lowFB = { fb: null, rb: null, db: null, w: 0, h: 0 });
+  if (!labEnsureFB(gl, F, Math.max(1, Math.ceil(W * AQ.max)), Math.max(1, Math.ceil(H * AQ.max)))) return this._drawRest(sz, false);
+  var lw = Math.max(1, Math.round(W * AQ.scale)), lh = Math.max(1, Math.round(H * AQ.scale));
+  LAB_RENDER.movingNow = true;
+  var ok = false;
+  try { ok = this._drawScene({ fb: F.fb, vw: lw, vh: lh, dpr: sz[2] * lw / W, cssW: sz[3], dt: 0 }); }
+  finally { LAB_RENDER.movingNow = false; }
+  if (!ok) return false;
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, F.fb); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+  gl.blitFramebuffer(0, 0, lw, lh, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  LAB_RENDER.stats.int++; LAB_RENDER.stats.draws++; this.drawStats.int++;
+  LAB_RENDER.moved = true;
+  return true;
+};
+LabRaymarcher.prototype._drawRest = function(sz, anim) {
+  if (!this._drawScene({ fb: null, vw: sz[0], vh: sz[1], dpr: sz[2], cssW: sz[3], dt: anim ? this._animDt : 0 })) return false;
+  LAB_RENDER.stats.draws++;
+  if (anim) { LAB_RENDER.stats.anim++; this.drawStats.anim++; } else { LAB_RENDER.stats.rest++; this.drawStats.rest++; }
+  return true;
+};
+/* One tile's share of a frame; returns ms until it needs the loop again (0 = next frame). */
+LabRaymarcher.prototype._frame = function(ts, now, animOK, busy) {
+  if (this.failed || this._lost || !this.gl || !this._running) return Infinity;
+  var cv = this.canvas, R = LAB_RENDER;
+  if (!cv || !cv.isConnected || !cv.clientWidth || !cv.clientHeight) return Infinity;   /* parked: ResizeObserver / setActive wake it */
+  if (!this._fieldUploaded) return Infinity;                                            /* the bake sets _dirty */
+  var wait = Infinity, animStep = false;
+  if (this._animates()) {
+    if (!animOK) { this._animLast = 0; if (busy) wait = R.BUSY_POLL_MS; }
+    else if (!this._animLast) { this._animLast = now; wait = R.ANIM_MS; }
+    else if (now - this._animLast >= R.ANIM_MS - 4) { this._animStep(Math.min(now - this._animLast, 100) / 1000, ts); this._animLast = now; animStep = true; wait = R.ANIM_MS; }
+    else wait = R.ANIM_MS - (now - this._animLast);
+  } else this._animLast = 0;
+  if (this._nlDrawOnce) { this._nlDrawOnce = false; this.__dirty = true; }
+  var moving = !!this._pointerDown || (now - this._chgAt < R.IDLE_MS && this._chgAt - this._chgPrev < R.IDLE_MS);
+  var settle = R.IDLE_MS - (now - this._chgAt), sz;
+  if (this.__dirty || animStep) {
+    this.__dirty = false;
+    sz = this._sizeCanvas();
+    var key = this._viewKey(sz);
+    if (!animStep && !this._restPending && key === this._drawnKey) { R.stats.skipped++; this.drawStats.skipped++; }
+    else if (moving && !animStep) { if (this._drawMoving(sz)) { this._restPending = true; this._drawnKey = null; } }
+    else if (this._drawRest(sz, animStep)) { this._restPending = false; this._drawnKey = this._viewKey(sz); }
+  } else if (this._restPending && !moving && settle <= 0) {
+    sz = this._sizeCanvas();
+    if (this._drawRest(sz, false)) { this._restPending = false; this._drawnKey = this._viewKey(sz); R.AQ.cap = Math.min(R.AQ.max, R.AQ.cap + 0.05); }
+  }
+  if (this._restPending) wait = Math.min(wait, moving ? 0 : Math.max(0, settle));
+  if (this._viewWaiting || !this._viewSet()) { this.__dirty = true; wait = Math.min(wait, R.COMPILE_POLL_MS); }   /* a view program still compiling */
+  return wait;
+};
+/* One full rest frame now (tests read pixels right after it). */
+LabRaymarcher.prototype.render = function() {
+  if (this.failed || this._lost || !this.gl || !this._fieldUploaded) return false;
+  var sz = this._sizeCanvas();
+  if (!this._drawRest(sz, false)) return false;
+  this._restPending = false; this._drawnKey = this._viewKey(sz);
+  return true;
+};
+LabRaymarcher.prototype._onContextLost = function(e) {
+  if (this._destroyed) return;
+  if (e && e.preventDefault) e.preventDefault();
+  this._lost = true; LAB_RENDER.stats.lost++;
+};
+/* Every GPU object is gone: rebuild them, re-upload the geometry from the CPU copy of the bake,
+   and let the next grid render re-upload the result fields (their source caches are cleared). */
+LabRaymarcher.prototype._onContextRestored = function() {
+  if (this._destroyed || !this.gl) return;
   var gl = this.gl;
-  if (!this._fieldUploaded || !this._programReady()) return;
-  /* v0.17.2 — Nonlinear-tab cubes hold still while a run is solving; one
-     frame is drawn after the cube is primed so it is not blank. */
-  if (this._nlPaused) return;
-  if (this._nlDrawOnce){ this._nlDrawOnce = false; this._nlPaused = true; }
+  this._lost = false; LAB_RENDER.stats.restored++;
+  this._pcExt = gl.getExtension('KHR_parallel_shader_compile');
+  this._setupGL();
+  this._prog = null; this._uloc = null; this._baseProg = null; this._baseLoc = null; this._mainSet = null;
+  this._pending = null; this._mainFailed = false; this._geomSets = null;
+  this._fieldTex = null; this._fieldBTex = null; this._dispTex = null; this._stressTex = null;
+  this._thermTex = null; this._flowTex = null; this._shearTex = null; this._curvTex = null; this._curvN = 0;
+  this._flowLine = null; this._lowFB = null; this._drawnKey = null; this._restPending = false;
+  this._dispUploaded = false; this._stressUploaded = false; this._thermUploaded = false; this._flowUploaded = false;
+  this._u.dispUploaded = 0; this._u.stressUploaded = 0;
+  this._fieldsSrc = null; this._thermSrc = null; this._flowSrc = null; this._shearSrc = null;
+  if (this._geomData) {
+    var S = this._u, lip = S.lipschitz, dB = this._geomDataB;
+    this._uploadGeomField({ data: this._geomData, fieldMin: S.fieldMin, fieldMax: S.fieldMax }, this._geomN);
+    S.lipschitz = lip;
+    if (dB && S.pairMode) { this._geomDataB = dB; this._uploadFieldB(dB, this._geomN, S.fieldBMin, S.fieldBMax); }
+  }
+  this.setViewMode(this._viewMode);
+  labMainEnqueue(this);
+  this._dirty = true;
+  labRenderAfterRestore();
+};
+/* After a restore: one grid render (debounced) re-uploads stress / thermal / flow textures. */
+function labRenderAfterRestore() {
+  if (LAB_RENDER.restoreTimer) return;
+  LAB_RENDER.restoreTimer = setTimeout(function () {
+    LAB_RENDER.restoreTimer = 0;
+    if (typeof renderDesignGrid === 'function') { try { renderDesignGrid(); } catch (e) { console.error('[render] restore', e); } }
+  }, 50);
+}
 
-  /* Auto-rotate only in geom mode; deform/stress are user-controlled. */
-  if (this._lastFrame === 0) this._lastFrame = t;
-  var dt = (t - this._lastFrame) * 0.001;
-  this._lastFrame = t;
-  if (this._geomSpins()) {
-    this._rotY += dt * 0.30;
-  }
-  /* Buckling tab: full-cycle amplitude pulse (A*sin), 2.5 s period.  Swings
-     the mode through the undeformed shape and back; the fitted envelope
-     (uWarpExpand) is fixed so the box stays steady while the mode oscillates. */
-  if (this._u.pulse) {
-    var pulsePhase = (t % 2500) / 2500;
-    this._u.deformAmp = this._u.pulseAmpMax * Math.sin(pulsePhase * 6.2831853);
-  }
+/* Draws one frame of the current view into o.fb (null = the canvas) at o.vw × o.vh pixels.
+   o.dpr: device pixels per CSS px of that target; o.cssW: tile width in CSS px (handle hit-test);
+   o.dt: seconds the flow particles advance.  False when no program can draw yet. */
+LabRaymarcher.prototype._drawScene = function(o) {
+  var gl = this.gl;
+  var dt = o.dt || 0;
 
   /* Build rotation matrix (Y then X) */
   var cy = Math.cos(this._rotY), sy = Math.sin(this._rotY);
@@ -2477,21 +2773,13 @@ LabRaymarcher.prototype._render = function(t) {
   ]);
   this._updateGimbal();   /* #5 — keep the axis triad in sync with the cube */
 
-  /* Resize viewport to canvas backbuffer if needed */
-  var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  var cssW = this.canvas.clientWidth || 400;
-  var cssH = this.canvas.clientHeight || 320;
-  var w = Math.max(1, Math.floor(cssW * dpr));
-  var h = Math.max(1, Math.floor(cssH * dpr));
-  if (this.canvas.width !== w || this.canvas.height !== h) {
-    this.canvas.width = w;
-    this.canvas.height = h;
-  }
+  var w = o.vw, h = o.vh, dpr = o.dpr, cssW = o.cssW;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, o.fb || null);
   gl.viewport(0, 0, w, h);
 
   /* Draw */
   var viewSet = this._useViewProgram();   /* v0.35.0 */
-  if (!viewSet) return;
+  if (!viewSet) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); return false; }
   gl.useProgram(this._prog);
   var u = this._uloc, S = this._u;
   if (viewSet.variant === 'curv' || viewSet.variant === 'curvc') { this._bindCurvature(viewSet.variant === 'curvc'); gl.uniform1i(u.uCurv, 7); }
@@ -2643,6 +2931,8 @@ LabRaymarcher.prototype._render = function(t) {
     if (gl.getError() === gl.INVALID_OPERATION) { viewSet.failed = true; console.error('[LabRaymarcher] small shader ' + viewSet.variant + ' failed at first draw'); }
   }
   if (streaks) this._drawFlowStreaks(rot, S, w, h, dpr, dt);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return true;
 };
 
 
@@ -2650,21 +2940,17 @@ LabRaymarcher.prototype._render = function(t) {
 
 LabRaymarcher.prototype.setActive = function(active) {
   if (this.failed) return;
-  if (active && !this._running) {
-    this._running = true;
-    this._lastFrame = 0;
-    this._rafId = requestAnimationFrame(this._render.bind(this));
-  } else if (!active && this._running) {
-    this._running = false;
-    if (this._rafId != null) cancelAnimationFrame(this._rafId);
-    this._rafId = null;
-  }
+  /* stage 4 — on: the shared loop draws this tile when its view changes (or it animates); off: skipped */
+  if (active && !this._running) { this._running = true; this._animLast = 0; this._dirty = true; }
+  else if (!active && this._running) this._running = false;
 };
 
 LabRaymarcher.prototype.destroy = function() {
   if (this.failed) return;
   this._destroyed = true;
   this.setActive(false);
+  labRenderUnregister(this);
+  if (this._lowFB && this._lowFB.fb) { this.gl.deleteFramebuffer(this._lowFB.fb); this.gl.deleteRenderbuffer(this._lowFB.rb); this.gl.deleteRenderbuffer(this._lowFB.db); this._lowFB = null; }
   var gl = this.gl;
   if (this._fieldTex)  gl.deleteTexture(this._fieldTex);
   if (this._fieldBTex) gl.deleteTexture(this._fieldBTex);  /* v0.13.0 — field-pair field B */

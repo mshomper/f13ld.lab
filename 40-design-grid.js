@@ -55,6 +55,8 @@ function loadCapacity(d){
   return { N: g.stress * cell * cell, mode: g.mode, stress: g.stress, cell_mm: cell };
 }
 function loadCapacityCell(d){
+  var lcStale = (typeof labStaleNote === 'function' ? labStaleNote('capacity', d) : null);   /* UI refresh stage 4 — derived: only while every input is shown */
+  if (lcStale) return { lbl:'Load Capacity', val:'\u2014', delta:[lcStale,'neut'] };
   var lc = loadCapacity(d);
   if (!lc) return { lbl:'Load Capacity', val:'\u2014', delta:['needs yield or buckling','neut'] };
   var govCls = /buckl/.test(lc.mode) ? 'warn' : 'neut';   /* governing-mode status → amber */
@@ -82,7 +84,7 @@ function densityText(d){
 /* Sprint A — pre-run placeholder tiles: same rows/labels as the real card so
    the layout does not jump, but no numbers until a solve produces them. */
 function preRunStats(d, mode){
-  var p = ['run to compute', 'neut'];
+  var p = [(typeof labStaleNote === 'function' ? labStaleNote(mode === 'buckle' ? 'buckle' : 'elastic', d) : null) || 'run to compute', 'neut'];   /* stage 4 — hidden result */
   if (mode === 'thermal') return thermalStats(d);
   if (mode === 'flow') return flowStats(d);   /* v0.28.0 */
   if (mode === 'buckle'){
@@ -163,7 +165,9 @@ function statsForDesign(d, mode){
      (the solve starts from a uniform strain and works down), so the stiffness
      rows say so instead of showing a baseline delta. */
   var cgFlag = elasticNotConvergedText(r);
+  var elStale = (typeof labStaleNote === 'function' ? labStaleNote('elastic', d) : null);   /* stage 4 — elastic hidden: its rows say so */
   function dv(key){
+    if (elStale && /^E\d\d$|^G\d\d$/.test(key)) return [elStale, 'neut'];
     if (cgFlag && /^E\d\d$|^G\d\d$/.test(key) && r[key] && isFinite(r[key])) return [cgFlag, 'warn'];
     /* v0.16.0 — stiffness within 50x of the void (void at its floor) */
     if (/^E\d\d$|^G\d\d$/.test(key) && r[key] > 0 && typeof voidLimited === 'function' && voidLimited(r[key] * 1000, r.Es_MPa, r.voidRatio))
@@ -188,7 +192,7 @@ function statsForDesign(d, mode){
     var pcrVal = (bkPcrPy != null) ? ((bkd && bkd.yieldBound) ? ('< '+bkPcrPy.toFixed(2)) : bkPcrPy.toFixed(2)) : fmtComputed(r.pcr_py, '', 2);
     var pcrDelta = (bkPcrPy != null)
       ? [(bkPcrPy < 1 ? 'buckling-limited' : 'yield-limited'), (bkPcrPy < 1 ? 'warn' : 'neut')]
-      : [failureModeText(r), pcrPyDeltaClass(r)];
+      : (((typeof labStaleNote === 'function') && (labStaleNote('ratio', d) || labStaleNote('buckle', d))) ? [LAB_STALE_NOTE, 'neut'] : [failureModeText(r), pcrPyDeltaClass(r)]);
     var yVal, yDelta;
     if (nld && nld.yielded && isFinite(nld.sigma_y_eff)) {
       yVal = fmtEngMPa(nld.sigma_y_eff);
@@ -201,7 +205,7 @@ function statsForDesign(d, mode){
         : ['no yield · ≤ ' + Math.round((nld.epsCap||0.05)*100) + '% strain', 'neut'];
     } else {
       yVal = fmtComputed(r.sigma_y_z, ' MPa', 1);
-      yDelta = [failureModeText(r), 'neut'];
+      yDelta = [(typeof labStaleNote === 'function' ? labStaleNote('crush', d) : null) || failureModeText(r), 'neut'];
     }
     return [
       { lbl:'Modulus X', val:fmtEngMPa(r.E11 * 1000), delta:dv('E11') },
@@ -225,14 +229,14 @@ function statsForDesign(d, mode){
       var ratLbl = bk.provisional ? 'Buckling-to-Yield Ratio*' : 'Buckling-to-Yield Ratio';
       return [
         { lbl:'Buckling Strength',       val:(isFinite(bk.pcr) ? fmtEngMPa(bk.pcr) : '—'),                              delta:(bk.eigConverged === false) ? ['not converged · N='+(bk.N||'—'), 'warn'] : ['N='+(bk.N||'—'), 'neut'] },
-        { lbl:ratLbl,                    val:(isFinite(bk.pcr_py) ? ((bk.yieldBound?'< ':'')+bk.pcr_py.toFixed(2)) : '—'), delta:[safeTxt, limited ? 'warn' : 'neut'] },
+        { lbl:ratLbl,                    val:(isFinite(bk.pcr_py) ? ((bk.yieldBound?'< ':'')+bk.pcr_py.toFixed(2)) : '—'), delta:bk._ratioHidden ? [LAB_STALE_NOTE, 'neut'] : [safeTxt, limited ? 'warn' : 'neut'] },
         loadCapacityCell(d),
         /* lambda_cr = critical axial macro strain (16c header; free-sided uniaxial loading by default) — shown as a strain, not a bare multiplier */
         { lbl:'Critical Strain',         val:(bk.lambda_cr * 100).toPrecision(3) + '%',                                delta:['crit '+(bk.critAxis||'—'), 'neut'] },
         { lbl:'Modulus Z',               val:modZ,                                                                     delta:dv('E33') }
       ];
     }
-    var note = (bk && bk.skip_reason) ? bk.skip_reason : (bk && bk.error) ? bk.error : (LAB_STATE.runHasCompleted ? 'enable Buckling + Run' : 'not run');
+    var note = (bk && bk.skip_reason) ? bk.skip_reason : (bk && bk.error) ? bk.error : ((typeof labStaleNote === 'function' ? labStaleNote('buckle', d) : null) || (LAB_STATE.runHasCompleted ? 'enable Buckling + Run' : 'not run'));
     return [
       { lbl:'Buckling Strength',       val:'—',   delta:[note, (bk && bk.skip_reason) ? 'warn' : 'neut'] },
       { lbl:'Buckling-to-Yield Ratio', val:'—',   delta:['—', 'neut'] },
@@ -299,7 +303,7 @@ function thermalStats(d){
     var note, cls = 'neut';
     if (th && th.error){ note = th.error; cls = 'warn'; }
     else if (th && th.byFiller) note = (fl ? fl.label : fid) + ' not solved \u00b7 tick it and Run';
-    else note = (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.thermal) ? 'run to compute' : 'enable Thermal \u03ba + Run';
+    else note = (typeof labStaleNote === 'function' ? labStaleNote('thermal', d) : null) || ((typeof PHYS_STATE !== 'undefined' && PHYS_STATE.thermal) ? 'run to compute' : 'enable Thermal \u03ba + Run');
     var dash = ['\u2014', 'neut'];
     return [
       { lbl:'Conductivity X', val:'\u2014', delta:[note, cls] },
@@ -448,7 +452,7 @@ function _flowStats(d){
   var fr = flowData(d), dash = ['—', 'neut'];
   if (!fr || fr.error){
     var note = fr && fr.error ? [fr.error, 'warn']
-      : [(typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'run to compute' : 'enable Flow + Run', 'neut'];
+      : [(typeof labStaleNote === 'function' ? labStaleNote('flow', d) : null) || ((typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? 'run to compute' : 'enable Flow + Run'), 'neut'];
     var su = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.speedUnit === 'm') ? 'm/s' : 'mm/s';
     return [
       { group:'Flow through the cell' },
@@ -493,6 +497,7 @@ function flowEmptyMsg(d){
   var fv = (typeof VIEW_STATE !== 'undefined') ? VIEW_STATE.flowView : '';
   if (fr && !fr.error && fv === 'shear') return flowCardPick(d).why || 'No wall shear data';   /* v0.31.0 */
   if (fr && !fr.error && fv === 'orient') return flowOrientData(d).why || 'No wall shear data';
+  if (!fr && (typeof labStaleNote === 'function' ? labStaleNote('flow', d) : null)) return LAB_STALE_TILE;   /* stage 4 */
   if (!fr) return (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.flow) ? (surf ? 'Run to see the permeability surface' : 'Run to see the flow') : 'Enable Flow \u00b7 Run';
   if (fr.error) return fr.error;
   if (surf) return 'Closed along at least one axis \u00b7 no permeability surface';
@@ -788,6 +793,7 @@ function kappaAsCompliance(K){
 }
 function thermalEmptyMsg(d){
   var th = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[d.id] : null;
+  if (!th && (typeof labStaleNote === 'function' ? labStaleNote('thermal', d) : null)) return LAB_STALE_TILE;   /* stage 4 */
   if (!th) return (typeof PHYS_STATE !== 'undefined' && PHYS_STATE.thermal) ? 'Run to see the temperature map' : 'Enable Thermal \u03ba \u00b7 Run';
   if (th.error) return th.error;
   var fl = (typeof thermalFillerById === 'function') ? thermalFillerById(thermalFillerView(th)) : null;
@@ -1132,12 +1138,13 @@ function renderDesignGrid(){
         /* A.2 — honest fallback: no fields means no warp.  Show empty
            viewport with prompt rather than the static-geometry mock.
            Pre-run designs land here. */
-        svgInner = svgEmptyViewport('Run to see deformed field');
+        svgInner = svgEmptyViewport((typeof labStaleNote === 'function' ? labStaleNote('elastic', d) : null) ? LAB_STALE_TILE : 'Run to see deformed field');
       }
     }
     else if (VIEW_STATE.mode === 'stress'){
       if (!useRM) {
-        if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stress field');
+        if ((typeof labStaleNote === 'function' ? labStaleNote('elastic', d) : null)) svgInner = svgEmptyViewport(LAB_STALE_TILE);   /* stage 4 — settings changed */
+        else if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stress field');
         else svgInner = svgStress(fam, i);
       }
     }
@@ -1146,7 +1153,8 @@ function renderDesignGrid(){
          Successful elastic Run All always populates d.results.S, so this
          branch fires pre-run, on failed solves, or for stub designs. */
       if (!useSV) {
-        if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stiffness surface');
+        if ((typeof labStaleNote === 'function' ? labStaleNote('elastic', d) : null)) svgInner = svgEmptyViewport(LAB_STALE_TILE);
+        else if (!LAB_STATE.runHasCompleted) svgInner = svgEmptyViewport('Run to see stiffness surface');
         else svgInner = svgStiffness((d.results && d.results.zener) || 1.0, d.color, i);
       }
     }
@@ -1162,7 +1170,7 @@ function renderDesignGrid(){
       if (!useRM) {
         var bkv = buckleDataFor(d.id);
         if (bkv && bkv.error) svgInner = svgEmptyViewport('Buckling: ' + bkv.error);
-        else svgInner = svgEmptyViewport('Enable Buckling · Run to see modes');
+        else svgInner = svgEmptyViewport((typeof labStaleNote === 'function' ? labStaleNote('buckle', d) : null) ? LAB_STALE_TILE : 'Enable Buckling · Run to see modes');
       }
     }
 
@@ -2449,7 +2457,7 @@ function renderNonlinearViz(){
       if (NLVIZ.playing){
         NLVIZ.manual = false;
         NLVIZ.t0 = performance.now() - NLVIZ.frac * NLVIZ.periodMs;
-        if (!NLVIZ.raf) NLVIZ.raf = requestAnimationFrame(nlvizTick);
+        nlvizRun();
       }
     });
   }
@@ -2457,11 +2465,11 @@ function renderNonlinearViz(){
   /* Start the auto-loop — or, while a run is solving, hold the cubes still
      (v0.17.2: the animated cubes shared the GPU with the crush solver). */
   NLVIZ.manual = false;
-  NLVIZ.playing = !nlRunPaused;
+  NLVIZ.playing = !nlRunPaused && !(typeof LAB_RENDER !== 'undefined' && LAB_RENDER.reduce && LAB_RENDER.reduce.matches);   /* stage 4 — Reduce Motion: still until play */
   NLVIZ.frac = 0;
   NLVIZ.t0 = performance.now();
-  if (NLVIZ.raf) cancelAnimationFrame(NLVIZ.raf);
-  NLVIZ.raf = null;
+  nlvizHalt();
+  if (!NLVIZ.playing && playBtn){ playBtn.innerHTML = LAB_CARD_ICONS.play; playBtn.setAttribute('aria-pressed', 'false'); }
   if (nlRunPaused){
     if (playBtn){ playBtn.innerHTML = LAB_CARD_ICONS.play; playBtn.setAttribute('aria-pressed', 'false'); }
     for (var pz = 0; pz < entries.length; pz++){
@@ -2470,7 +2478,7 @@ function renderNonlinearViz(){
     }
   }
   nlvizApply(0);
-  if (!nlRunPaused) NLVIZ.raf = requestAnimationFrame(nlvizTick);
+  if (NLVIZ.playing) nlvizRun();
 }
 
 /* Apply a timeline fraction to every cube: pick each design's step, swap the α
@@ -2502,7 +2510,7 @@ function nlvizScrubRelease(){
     NLVIZ.playing = true; NLVIZ.manual = false;
     var pb = document.getElementById('nlPlayBtn'); if (pb){ pb.innerHTML = LAB_CARD_ICONS.pause; pb.setAttribute('aria-pressed', 'true'); }
     NLVIZ.t0 = performance.now() - NLVIZ.frac * NLVIZ.periodMs;
-    if (!NLVIZ.raf) NLVIZ.raf = requestAnimationFrame(nlvizTick);
+    nlvizRun();
   }
 }
 
@@ -2543,17 +2551,28 @@ function nlvizApply(frac){
   if (typeof curvePlotCursor === 'function') curvePlotCursor(target * 100);   /* v0.17.0 — strain cursor on the plot */
 }
 
+/* UI refresh stage 4 — the crush loop is a ticker of the shared render loop (21): <= 30 fps, held while
+   a solve runs or a tile is held, still under Reduce Motion. */
+function nlvizRun(){
+  if (NLVIZ.raf) return;
+  NLVIZ.raf = 1;
+  if (typeof labRenderAddTicker === 'function') labRenderAddTicker(nlvizTick);
+}
+function nlvizHalt(){
+  if (typeof labRenderRemoveTicker === 'function') labRenderRemoveTicker(nlvizTick);
+  NLVIZ.raf = null;
+}
 function nlvizTick(ts){
-  if (!NLVIZ.playing){ NLVIZ.raf = null; return; }
+  if (!NLVIZ.playing){ NLVIZ.raf = null; return false; }
   var frac = ((ts - NLVIZ.t0) % NLVIZ.periodMs) / NLVIZ.periodMs;
   NLVIZ.frac = frac;
   nlvizApply(frac);
-  NLVIZ.raf = requestAnimationFrame(nlvizTick);
+  return true;
 }
 
 function nlvizStop(){
   NLVIZ.playing = false;
-  if (NLVIZ.raf){ cancelAnimationFrame(NLVIZ.raf); NLVIZ.raf = null; }
+  nlvizHalt();
   /* Tear down the cube + scrubber DOM.  CRITICAL: #mergedView sits AFTER
      #compareGrid in document order, so any leftover cube .rm-mount (carrying
      the same data-design-id as a live grid tile) would win the last-wins

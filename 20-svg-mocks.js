@@ -337,7 +337,9 @@ function buildMergedCurvePlot(size){
     perDesign.push({ design: d, view: group[vIdx], all: group });
   }
   if (!entries.length){
-    var msg = LAB_STATE.runHasCompleted
+    var crushHidden = (typeof labStaleNote === 'function') && LAB_STATE.designs.some(function(dd){ return !!labStaleNote('crush', dd); });   /* UI refresh stage 4 */
+    var msg = crushHidden ? 'Settings changed · Run to update the σ–ε curves'
+      : LAB_STATE.runHasCompleted
       ? 'Enable Nonlinear and Run a comparison to see σ–ε curves'
       : 'Run a comparison to see σ–ε curves';
     return '<div class="mp-empty"><div class="icon">∿</div><div class="msg">' + msg + '</div></div>';

@@ -153,6 +153,7 @@ var f13View = null;
     host: host,
     canvas: document.getElementById('compareGrid'),
     css: 'top:0;left:0',
+    moving: function(){ return typeof LAB_RENDER !== 'undefined' && LAB_RENDER.movingNow; },   /* UI refresh stage 4 — moving tier: no soft shadows */
     redraw: function(){
       if (typeof LAB_RM_REGISTRY === 'undefined') return;
       for (var k in LAB_RM_REGISTRY) { var r = LAB_RM_REGISTRY[k]; if (r) { r._dirty = true; if (r._nlPaused) r._nlDrawOnce = true; } }

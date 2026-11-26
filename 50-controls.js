@@ -648,7 +648,7 @@ async function runRealSweep(N, runToken){
       /* Skip recompute when nothing this mode depends on changed: grid N,
          prune flag, solver path (full 6-LC Voigt) and the recipe/material
          fingerprint (Sprint A — ids alone are not unique across imports). */
-      var elSig = 'N' + N + '|p' + GEOM_STATE.connectivity + '|full6|cg' + CG_MAXITER_FULL + '|vs1|pv' + (GEOM_STATE.partialVolume ? 1 : 0) + '|r' + recipeFp[i];
+      var elSig = labResultSig('elastic', d, { N: N, fp: recipeFp[i] });   /* UI refresh stage 4 — one key for run and display (66-results) */
       if (d.results && !d.results._error && d.results._elasticSig === elSig){
         paintRunStatus('<span class="v">Elastic</span> · Design ' + dletter(d, i) + ' · cached');
         doneUnits++; bumpProgress();
@@ -697,7 +697,7 @@ async function runRealSweep(N, runToken){
             : 'invalid (singular C)';
         }
         d.results._runSource = sourceMsg;
-        d.results._error = true;
+        d.results._error = true; d.results._elasticSig = elSig;   /* stage 4 — an error is shown for its settings only */
       } else {
         d.results = mapElasticToResults(elasticResult);
         d.results._runSource = 'real elastic · N=' + N + (elasticResult.partialVolume ? ' · partial volume' : ' · 0/1 cube') + ' · ' + (elasticResult.tCG_ms|0) + ' ms';
@@ -730,7 +730,7 @@ async function runRealSweep(N, runToken){
       /* v0.16.0 — one crush per requested axis.  Axes solved earlier with the
          same grid/cap/prune/recipe are kept (and reused), so X/Y/Z run one at a
          time still build up the full three-axis set. */
-      var nlBase = 'N' + nlN + '|c' + NONLIN_STATE.cap + '|p' + GEOM_STATE.connectivity + '|r' + recipeFp[ni];
+      var nlBase = labResultSig('crush', dn, { N: nlN, fp: recipeFp[ni] });
       if (!NONLIN_AXES[dn.id] || NONLIN_AXES[dn.id].base !== nlBase) NONLIN_AXES[dn.id] = { base: nlBase };
       var axStore = NONLIN_AXES[dn.id];
 
@@ -832,7 +832,7 @@ async function runRealSweep(N, runToken){
         if (stale()) return;
 
         if (nlErr || !nlOut || nlOut.error || nlOut.retryTight || !isFinite(nlOut.sigma_y_eff)){
-          axStore[axKey] = { error: (nlErr && nlErr.message) || (nlOut && nlOut.error) || 'failed', N: nlN, axis: axKey };
+          axStore[axKey] = { error: (nlErr && nlErr.message) || (nlOut && nlOut.error) || 'failed', N: nlN, axis: axKey, _sig: nlSig };
         } else {
           axStore[axKey] = {
             sigma_y_eff: nlOut.sigma_y_eff, yielded: !!nlOut.yielded, E0: nlOut.E0, curve: nlOut.curve,
@@ -875,7 +875,7 @@ async function runRealSweep(N, runToken){
       if (!recipes[k]) continue;
       /* Skip recompute when buckling grid + prune + solver path (GPU/CPU) +
          recipe fingerprint are unchanged and a valid result is cached. */
-      var bkSig = bkSigBase + '|r' + recipeFp[k];
+      var bkSig = labResultSig('buckle', designs[k], { N: bN, fp: recipeFp[k] });
       var bkExist = BUCKLE_BY_DESIGN[designs[k].id];
       if (bkExist && !bkExist.error && bkExist._sig === bkSig){
         applyBuckleYield(bkExist, designs[k].id);   /* Sprint A — re-derive P_cr/P_y from the CURRENT nonlinear yield */
@@ -901,7 +901,7 @@ async function runRealSweep(N, runToken){
           }).catch(function(e){
             if (stale()) return;              /* Sprint A — cancelled/superseded (incl. pool cancelAll rejections) */
             RUN_STATE.activeWorkers--;        /* tie-up #3 */
-            BUCKLE_BY_DESIGN[design.id] = { error: (e && e.message) || String(e), N: bN };
+            BUCKLE_BY_DESIGN[design.id] = { error: (e && e.message) || String(e), N: bN, _sig: sig };
             console.error('[run] buckling failed for ' + design.id + ':', e);
           })
         );
@@ -927,11 +927,11 @@ async function runRealSweep(N, runToken){
       RUN_STATE.currentIndex = ti;
       var kS = thermalKsFor(rt);
       if (!(kS > 0)){
-        THERMAL_BY_DESIGN[dt.id] = { error: 'no conductivity data for this material', noData: true, N: N };
+        THERMAL_BY_DESIGN[dt.id] = { error: 'no conductivity data for this material', noData: true, N: N, base: labResultSig('thermal', dt, { N: N, fp: recipeFp[ti], kS: kS }) };
         doneUnits += thFill.length; bumpProgress();
         continue;
       }
-      var thBase = 'N' + N + '|p' + GEOM_STATE.connectivity + '|tol' + THERMAL_STATE.tol + '|ks' + kS + '|' + THERMAL_GPU_VERSION + '|r' + recipeFp[ti];
+      var thBase = labResultSig('thermal', dt, { N: N, fp: recipeFp[ti], kS: kS });
       var thEx = THERMAL_BY_DESIGN[dt.id];
       if (!thEx || thEx.error || thEx.base !== thBase) thEx = { base: thBase, N: N, kS: kS, byFiller: {} };
       var thNeed = thFill.filter(function(f){ return !thEx.byFiller[f.id]; });
@@ -972,7 +972,7 @@ async function runRealSweep(N, runToken){
       } catch (err){
         if (stale()) return;
         console.error('[run] design ' + dt.id + ' thermal solve failed:', err);
-        THERMAL_BY_DESIGN[dt.id] = { error: 'thermal solve failed: ' + ((err && err.message) || err), N: N };
+        THERMAL_BY_DESIGN[dt.id] = { error: 'thermal solve failed: ' + ((err && err.message) || err), N: N, base: thBase };
       }
       doneUnits += thNeed.length - thCount; bumpProgress();
       renderDesignGrid();
@@ -992,7 +992,7 @@ async function runRealSweep(N, runToken){
       var df = designs[fi], rf = recipes[fi];
       if (!rf) continue;
       RUN_STATE.currentIndex = fi;
-      var flBase = 'N' + fN + '|p' + GEOM_STATE.connectivity + '|tol' + FLOW_STATE.tol + '|' + FLOW_GPU_VERSION + '|r' + recipeFp[fi];
+      var flBase = labResultSig('flow', df, { N: fN, fp: recipeFp[fi] });
       var flEx = FLOW_BY_DESIGN[df.id];
       if (flEx && !flEx.error && flEx.base === flBase){
         doneUnits += 3; bumpProgress();
@@ -1028,7 +1028,7 @@ async function runRealSweep(N, runToken){
       } catch (err){
         if (stale()) return;
         console.error('[run] design ' + df.id + ' flow solve failed:', err);
-        FLOW_BY_DESIGN[df.id] = { error: 'flow solve failed: ' + ((err && err.message) || err), N: fN };
+        FLOW_BY_DESIGN[df.id] = { error: 'flow solve failed: ' + ((err && err.message) || err), N: fN, base: flBase };
       }
       doneUnits += 3 - flDone; bumpProgress();
       renderDesignGrid();
