@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>F13LD.lab</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="lab.css?v=0.35.1">
+<!-- UI refresh stage 2: lab.css (the app's own rules, tokens remapped in ui-shell.css) · ui-shell.css (template tokens + shell) · ui-lab.css (lab's layout rules).
+     No web fonts: system-ui and the system mono face (aliased in ui-shell.css). -->
+<link rel="stylesheet" href="lab.css?v=0.35.1-ui2">
+<link rel="stylesheet" href="ui-shell.css?v=0.35.1-ui2">
+<link rel="stylesheet" href="ui-lab.css?v=0.35.1-ui2">
 </head>
 <body>
 <!-- v0.24.0 — startup splash: the wordmark resolves from scrambled glyphs
@@ -23,7 +24,7 @@
 /* v0.24.0 — "Resolve": glyphs scramble, then lock F, L, D, 1, 3 (13 last, with a neon flash) */
 (function(){
   var wm = document.getElementById('labSplashWm'); if (!wm) return;
-  var sp = wm.getElementsByTagName('span'), fin = ['F','1','3','L','D'], order = [0, 3, 4, 1, 2], locked = [], G = '0123456789ABCDEF\u03a3\u0394\u03bb\u03ba\u03c3#%';
+  var sp = wm.getElementsByTagName('span'), fin = ['F','1','3','L','D'], order = [0, 3, 4, 1, 2], locked = [], G = '0123456789ABCDEFΣΔλκσ#%';
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (reduce) return;
   for (var i = 0; i < sp.length; i++) { sp[i].className += ' scr'; sp[i].textContent = G.charAt((Math.random() * G.length) | 0); }
@@ -67,11 +68,11 @@
       <div class="fh-tool-name">LAB</div>
     </div>
     <div class="fh-right">
-      <button class="fh-action-btn ghost fh-ib" id="addDesignBtn" onclick="onAddDesignClick()" title="Add a design"><span class="fh-ico" data-ico="plus"></span>Add Design</button>
-      <button class="fh-action-btn ghost fh-ib" id="importStlBtn" onclick="openImportDialog()" title="Import a unit cell from any CAD program as an STL"><span class="fh-ico" data-ico="importCell"></span>Import STL</button>
-      <button class="fh-action-btn ghost fh-ib" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design through its parameters: stiffness, and optionally thermal and flow, for every run"><span class="fh-ico" data-ico="sweep"></span><span class="fh-lbl">Sweep</span><span class="fh-prog"></span></button>
-      <button class="fh-action-btn ghost fh-ib fh-atlas" id="atlasBtn" onclick="onAtlasBtnClick()" aria-disabled="true" title="Atlas — see every sweep run’s results: maps, surfaces and charts. Run a sweep to explore its results here."><span class="fh-ico" data-ico="atlas"></span>Atlas<span class="fh-cnt" id="atlasCnt"></span></button>
-      <button class="fh-action-btn ghost fh-ib" id="exportPdfBtn" onclick="onExportPdfClick()" title="Export PDF" disabled><span class="fh-ico" data-ico="exportDoc"></span>Export PDF</button>
+      <button class="fh-action-btn ghost fh-ib" id="addDesignBtn" onclick="onAddDesignClick()" title="Add a design" aria-label="Add Design"><span class="fh-ico" data-ico="plus"></span><span class="fh-lbl">Add Design</span></button>
+      <button class="fh-action-btn ghost fh-ib" id="importStlBtn" onclick="openImportDialog()" title="Import a unit cell from any CAD program as an STL" aria-label="Import STL"><span class="fh-ico" data-ico="importCell"></span><span class="fh-lbl">Import STL</span></button>
+      <button class="fh-action-btn ghost fh-ib" id="sweepBtn" onclick="openSweepPanel()" title="Sweep a design through its parameters: stiffness, and optionally thermal and flow, for every run" aria-label="Sweep"><span class="fh-ico" data-ico="sweep"></span><span class="fh-lbl">Sweep</span><span class="fh-prog"></span></button>
+      <button class="fh-action-btn ghost fh-ib fh-atlas" id="atlasBtn" onclick="onAtlasBtnClick()" aria-disabled="true" aria-label="Atlas" title="Atlas — see every sweep run’s results: maps, surfaces and charts. Run a sweep to explore its results here."><span class="fh-ico" data-ico="atlas"></span><span class="fh-lbl">Atlas</span><span class="fh-cnt" id="atlasCnt"></span></button>
+      <button class="fh-action-btn ghost fh-ib" id="exportPdfBtn" onclick="onExportPdfClick()" title="Export PDF" aria-label="Export PDF" disabled><span class="fh-ico" data-ico="exportDoc"></span><span class="fh-lbl">Export PDF</span></button>
       <button class="fh-action-btn" id="meshHandoffBtn" onclick="onMeshHandoffClick()" disabled>⬡ Open in F13LD.mesh</button>
       <span class="fh-version">v0.35.1</span>
       <div class="fh-icon">
@@ -87,161 +88,280 @@
     </div>
   </div>
 
-  <!-- ============ VIEW MODE STRIP ============ -->
-  <div class="view-strip">
-    <span class="view-label">VIEW</span>
-    <!-- v0.25.0 — names and icons match the Configure drawer; Deformed is part of Stress -->
-    <div class="view-tabs" id="viewTabs">
-      <button class="view-tab active" data-mode="geom"    onclick="onViewModeClick('geom')"><span class="ico ico-vt mdl" data-ico="model"></span>Geometry</button>
-      <button class="view-tab"        data-mode="stress"  onclick="onViewModeClick('stress')"><span class="ico ico-vt" data-ico="stress"></span>Stress</button>
-      <button class="view-tab"        data-mode="stiff"   onclick="onViewModeClick('stiff')"><span class="ico ico-vt" data-ico="stiff"></span>Stiffness</button>
-      <button class="view-tab"        data-mode="thermal" onclick="onViewModeClick('thermal')"><span class="ico ico-vt" data-ico="thermal"></span>Thermal κ</button>
-      <button class="view-tab"        data-mode="flow"    onclick="onViewModeClick('flow')"><span class="ico ico-vt" data-ico="flow"></span>Flow</button>
-      <button class="view-tab"        data-mode="buckle"  onclick="onViewModeClick('buckle')"><span class="ico ico-vt" data-ico="buckle"></span>Buckling</button>
-      <button class="view-tab"        data-mode="curve"   onclick="onViewModeClick('curve')"><span class="ico ico-vt" data-ico="nonlin"></span>Crush</button>
-    </div>
-    <!-- A.3.3 — Stress-normalization toggle (per-design auto vs shared linear).
-         Hidden in non-stress modes; toggled via onViewModeClick. -->
-    <div class="stress-norm-toggle-group" id="stressNormToggle">
-      <span class="stress-norm-label">σ_VM scale</span>
-      <button class="stress-norm-btn active" data-norm="per"
-              onclick="onStressNormToggleClick('per')"
-              title="Per-design auto-calibration. Each tile uses its own p95 cap and auto-gamma for spatial pattern discovery.">per</button>
-      <button class="stress-norm-btn" data-norm="shared"
-              onclick="onStressNormToggleClick('shared')"
-              title="Shared scale across designs. Global p95 cap, linear cividis. 'Yellow' means the same σ_VM everywhere — for cross-design comparison.">shared</button>
-    </div>
-    <!-- v0.20.0 — which solved pore filler the thermal cards show (thermal tab only) -->
-    <div class="stress-norm-toggle-group" id="thermalFillerToggle">
-      <span class="stress-norm-label">Pores filled with</span>
-      <button class="stress-norm-btn" data-filler="air" onclick="onThermalFillerView('air')" title="Air at 37 °C, k = 0.027 W/m·K: bench tests, heat exchangers, a part before implantation">air</button>
-      <button class="stress-norm-btn active" data-filler="water" onclick="onThermalFillerView('water')" title="Water at 37 °C, k = 0.63 W/m·K: saline or culture medium in the pores, wet testing">water</button>
-      <button class="stress-norm-btn" data-filler="tissue" onclick="onThermalFillerView('tissue')" title="Soft tissue, k = 0.5 W/m·K: an implant in the body, pores filled with ingrown tissue or marrow">tissue</button>
-    </div>
-    <!-- v0.29.1 — tracer particle controls, shared by every flow tile (flow tab, flow view) -->
-    <div class="stress-norm-toggle-group flow-anim-group" id="flowAnimToggle">
-      <span class="stress-norm-label">Particles</span>
-      <button class="stress-norm-btn flow-play" title="Pause" onclick="onFlowPlayToggle(this)"></button>
-      <span class="fa-sl" title="Animation speed. Changes how fast particles move, not how long the streaks are."><span class="fa-l">speed</span><input type="range" min="0.25" max="3" step="0.05" value="1" oninput="onFlowSpeed(this)"><span class="fa-v">1.00&times;</span></span>
-      <span class="fa-sl" title="Streak length: how much flow time each streak covers. Faster fluid still draws longer streaks."><span class="fa-l">length</span><input type="range" min="0.25" max="2" step="0.05" value="1" oninput="onFlowLength(this)"><span class="fa-v">1.00&times;</span></span>
-      <span class="fa-sl" title="Streak width"><span class="fa-l">size</span><input type="range" min="0.5" max="4" step="0.1" value="1" oninput="onFlowSize(this)"><span class="fa-v">1.0&times;</span></span>
-      <span class="fa-sl" title="Particles per tile"><span class="fa-l">count</span><input type="range" min="500" max="6000" step="250" value="2500" oninput="onFlowCount(this)"><span class="fa-v">2500</span></span>
-    </div>
-    <div class="right">
-      <!-- v0.24.0 — status chip (52-status.js): animated F13LD mark + state +
-           progress; replaces the designs-loaded pill, spinner and solver pill.
-           #solverPill stays the text node 10-hardware / 50-controls write to. -->
-      <div class="lab-status" id="labStatus" role="status" aria-live="polite">
-        <span class="ls-mark" id="labStatusMark"></span>
-        <span class="ls-txt" id="solverPill">starting…</span>
-        <span class="ls-bar"><i id="labStatusBar"></i></span>
+  <!-- ============ MAIN: viewer (left) | control pane (right; bottom sheet under 900 px) ============ -->
+  <div id="main">
+
+    <section id="viewPane" aria-label="Designs">
+
+      <!-- Viewer overlay: VIEW tabs, status chip and ◐ view on the first row; the per-tab controls on the rows under it.
+           Controls that every tile used to repeat (thermal view and gradient, flow view and direction, section plane) live here once.
+           20c-f13-shade.js appends the shared ◐ view host to .view-strip. -->
+      <div class="vw-bar" id="viewBar">
+        <div class="view-strip" id="viewStrip">
+          <div class="view-tabs" id="viewTabs" role="group" aria-label="View">
+            <button class="view-tab active" data-mode="geom"    onclick="onViewModeClick('geom')"    title="Geometry"><span class="ico ico-vt mdl" data-ico="model"></span><span class="vt-t">Geometry</span></button>
+            <button class="view-tab"        data-mode="stress"  onclick="onViewModeClick('stress')"  title="Stress"><span class="ico ico-vt" data-ico="stress"></span><span class="vt-t">Stress</span></button>
+            <button class="view-tab"        data-mode="stiff"   onclick="onViewModeClick('stiff')"   title="Stiffness"><span class="ico ico-vt" data-ico="stiff"></span><span class="vt-t">Stiffness</span></button>
+            <button class="view-tab"        data-mode="thermal" onclick="onViewModeClick('thermal')" title="Thermal κ"><span class="ico ico-vt" data-ico="thermal"></span><span class="vt-t">Thermal κ</span></button>
+            <button class="view-tab"        data-mode="flow"    onclick="onViewModeClick('flow')"    title="Flow"><span class="ico ico-vt" data-ico="flow"></span><span class="vt-t">Flow</span></button>
+            <button class="view-tab"        data-mode="buckle"  onclick="onViewModeClick('buckle')"  title="Buckling"><span class="ico ico-vt" data-ico="buckle"></span><span class="vt-t">Buckling</span></button>
+            <button class="view-tab"        data-mode="curve"   onclick="onViewModeClick('curve')"   title="Crush"><span class="ico ico-vt" data-ico="nonlin"></span><span class="vt-t">Crush</span></button>
+          </div>
+          <!-- Phone: one design at a time. Built by 53b-lab-shell.js (A / B / C). -->
+          <div class="vw-dsw" id="designSw" role="group" aria-label="Design" hidden></div>
+          <div class="right">
+            <!-- v0.24.0 — status chip (52-status.js): animated F13LD mark + state + progress.
+                 #solverPill stays the text node 10-hardware / 50-controls write to. -->
+            <div class="lab-status" id="labStatus" role="status" aria-live="polite">
+              <span class="ls-mark" id="labStatusMark"></span>
+              <span class="ls-txt" id="solverPill">starting…</span>
+              <span class="ls-bar"><i id="labStatusBar"></i></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- per-tab controls (row 2) -->
+        <div class="vw-tools" id="viewTools">
+          <!-- A.3.3 — Stress-normalization toggle (per-design auto vs shared linear). Shown by onViewModeClick. -->
+          <div class="stress-norm-toggle-group" id="stressNormToggle">
+            <span class="stress-norm-label">σ_VM scale</span>
+            <button class="stress-norm-btn active" data-norm="per"
+                    onclick="onStressNormToggleClick('per')"
+                    title="Per-design auto-calibration. Each tile uses its own p95 cap and auto-gamma for spatial pattern discovery.">per</button>
+            <button class="stress-norm-btn" data-norm="shared"
+                    onclick="onStressNormToggleClick('shared')"
+                    title="Shared scale across designs. Global p95 cap, linear cividis. 'Yellow' means the same σ_VM everywhere — for cross-design comparison.">shared</button>
+          </div>
+          <!-- v0.20.0 — which solved pore filler the thermal cards show (thermal tab only) -->
+          <div class="stress-norm-toggle-group" id="thermalFillerToggle">
+            <span class="stress-norm-label">Pores filled with</span>
+            <button class="stress-norm-btn" data-filler="air" onclick="onThermalFillerView('air')" title="Air at 37 °C, k = 0.027 W/m·K: bench tests, heat exchangers, a part before implantation">air</button>
+            <button class="stress-norm-btn active" data-filler="water" onclick="onThermalFillerView('water')" title="Water at 37 °C, k = 0.63 W/m·K: saline or culture medium in the pores, wet testing">water</button>
+            <button class="stress-norm-btn" data-filler="tissue" onclick="onThermalFillerView('tissue')" title="Soft tissue, k = 0.5 W/m·K: an implant in the body, pores filled with ingrown tissue or marrow">tissue</button>
+          </div>
+          <!-- thermal / flow view, direction and section plane: built once by 53b-lab-shell.js (labViewToolsBuild) -->
+          <div class="vw-dyn" id="viewToolsDyn"></div>
+          <!-- v0.29.1 — tracer particle controls, shared by every flow tile (flow tab, flow view) -->
+          <div class="stress-norm-toggle-group flow-anim-group" id="flowAnimToggle">
+            <span class="stress-norm-label">Particles</span>
+            <button class="stress-norm-btn flow-play" title="Pause" aria-label="Pause" onclick="onFlowPlayToggle(this)"></button>
+            <span class="fa-sl" title="Animation speed. Changes how fast particles move, not how long the streaks are."><span class="fa-l">speed</span><input type="range" min="0.25" max="3" step="0.05" value="1" oninput="onFlowSpeed(this)" aria-label="Particle speed"><span class="fa-v">1.00&times;</span></span>
+            <span class="fa-sl" title="Streak length: how much flow time each streak covers. Faster fluid still draws longer streaks."><span class="fa-l">length</span><input type="range" min="0.25" max="2" step="0.05" value="1" oninput="onFlowLength(this)" aria-label="Streak length"><span class="fa-v">1.00&times;</span></span>
+            <span class="fa-sl" title="Streak width"><span class="fa-l">size</span><input type="range" min="0.5" max="4" step="0.1" value="1" oninput="onFlowSize(this)" aria-label="Streak width"><span class="fa-v">1.0&times;</span></span>
+            <span class="fa-sl" title="Particles per tile"><span class="fa-l">count</span><input type="range" min="500" max="6000" step="250" value="2500" oninput="onFlowCount(this)" aria-label="Particle count"><span class="fa-v">2500</span></span>
+          </div>
+          <!-- v0.35.0 — Geometry tab views (31-geom-views.js), shared by every tile -->
+          <div class="geom-view-row" id="geomViewRow"></div>
+          <div id="w-clip"></div>
+        </div>
       </div>
-    </div>
-  </div>
 
-  <!-- v0.35.0 — Geometry tab views (31-geom-views.js), shared by every tile -->
-  <div class="geom-view-row" id="geomViewRow"></div>
+      <!-- ============ COMPARISON AREA ============ -->
+      <div class="vw-scroll" id="vwScroll">
+        <div class="compare" id="compareGrid"></div>
+        <div class="compare merged" id="mergedView" style="display:none">
+          <div class="merged-plot" id="mergedPlot"></div>
+          <!-- Phase-6 tie-up #1 — up to 3 animated cubes show the looped crush deformation
+               colored by plastic strain (alpha), built by renderNonlinearViz() -->
+          <div class="merged-cubes" id="mergedCubes"></div>
+          <!-- Phase-6 readout pass — per-design crush metrics (Crush Modulus, Yield, Load) -->
+          <div class="merged-metrics" id="mergedMetrics"></div>
+          <div class="merged-scrubber" id="mergedScrubber"></div>
+          <!-- v0.31.0 — Flow charts (24-flow-charts.js): every design on one plot -->
+          <div id="flowCharts"></div>
+        </div>
+      </div>
+    </section>
 
-  <!-- ============ COMPARISON AREA ============ -->
-  <div class="compare" id="compareGrid"></div>
-  <div class="compare merged" id="mergedView" style="display:none">
-    <div class="merged-plot" id="mergedPlot"></div>
-    <!-- Phase-6 tie-up #1 — up to 3 animated cubes show the looped crush deformation
-         colored by plastic strain (alpha), built by renderNonlinearViz() -->
-    <div class="merged-cubes" id="mergedCubes"></div>
-    <!-- Phase-6 readout pass — per-design crush metrics (Crush Modulus, Yield, Load) -->
-    <div class="merged-metrics" id="mergedMetrics"></div>
-    <div class="merged-scrubber" id="mergedScrubber"></div>
-    <!-- v0.31.0 — Flow charts (24-flow-charts.js): every design on one plot -->
-    <div id="flowCharts"></div>
-  </div>
+    <!-- ============ CONTROL PANE (v0.36 layout, UI refresh stage 2) ============
+         Desktop: docked on the right, rail + one section at a time + footer.
+         Phone: bottom sheet with a Results · Model · Physics tab bar; the footer (estimate, Run all) stays in the sheet.
+         Replaces the slide-up Configure drawer, the dock tags and the duplicate switches. -->
+    <aside id="ctrlPane" aria-label="Controls">
+      <button id="sheetHandle" type="button" aria-label="Drag to resize the controls"></button>
 
-  <!-- ============ BOTTOM DOCK (v0.22.0, 51-dock.js) ============
-       Run status strip (shown during / after a run) · Configure drawer
-       (slides up over the cards, never resizes them) · dock row. -->
-  <div class="bottom-dock" id="bottomDock">
-
-    <div class="dr-drawer" id="cfgDrawer" aria-label="Run configuration">
-      <nav class="dr-tabs">
-      <div class="dr-tab" data-tab="model" onclick="onDrawerTab('model')"><span class="ico ico-md mdl" data-ico="model"></span><span class="nm">Model</span><span class="mv" id="drModelVal">per design</span></div>
-      <div class="dr-tab" data-tab="elastic" data-phys-state="elastic" onclick="onDrawerTab('elastic')"><span class="ico ico-md" data-ico="elastic"></span><span class="nm">Elastic</span><button type="button" class="sw" role="switch" data-phys-sw="elastic" onclick="onPhysSwitch(event,'elastic')" title="Run Elastic, or skip it"></button></div>
-      <div class="dr-tab" data-tab="buckle" data-phys-state="buckle" onclick="onDrawerTab('buckle')"><span class="ico ico-md" data-ico="buckle"></span><span class="nm">Buckling</span><button type="button" class="sw" role="switch" data-phys-sw="buckle" onclick="onPhysSwitch(event,'buckle')" title="Run Buckling, or skip it"></button></div>
-      <div class="dr-tab" data-tab="nonlin" data-phys-state="nonlin" onclick="onDrawerTab('nonlin')"><span class="ico ico-md" data-ico="nonlin"></span><span class="nm">Crush</span><button type="button" class="sw" role="switch" data-phys-sw="nonlin" onclick="onPhysSwitch(event,'nonlin')" title="Run Crush, or skip it"></button></div>
-      <div class="dr-tab" data-tab="thermal" data-phys-state="thermal" onclick="onDrawerTab('thermal')"><span class="ico ico-md" data-ico="thermal"></span><span class="nm">Thermal κ</span><button type="button" class="sw" role="switch" data-phys-sw="thermal" onclick="onPhysSwitch(event,'thermal')" title="Run Thermal κ, or skip it"></button></div>
-      <div class="dr-tab" data-tab="flow" data-phys-state="flow" onclick="onDrawerTab('flow')"><span class="ico ico-md" data-ico="flow"></span><span class="nm">Flow</span><button type="button" class="sw" role="switch" data-phys-sw="flow" onclick="onPhysSwitch(event,'flow')" title="Run Flow, or skip it"></button></div>
+      <nav id="sectionsRail" aria-label="Sections">
+        <div class="sb-fallback">
+          <button type="button" data-section="model" class="on" aria-label="Model"><span class="rl-ico" data-ico="model"></span><span class="rl-t">Model</span></button>
+          <button type="button" data-section="physics" aria-label="Physics"><span class="rl-ico" data-ico="elastic"></span><span class="rl-t">Physics</span></button>
+        </div>
       </nav>
-      <div class="dr-panes">
-      <section class="dr-pane" data-pane="model">
-        <div class="dr-ph"><span class="ico ico-lg mdl" data-ico="model"></span><div class="dr-pt-wrap"><div class="dr-pt">Model</div><div class="dr-ps">Material and voxel prep — apply to every design in the comparison</div></div></div>
-        <div class="dr-grid">
-          <div class="dr-f wide"><label>Material</label><div><div class="dd" id="materialDd"></div></div><div class="hint">AM library (docs/MATERIALS.md). “From design” keeps each design’s own material. Changing it re-solves on the next run.</div></div>
-          <div class="dr-f"><label>Connectivity</label><div><div class="dd" id="connDd"></div></div><div class="hint">Which connected pieces of the voxelized cell are analyzed.</div></div>
-          <div class="dr-f"><label>Surface voxels</label><div><div class="seg" data-seg="pv"><button type="button" data-v="pv" onclick="onSegClick(this)">Partial volume</button><button type="button" data-v="binary" onclick="onSegClick(this)">0/1 cube</button></div></div><div class="hint">Partial volume: each surface voxel carries its true solid fraction — exact solid fraction, stiffness grid-converged by 64³ on thin walls and struts. 0/1 cube reproduces results from before v0.19.0. Crush and buckling always use the 0/1 cube.</div></div>
-          <div class="dr-f wide dr-resetrow"><div><button type="button" class="dr-reset" onclick="labResetSettings()" title="Elastic 64³ and Thermal κ (water) on, Buckling, Crush and Flow off, Ti-6Al-4V Grade 5 (HIP), all networks, partial volume">Reset run settings to defaults</button></div><div class="hint">Your settings are remembered in this browser.</div></div>
-        </div>
-      </section>
-      <section class="dr-pane" data-pane="elastic" data-phys-state="elastic">
-        <div class="dr-ph"><span class="ico ico-lg" data-ico="elastic"></span><div class="dr-pt-wrap"><div class="dr-pt">Elastic</div><div class="dr-ps">Linear homogenization — full Cᵢⱼ, E*, ν*, directional stiffness</div></div><button type="button" class="sw" role="switch" data-phys-sw="elastic" onclick="onPhysSwitch(event,'elastic')" title="Run Elastic, or skip it"></button></div>
-        <div class="dr-grid">
-          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="grid"><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div><div class="hint">64³ suits most designs; 128³ for thin walls and struts (slower, more GPU memory). Thermal κ solves on the same grid.</div></div>
-        </div>
-      </section>
-      <section class="dr-pane" data-pane="buckle" data-phys-state="buckle">
-        <div class="dr-ph"><span class="ico ico-lg" data-ico="buckle"></span><div class="dr-pt-wrap"><div class="dr-pt">Buckling</div><div class="dr-ps">Linear eigenvalue buckling, free-sided (uniaxial-stress) loading</div></div><button type="button" class="sw" role="switch" data-phys-sw="buckle" onclick="onPhysSwitch(event,'buckle')" title="Run Buckling, or skip it"></button></div>
-        <div class="dr-grid">
-          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="buckleN"><button type="button" data-v="16" onclick="onSegClick(this)">16³</button><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button></div></div><div class="hint">Most sparse designs need 32³ or 64³ to buckle meaningfully. Floating islands are always removed.</div></div>
-        </div>
-      </section>
-      <section class="dr-pane" data-pane="nonlin" data-phys-state="nonlin">
-        <div class="dr-ph"><span class="ico ico-lg" data-ico="nonlin"></span><div class="dr-pt-wrap"><div class="dr-pt">Crush</div><div class="dr-ps">Nonlinear J2 plasticity with Voce hardening, adaptive load steps on the GPU</div></div><button type="button" class="sw" role="switch" data-phys-sw="nonlin" onclick="onPhysSwitch(event,'nonlin')" title="Run Crush, or skip it"></button></div>
-        <div class="dr-grid">
-          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="nonlinN"><button type="button" data-v="16" onclick="onSegClick(this)">16³</button><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button></div></div><div class="hint">Crush always uses the 0/1 cube voxels.</div></div>
-          <div class="dr-f"><label>Strain cap</label><div><div class="seg" data-seg="cap"><button type="button" data-v="0.02" onclick="onSegClick(this)">2%</button><button type="button" data-v="0.05" onclick="onSegClick(this)">5%</button><button type="button" data-v="0.1" onclick="onSegClick(this)">10%</button></div></div><div class="hint">The adaptive crush stops at this strain.</div></div>
-          <div class="dr-f"><label>Load axis</label><div><div class="seg" data-seg="axis"><button type="button" data-v="zz" onclick="onSegClick(this)">ZZ</button><button type="button" data-v="xx" onclick="onSegClick(this)">XX</button><button type="button" data-v="yy" onclick="onSegClick(this)">YY</button><button type="button" data-v="all" onclick="onSegClick(this)">All</button></div></div><div class="hint">All crushes X, Y and Z in turn (about 3× the time); the cards then use the weakest axis.</div></div>
-        </div>
-      </section>
-      <section class="dr-pane" data-pane="thermal" data-phys-state="thermal">
-        <div class="dr-ph"><span class="ico ico-lg" data-ico="thermal"></span><div class="dr-pt-wrap"><div class="dr-pt">Thermal κ</div><div class="dr-ps">Steady-state conduction, effective conductivity tensor</div></div><button type="button" class="sw" role="switch" data-phys-sw="thermal" onclick="onPhysSwitch(event,'thermal')" title="Run Thermal κ, or skip it"></button></div>
-        <div class="dr-grid">
-          <div class="dr-f wide"><label>Pores filled with · k, W/m·K</label><div><div class="chipset"><button type="button" class="chip" data-filler="air" onclick="onFillerChip(this)"><i></i>air <small>0.027</small></button><button type="button" class="chip" data-filler="water" onclick="onFillerChip(this)"><i></i>water <small>0.63</small></button><button type="button" class="chip" data-filler="tissue" onclick="onFillerChip(this)"><i></i>tissue <small>0.5</small></button></div></div><div class="hint">Each ticked filler is a separate, fast solve; switch between them with “Pores filled with” on the Thermal κ tab. No vacuum option — no real part sits in one.</div></div>
-        </div>
-      </section>
-      <section class="dr-pane" data-pane="flow" data-phys-state="flow">
-        <div class="dr-ph"><span class="ico ico-lg" data-ico="flow"></span><div class="dr-pt-wrap"><div class="dr-pt">Flow</div><div class="dr-ps">Lattice Boltzmann creeping flow through the pores — permeability tensor, tortuosity, open and sealed pores, wall shear stress</div></div><button type="button" class="sw" role="switch" data-phys-sw="flow" onclick="onPhysSwitch(event,'flow')" title="Run Flow, or skip it"></button></div>
-        <div class="dr-grid">
-          <div class="dr-f"><label>Grid</label><div><div class="seg" data-seg="flowN"><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div><div class="hint">Its own grid. Permeability wants about 8 voxels across the narrowest pore; the card flags designs below that. 128³ needs a GPU that allows 160 MB in one buffer.</div></div>
-          <div class="dr-f"><label>Tolerance</label><div><div class="seg" data-seg="flowTol"><button type="button" data-v="std" onclick="onSegClick(this)">Standard</button><button type="button" data-v="high" onclick="onSegClick(this)">High</button></div></div><div class="hint">Each axis runs until the mean flow changes less than 1 in 10⁶ (Standard) or 10⁷ (High) over 500 steps.</div></div>
-          <div class="dr-f"><label>Flow direction</label><div><div class="seg" data-seg="flowDir"><button type="button" data-v="zz" onclick="onSegClick(this)">Z</button><button type="button" data-v="xx" onclick="onSegClick(this)">X</button><button type="button" data-v="yy" onclick="onSegClick(this)">Y</button><button type="button" data-v="all" onclick="onSegClick(this)">All</button></div></div><div class="hint">The direction the wall shear rows report. All picks the best one: the most wall at your shear target, or the most permeable direction with no target. No extra solve — all three directions already run for permeability.</div></div>
-          <div class="dr-f"><label>Fluid</label><div><div class="seg" data-seg="flowFluid"><button type="button" data-v="water" onclick="onSegClick(this)">Water 37 °C</button><button type="button" data-v="medium" onclick="onSegClick(this)">Culture medium</button><button type="button" data-v="custom" onclick="onSegClick(this)">Custom</button></div></div><div class="hint">Viscosity only scales the shear; permeability does not depend on it. Water 0.69 mPa·s, culture medium with 10 % serum 0.93 mPa·s, both at 37 °C.</div></div>
-          <div class="dr-f" id="flowMuRow"><label>Viscosity · mPa·s</label><div><input class="dr-num" type="number" min="0.01" step="0.01" data-k="muCustom" onchange="onFlowNum(this)" aria-label="Custom viscosity in mPa·s"></div><div class="hint">Dynamic viscosity of your fluid. Water at 20 °C is 1.0.</div></div>
-          <div class="dr-f wide"><label>Shear target</label><div><div class="dd" id="shearTargetDd"></div></div><div class="hint">The wall shear range you want the surface in. The cards then give the share of wall in it, the flow speed that maximizes it and the range of speeds that keeps at least half. No target reports shear per unit speed only.</div></div>
-          <div class="dr-f" id="flowTargetRow"><label>Custom target · mPa</label><div class="dr-pair"><input class="dr-num" type="number" min="0.001" step="0.1" data-k="tLo" onchange="onFlowNum(this)" aria-label="Lowest target shear in mPa"><span>to</span><input class="dr-num" type="number" min="0.001" step="0.1" data-k="tHi" onchange="onFlowNum(this)" aria-label="Highest target shear in mPa"></div><div class="hint">1 mPa = 0.001 Pa.</div></div>
-          <div class="dr-f"><label>Speed units</label><div><div class="seg" data-seg="flowUnit"><button type="button" data-v="mm" onclick="onSegClick(this)">mm/s</button><button type="button" data-v="m" onclick="onSegClick(this)">m/s</button></div></div><div class="hint">Superficial speed: flow rate ÷ the part's cross-section. Shear per mm/s reads in mPa; per m/s in Pa (the same number).</div></div>
-          <div class="dr-f"><label>Chamber diameter · mm</label><div><input class="dr-num" type="number" min="0.1" step="1" data-k="chamberMm" onchange="onFlowNum(this)" aria-label="Chamber diameter in mm"></div><div class="hint">Turns the best flow speed into a pump flow rate (mL/min) for a perfusion chamber this wide.</div></div>
-        </div>
-      </section>
+
+      <div id="ctrlScroll">
+
+        <!-- Results: phone only. The card metrics as one table, metric | A | B | C (53b-lab-shell.js). -->
+        <section class="sec" id="sec-results" data-section="results">
+          <h2 class="sec-h">Results</h2>
+          <div id="resTable" class="res-table"></div>
+        </section>
+
+        <section class="sec" id="sec-model" data-section="model">
+          <h2 class="sec-h"><span class="sec-n">01</span>Model</h2>
+          <p class="sec-note">Material and voxel prep. They apply to every design in the comparison.</p>
+          <div class="sc-group col" id="grp-material"><label>Material</label><div class="ctl"><div class="dd" id="materialDd"></div></div>
+            <div class="hint help-src">AM library (docs/MATERIALS.md). “From design” keeps each design’s own material. Changing it re-solves on the next run.</div></div>
+          <div class="sc-group col" id="grp-conn"><label>Connectivity</label><div class="ctl"><div class="dd" id="connDd"></div></div>
+            <div class="hint help-src">Which connected pieces of the voxelized cell are analyzed.</div></div>
+          <div class="sc-group col" id="grp-pv"><label>Surface voxels</label><div class="ctl"><div class="seg" data-seg="pv"><button type="button" data-v="pv" onclick="onSegClick(this)">Partial volume</button><button type="button" data-v="binary" onclick="onSegClick(this)">0/1 cube</button></div></div>
+            <div class="hint help-src">Partial volume: each surface voxel carries its true solid fraction — exact solid fraction, stiffness grid-converged by 64³ on thin walls and struts. 0/1 cube reproduces results from before v0.19.0. Crush and buckling always use the 0/1 cube.</div></div>
+
+          <div class="fold" id="fold-defaults" data-fold="defaults">
+            <div class="fold-h">
+              <button type="button" class="fold-btn" aria-expanded="false" aria-controls="foldb-defaults" onclick="onFoldToggle('defaults')">
+                <span class="fold-t"><b>Defaults</b><small>Reset run settings</small></span>
+                <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div class="fold-b" id="foldb-defaults" hidden>
+              <div class="sc-group col"><div class="ctl"><button type="button" class="dr-reset" onclick="labResetSettings()" title="Elastic 64³ and Thermal κ (water) on, Buckling, Crush and Flow off, Ti-6Al-4V Grade 5 (HIP), all networks, partial volume">Reset run settings to defaults</button></div>
+                <div class="hint">Your settings are remembered in this browser.</div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sec" id="sec-physics" data-section="physics">
+          <h2 class="sec-h"><span class="sec-n">02</span>Physics</h2>
+          <p class="sec-note">Switch a mode on to run it. A mode that is off keeps its settings.</p>
+
+          <div class="fold" id="fold-elastic" data-fold="elastic" data-phys-state="elastic">
+            <div class="fold-h">
+              <button type="button" class="fold-btn" aria-expanded="false" aria-controls="foldb-elastic" onclick="onFoldToggle('elastic')">
+                <span class="ico ico-md" data-ico="elastic"></span>
+                <span class="fold-t"><b>Elastic</b><small data-fold-sum="elastic">64³</small></span>
+                <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button type="button" class="sw" role="switch" aria-label="Run Elastic" data-phys-sw="elastic" onclick="onPhysSwitch(event,'elastic')" title="Run Elastic, or skip it"></button>
+            </div>
+            <div class="fold-b" id="foldb-elastic" hidden>
+              <p class="fold-d">Linear homogenization: full Cᵢⱼ, E*, ν*, directional stiffness.</p>
+              <div class="sc-group col"><label>Grid</label><div class="ctl"><div class="seg" data-seg="grid"><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div>
+                <div class="hint help-src">64³ suits most designs; 128³ for thin walls and struts (slower, more GPU memory). Thermal κ solves on the same grid.</div></div>
+            </div>
+          </div>
+
+          <div class="fold" id="fold-buckle" data-fold="buckle" data-phys-state="buckle">
+            <div class="fold-h">
+              <button type="button" class="fold-btn" aria-expanded="false" aria-controls="foldb-buckle" onclick="onFoldToggle('buckle')">
+                <span class="ico ico-md" data-ico="buckle"></span>
+                <span class="fold-t"><b>Buckling</b><small data-fold-sum="buckle">32³</small></span>
+                <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button type="button" class="sw" role="switch" aria-label="Run Buckling" data-phys-sw="buckle" onclick="onPhysSwitch(event,'buckle')" title="Run Buckling, or skip it"></button>
+            </div>
+            <div class="fold-b" id="foldb-buckle" hidden>
+              <p class="fold-d">Linear eigenvalue buckling, free-sided (uniaxial-stress) loading.</p>
+              <div class="sc-group col"><label>Grid</label><div class="ctl"><div class="seg" data-seg="buckleN"><button type="button" data-v="16" onclick="onSegClick(this)">16³</button><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button></div></div>
+                <div class="hint help-src">Most sparse designs need 32³ or 64³ to buckle meaningfully. Floating islands are always removed.</div></div>
+            </div>
+          </div>
+
+          <div class="fold" id="fold-nonlin" data-fold="nonlin" data-phys-state="nonlin">
+            <div class="fold-h">
+              <button type="button" class="fold-btn" aria-expanded="false" aria-controls="foldb-nonlin" onclick="onFoldToggle('nonlin')">
+                <span class="ico ico-md" data-ico="nonlin"></span>
+                <span class="fold-t"><b>Crush</b><small data-fold-sum="nonlin">32³ · 5% · ZZ</small></span>
+                <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button type="button" class="sw" role="switch" aria-label="Run Crush" data-phys-sw="nonlin" onclick="onPhysSwitch(event,'nonlin')" title="Run Crush, or skip it"></button>
+            </div>
+            <div class="fold-b" id="foldb-nonlin" hidden>
+              <p class="fold-d">Nonlinear J2 plasticity with Voce hardening, adaptive load steps on the GPU.</p>
+              <div class="sc-group col"><label>Grid</label><div class="ctl"><div class="seg" data-seg="nonlinN"><button type="button" data-v="16" onclick="onSegClick(this)">16³</button><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button></div></div>
+                <div class="hint help-src">Crush always uses the 0/1 cube voxels.</div></div>
+              <div class="sc-group col"><label>Strain cap</label><div class="ctl"><div class="seg" data-seg="cap"><button type="button" data-v="0.02" onclick="onSegClick(this)">2%</button><button type="button" data-v="0.05" onclick="onSegClick(this)">5%</button><button type="button" data-v="0.1" onclick="onSegClick(this)">10%</button></div></div>
+                <div class="hint help-src">The adaptive crush stops at this strain.</div></div>
+              <div class="sc-group col"><label>Load axis</label><div class="ctl"><div class="seg" data-seg="axis"><button type="button" data-v="zz" onclick="onSegClick(this)">ZZ</button><button type="button" data-v="xx" onclick="onSegClick(this)">XX</button><button type="button" data-v="yy" onclick="onSegClick(this)">YY</button><button type="button" data-v="all" onclick="onSegClick(this)">All</button></div></div>
+                <div class="hint">All runs X, Y and Z in turn, about 3× the time. The cards then use the weakest axis.</div></div>
+            </div>
+          </div>
+
+          <div class="fold" id="fold-thermal" data-fold="thermal" data-phys-state="thermal">
+            <div class="fold-h">
+              <button type="button" class="fold-btn" aria-expanded="false" aria-controls="foldb-thermal" onclick="onFoldToggle('thermal')">
+                <span class="ico ico-md" data-ico="thermal"></span>
+                <span class="fold-t"><b>Thermal κ</b><small data-fold-sum="thermal">water</small></span>
+                <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button type="button" class="sw" role="switch" aria-label="Run Thermal κ" data-phys-sw="thermal" onclick="onPhysSwitch(event,'thermal')" title="Run Thermal κ, or skip it"></button>
+            </div>
+            <div class="fold-b" id="foldb-thermal" hidden>
+              <p class="fold-d">Steady-state conduction, effective conductivity tensor.</p>
+              <div class="sc-group col"><label>Pores filled with · k, W/m·K</label><div class="ctl"><div class="chipset"><button type="button" class="chip" data-filler="air" onclick="onFillerChip(this)"><i></i>air <small>0.027</small></button><button type="button" class="chip" data-filler="water" onclick="onFillerChip(this)"><i></i>water <small>0.63</small></button><button type="button" class="chip" data-filler="tissue" onclick="onFillerChip(this)"><i></i>tissue <small>0.5</small></button></div></div>
+                <div class="hint help-src">Each ticked filler is a separate, fast solve; switch between them with “Pores filled with” on the Thermal κ tab. No vacuum option — no real part sits in one.</div></div>
+            </div>
+          </div>
+
+          <div class="fold" id="fold-flow" data-fold="flow" data-phys-state="flow">
+            <div class="fold-h">
+              <button type="button" class="fold-btn" aria-expanded="false" aria-controls="foldb-flow" onclick="onFoldToggle('flow')">
+                <span class="ico ico-md" data-ico="flow"></span>
+                <span class="fold-t"><b>Flow</b><small data-fold-sum="flow">64³ · standard</small></span>
+                <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button type="button" class="sw" role="switch" aria-label="Run Flow" data-phys-sw="flow" onclick="onPhysSwitch(event,'flow')" title="Run Flow, or skip it"></button>
+            </div>
+            <div class="fold-b" id="foldb-flow" hidden>
+              <p class="fold-d">Lattice Boltzmann creeping flow through the pores: permeability tensor, tortuosity, open and sealed pores, wall shear stress.</p>
+              <div class="sc-group col"><label>Grid</label><div class="ctl"><div class="seg" data-seg="flowN"><button type="button" data-v="32" onclick="onSegClick(this)">32³</button><button type="button" data-v="64" onclick="onSegClick(this)">64³</button><button type="button" data-v="128" onclick="onSegClick(this)">128³</button></div></div>
+                <div class="hint">128³ needs a GPU that allows 160 MB in one buffer.</div>
+                <div class="hint help-src">Its own grid. Permeability wants about 8 voxels across the narrowest pore; the card flags designs below that.</div></div>
+              <div class="sc-group col"><label>Tolerance</label><div class="ctl"><div class="seg" data-seg="flowTol"><button type="button" data-v="std" onclick="onSegClick(this)">Standard</button><button type="button" data-v="high" onclick="onSegClick(this)">High</button></div></div>
+                <div class="hint help-src">Each axis runs until the mean flow changes less than 1 in 10⁶ (Standard) or 10⁷ (High) over 500 steps.</div></div>
+
+              <div class="fold sub" id="fold-flowReadout" data-fold="flowReadout">
+                <div class="fold-h">
+                  <button type="button" class="fold-btn" aria-expanded="false" aria-controls="foldb-flowReadout" onclick="onFoldToggle('flowReadout')">
+                    <span class="fold-t"><b>Readout (no re-run)</b><small data-fold-sum="flowReadout">All · water 37 °C · no target · mm/s · 10 mm</small></span>
+                    <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                </div>
+                <div class="fold-b" id="foldb-flowReadout" hidden>
+                  <div class="sc-group col"><label>Flow direction</label><div class="ctl"><div class="seg" data-seg="flowDir"><button type="button" data-v="zz" onclick="onSegClick(this)">Z</button><button type="button" data-v="xx" onclick="onSegClick(this)">X</button><button type="button" data-v="yy" onclick="onSegClick(this)">Y</button><button type="button" data-v="all" onclick="onSegClick(this)">All</button></div></div>
+                    <div class="hint help-src">The direction the wall shear rows report. All picks the best one: the most wall at your shear target, or the most permeable direction with no target. No extra solve — all three directions already run for permeability.</div></div>
+                  <div class="sc-group col"><label>Fluid</label><div class="ctl"><div class="seg" data-seg="flowFluid"><button type="button" data-v="water" onclick="onSegClick(this)">Water 37 °C</button><button type="button" data-v="medium" onclick="onSegClick(this)">Culture medium</button><button type="button" data-v="custom" onclick="onSegClick(this)">Custom</button></div></div>
+                    <div class="hint help-src">Viscosity only scales the shear; permeability does not depend on it. Water 0.69 mPa·s, culture medium with 10 % serum 0.93 mPa·s, both at 37 °C.</div></div>
+                  <div class="sc-group col" id="flowMuRow"><label>Viscosity · mPa·s</label><div class="ctl"><input class="dr-num" type="number" min="0.01" step="0.01" data-k="muCustom" onchange="onFlowNum(this)" aria-label="Custom viscosity in mPa·s"></div>
+                    <div class="hint help-src">Dynamic viscosity of your fluid. Water at 20 °C is 1.0.</div></div>
+                  <div class="sc-group col"><label>Shear target</label><div class="ctl"><div class="dd" id="shearTargetDd"></div></div>
+                    <div class="hint help-src">The wall shear range you want the surface in. The cards then give the share of wall in it, the flow speed that maximizes it and the range of speeds that keeps at least half. No target reports shear per unit speed only.</div></div>
+                  <div class="sc-group col" id="flowTargetRow"><label>Custom target · mPa</label><div class="ctl dr-pair"><input class="dr-num" type="number" min="0.001" step="0.1" data-k="tLo" onchange="onFlowNum(this)" aria-label="Lowest target shear in mPa"><span>to</span><input class="dr-num" type="number" min="0.001" step="0.1" data-k="tHi" onchange="onFlowNum(this)" aria-label="Highest target shear in mPa"></div>
+                    <div class="hint help-src">1 mPa = 0.001 Pa.</div></div>
+                  <div class="sc-group col"><label>Speed units</label><div class="ctl"><div class="seg" data-seg="flowUnit"><button type="button" data-v="mm" onclick="onSegClick(this)">mm/s</button><button type="button" data-v="m" onclick="onSegClick(this)">m/s</button></div></div>
+                    <div class="hint help-src">Superficial speed: flow rate ÷ the part's cross-section. Shear per mm/s reads in mPa; per m/s in Pa (the same number).</div></div>
+                  <div class="sc-group col"><label>Chamber diameter · mm</label><div class="ctl"><input class="dr-num" type="number" min="0.1" step="1" data-k="chamberMm" onchange="onFlowNum(this)" aria-label="Chamber diameter in mm"></div>
+                    <div class="hint help-src">Turns the best flow speed into a pump flow rate (mL/min) for a perfusion chamber this wide.</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-    </div>
 
-    <div class="prog-row" id="progRow" style="display:none">
-      <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
-      <span class="prog-status" id="progStatus">Idle</span>
-      <span class="prog-eta">ETA <span id="progEta">—:—</span></span>
-    </div>
+      <!-- Footer, under every section: progress row (during a run), designs · estimate · hardware, Run all.
+           Stage 3 turns Run all into the progress button (mount #w-run) and adds Cancel beside it. -->
+      <footer id="ctrlFoot" class="bottom-dock">
+        <div class="prog-row" id="progRow" style="display:none">
+          <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
+          <span class="prog-status" id="progStatus">Idle</span>
+          <span class="prog-eta">ETA <span id="progEta">—:—</span></span>
+        </div>
+        <div class="dock" id="dock">
+          <div class="dock-meta">
+            <span id="designCountVal">3 designs</span><span class="sep">·</span><b id="estTimeVal">~7.5 min</b><span class="sep">·</span><span class="dock-hw" id="hardwarePill"><span id="hardwarePillVal">detecting…</span></span>
+          </div>
+          <div id="w-run"></div>
+          <button type="button" class="run" id="runBtn" data-native="run" onclick="onRunClick()">Run all</button>
+        </div>
+      </footer>
 
-    <div class="dock" id="dock">
-      <button type="button" class="cfg-btn" id="cfgBtn" onclick="toggleDrawer()" aria-expanded="false" aria-controls="cfgDrawer" title="Physics modes, grids, material and voxel prep">
-        <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 4 H12 M2 10 H12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="5" cy="4" r="1.8" fill="#12141f" stroke="currentColor" stroke-width="1.3"/><circle cx="9.5" cy="10" r="1.8" fill="#12141f" stroke="currentColor" stroke-width="1.3"/></svg>
-        Configure
-        <svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 6.5 L5 3.5 L8 6.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <div class="dock-tags" id="dockTags"></div>
-      <div class="dock-meta">
-        <span id="designCountVal">3 designs</span><span class="sep">·</span><b id="estTimeVal">~7.5 min</b><span class="sep">·</span><span class="dock-hw" id="hardwarePill"><span id="hardwarePillVal">detecting…</span></span>
-      </div>
-      <button type="button" class="run" id="runBtn" onclick="onRunClick()">Run all</button>
-    </div>
-
+      <nav id="sectionsBar" aria-label="Sections">
+        <div class="sb-fallback">
+          <button type="button" data-section="results" aria-label="Results"><span class="rl-ico" data-ico="results"></span><span class="rl-t">Results</span></button>
+          <button type="button" data-section="model" class="on" aria-label="Model"><span class="rl-ico" data-ico="model"></span><span class="rl-t">Model</span></button>
+          <button type="button" data-section="physics" aria-label="Physics"><span class="rl-ico" data-ico="elastic"></span><span class="rl-t">Physics</span></button>
+        </div>
+      </nav>
+    </aside>
   </div>
 
 </div>
@@ -285,15 +405,19 @@
 <script src="21-raymarcher.js?v=0.35.1"></script>
 <script src="22-stiffness-viz.js?v=0.31.0"></script>
 <script src="23-flow-viz.js?v=0.29.1"></script>
-<script src="24-flow-charts.js?v=0.31.0"></script>
+<script src="24-flow-charts.js?v=0.35.1-ui2"></script>
 <script src="30-view-tabs.js?v=0.31.0"></script>
 <script src="31-geom-views.js?v=0.35.1"></script>
-<script src="40-design-grid.js?v=0.35.0"></script>
+<script src="40-design-grid.js?v=0.35.1-ui2"></script>
 <script src="50-controls.js?v=0.34.0"></script>
-<script src="51-dock.js?v=0.34.0"></script>
-<script src="52-status.js?v=0.35.0"></script>
+<script src="51-dock.js?v=0.35.1-ui2"></script>
+<script src="52-status.js?v=0.35.1-ui2"></script>
+<!-- UI refresh stage 2: the template layout (sections, phone sheet) runs once the markup above exists; 53b-lab-shell.js is lab's
+     glue (folds, Results table, design switch, shared view tools). Both before 60 (they wrap renderDesignGrid) and 99-init. -->
+<script src="53-layout.js?v=0.35.1-ui2"></script>
+<script src="53b-lab-shell.js?v=0.35.1-ui2"></script>
 <script src="60-add-design.js?v=0.29.2"></script>
-<script src="61-import-stl.js"></script>
+<script src="61-import-stl.js?v=0.35.1-ui2"></script>
 <script src="62-sweep.js?v=0.34.0"></script>
 <script src="63-sweep-atlas.js?v=0.34.0"></script>
 <script src="99-init.js"></script>

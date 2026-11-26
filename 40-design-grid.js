@@ -655,19 +655,19 @@ function buildFlowControl(){
   var v = VIEW_STATE.flowView, dr = VIEW_STATE.flowDir;
   function vb(id, txt, tip){ return '<button class="th-btn' + (v === id ? ' active' : '') + '" title="' + tip + '" onclick="onFlowViewPick(\'' + id + '\')">' + txt + '</button>'; }
   function db(id, txt){ return '<button class="th-btn' + (dr === id ? ' active' : '') + '" title="Mean flow along ' + txt + '" onclick="onFlowDirPick(\'' + id + '\')">' + txt + '</button>'; }
-  var h = '<div class="vp-deform-control vp-flow-control show">' +
-    '<div class="th-toggle">' +
+  /* UI refresh stage 2 — drawn once in the viewer row (53b-lab-shell.js labViewToolsBuild), not on every tile */
+  var h = '<div class="vw-grp"><span class="vw-l">view</span><div class="th-toggle">' +
       vb('particles', 'flow', 'Tracer particles carried by the flow, coloured by speed') +
       vb('speed', 'speed', 'Speed through the pores on the section plane') +
       vb('shear', 'shear', 'Wall shear on the surface at the card\u2019s flow direction and speed') +
       vb('surface', 'K(n)', 'Directional permeability surface') +
       vb('orient', 'orient', 'Wall at the shear target for every flow direction, at the card\u2019s speed') +
       vb('charts', 'charts', 'All designs on one plot: wall at the target against speed, and the shear distribution') +
-    '</div>';
-  if (v === 'particles' || v === 'speed') h += '<div class="th-toggle">' + db('x', 'X') + db('y', 'Y') + db('z', 'Z') + db('xyz', 'XYZ') + '</div>';
+    '</div></div>';
+  if (v === 'particles' || v === 'speed') h += '<div class="vw-grp"><span class="vw-l">direction</span><div class="th-toggle">' + db('x', 'X') + db('y', 'Y') + db('z', 'Z') + db('xyz', 'XYZ') + '</div></div>';
   /* v0.29.1 — play, speed, length, size and count are shared by every
      tile and live in the view strip (#flowAnimToggle) */
-  return h + '</div>';
+  return h;
 }
 
 function flowReadout(d){
@@ -833,15 +833,14 @@ function buildThermalControl(){
   var v = VIEW_STATE.thermalView, a = VIEW_STATE.thermalAxis || 'x';
   function vb(id, txt, tip){ return '<button class="th-btn' + (v === id ? ' active' : '') + '" title="' + tip + '" onclick="onThermalViewPick(\'' + id + '\')">' + txt + '</button>'; }
   function ab(id){ return '<button class="th-btn' + (a === id ? ' active' : '') + '" title="Heat flows along ' + id.toUpperCase() + '" onclick="onThermalAxisPick(\'' + id + '\')">' + id.toUpperCase() + '</button>'; }
-  return '<div class="vp-deform-control show">' +
-    '<div class="th-toggle">' +
+  /* UI refresh stage 2 \u2014 drawn once in the viewer row (53b-lab-shell.js labViewToolsBuild), not on every tile */
+  return '<div class="vw-grp"><span class="vw-l">view</span><div class="th-toggle">' +
       vb('temp', 'T', 'Temperature: \u0394T across one cell along the gradient axis, isotherms every \u0394T/10') +
       vb('dev', '\u0394', 'Deviation: how far each point is from a plain linear ramp') +
       vb('flux', 'q', 'Heat flux: local flux \u00f7 the flux a solid block would carry') +
       vb('kappa', '\u03ba', 'Directional conductivity surface \u03ba(n)') +
-    '</div>' +
-    (v === 'kappa' ? '' : '<label>grad</label><div class="th-toggle">' + ab('x') + ab('y') + ab('z') + '</div>') +
-    '</div>';
+    '</div></div>' +
+    (v === 'kappa' ? '' : '<div class="vw-grp"><span class="vw-l">grad</span><div class="th-toggle">' + ab('x') + ab('y') + ab('z') + '</div></div>');
 }
 function thermalReadout(d){
   var th = (typeof THERMAL_BY_DESIGN !== 'undefined') ? THERMAL_BY_DESIGN[d.id] : null;
@@ -947,6 +946,15 @@ function buckleMagCap(fs){
    Main render function. Called by view-tab clicks, design
    load events, run progress, and amp-slider changes.
    ---------------------------------------------------------- */
+/* UI refresh stage 2 — drawn card icons (replace the ★ × ⚙ ⤓ ▾ glyphs); 16 × 16, stroke follows the text colour */
+var LAB_CARD_ICONS = {
+  star: '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 1.8 L9.8 5.7 L14 6.2 L10.9 9.1 L11.7 13.3 L8 11.2 L4.3 13.3 L5.1 9.1 L2 6.2 L6.2 5.7 Z"/></svg>',
+  x: '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4 L12 12 M12 4 L4 12"/></svg>',
+  gear: '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 5 H13.5 M2.5 11 H13.5"/><circle cx="6" cy="5" r="1.8" fill="var(--card)"/><circle cx="10.5" cy="11" r="1.8" fill="var(--card)"/></svg>',
+  save: '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5 V10 M5 7.2 L8 10.2 L11 7.2 M3 13 H13"/></svg>',
+  chev: '<svg viewBox="0 0 10 10" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5 L5 6.5 L8 3.5"/></svg>'
+};
+
 function renderDesignGrid(){
   if (typeof geomViewRowSync === 'function') geomViewRowSync();   /* v0.35.0 */
   /* Import-time buckling-grid prediction — idempotent annotate pass.  This is
@@ -1247,9 +1255,9 @@ function renderDesignGrid(){
         '</div>' +
         '<div class="dc-controls">' +
           '<span class="dc-status-dot '+statusClass+'" title="'+statusClass+'"></span>' +
-          '<button class="dc-icon-btn'+(d.id===LAB_STATE.baselineId?' is-baseline':'')+'" title="'+(d.id===LAB_STATE.baselineId?'Baseline (comparison reference)':'Set as baseline')+'" onclick="setBaseline(\''+d.id+'\')">★</button>' +
+          '<button class="dc-icon-btn'+(d.id===LAB_STATE.baselineId?' is-baseline':'')+'" title="'+(d.id===LAB_STATE.baselineId?'Baseline (comparison reference)':'Set as baseline')+'" aria-label="Set as baseline" aria-pressed="'+(d.id===LAB_STATE.baselineId)+'" onclick="setBaseline(\''+d.id+'\')">'+LAB_CARD_ICONS.star+'</button>' +
           ((d.family === 'import' && typeof importCardButtons === 'function') ? importCardButtons(d) : '') +
-          '<button class="dc-icon-btn" title="Remove" onclick="removeDesign(\''+d.id+'\')">×</button>' +
+          '<button class="dc-icon-btn" title="Remove" aria-label="Remove design" onclick="removeDesign(\''+d.id+'\')">'+LAB_CARD_ICONS.x+'</button>' +
         '</div>' +
       '</div>' +
       '<div class="dc-viewport">' +
@@ -1259,11 +1267,10 @@ function renderDesignGrid(){
         /* v0.25.0 — the red readout chip is gone (Matt: the values are reported elsewhere) */
         (showColorbar ? buildStressColorbar(stressCapMPa, stressGamma, stressMode) : '') +
         (showBuckleBar ? buildBuckleColorbar() : '') +
-        ((VIEW_STATE.mode === 'thermal' && useRM) ? buildThermalColorbar(d) + buildClipPills() : '') +
-        ((VIEW_STATE.mode === 'flow' && useRM) ? (VIEW_STATE.flowView === 'shear' ? buildShearLegend(d) : buildFlowColorbar(d)) + buildClipPills().replace('class="lab-clip"', 'class="lab-clip lab-clip-top"') : '') +
+        /* UI refresh stage 2 — the section plane and the thermal / flow view buttons are in the viewer row, once (53b labViewToolsBuild) */
+        ((VIEW_STATE.mode === 'thermal' && useRM) ? buildThermalColorbar(d) : '') +
+        ((VIEW_STATE.mode === 'flow' && useRM) ? (VIEW_STATE.flowView === 'shear' ? buildShearLegend(d) : buildFlowColorbar(d)) : '') +
         ((VIEW_STATE.mode === 'flow' && useSV && VIEW_STATE.flowView === 'orient') ? buildOrientNote(d) : '') +
-        ((VIEW_STATE.mode === 'flow' && flowData(d) && !flowData(d).error) ? buildFlowControl() : '') +
-        ((VIEW_STATE.mode === 'thermal' && (useRM || useSV || thermalMapData(d) || kappaMode)) ? buildThermalControl() : '') +
         (showControls
           ? (VIEW_STATE.mode === 'stress'
               ? buildStressControl(d.id,
@@ -1280,7 +1287,6 @@ function renderDesignGrid(){
       '</div>';
   }
   grid.innerHTML = html;
-  if (typeof labUpdateClipPills === 'function') labUpdateClipPills();   /* v0.21.0 */
 
   /* Mount any raymarcher canvases into their .rm-mount placeholders */
   if (typeof mountRaymarcherTiles === 'function') mountRaymarcherTiles();
@@ -1422,7 +1428,7 @@ function renderDesignGrid(){
       onDeformAmpInput(id, v);
       /* 4b — update the displayed "% cell" label inline (no DOM rebuild). */
       var labelEl = e.target.parentNode.querySelector('.v');
-      if (labelEl) labelEl.textContent = (v*20).toFixed(1) + '% cell';
+      if (labelEl) labelEl.textContent = (v*20).toFixed(1) + '%';
       /* Push to raymarcher uniform if mounted; otherwise let the SVG
          fallback re-render handle visual update. */
       var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
@@ -1443,7 +1449,7 @@ function renderDesignGrid(){
       var v = parseFloat(e.target.value);
       if (typeof setBuckleExag === 'function') setBuckleExag(id, v);
       var labelEl = e.target.parentNode.querySelector('.v');
-      if (labelEl) labelEl.textContent = v.toFixed(0) + '% cell';
+      if (labelEl) labelEl.textContent = v.toFixed(0) + '%';
       var rm = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[id] : null;
       if (rm && !rm.failed && rm.setBuckleAmp) rm.setBuckleAmp(v);
     });
@@ -1462,7 +1468,7 @@ function renderDesignGrid(){
       if (typeof onStressSatInput === 'function') onStressSatInput(id, v);
       /* Update inline label */
       var labelEl = e.target.parentNode.querySelector('.v');
-      if (labelEl) labelEl.textContent = '×' + v.toFixed(2) + ' auto';
+      if (labelEl) labelEl.textContent = '×' + v.toFixed(2);
       /* Find design, re-resolve display params, re-upload stress norm
          to raymarcher.  We DON'T need to re-upload the u'/σ_VM texture
          data — uploadFields with the same fieldset and new stressMaxOverride
@@ -1535,7 +1541,7 @@ function renderDesignGrid(){
           amp2.disabled = isShear;
           amp2.parentNode.classList.toggle('dis', isShear);
           var lv = amp2.parentNode.querySelector('.v');
-          if (lv) lv.textContent = isShear ? 'n/a' : (parseFloat(amp2.value) * 20).toFixed(1) + '% cell';
+          if (lv) lv.textContent = isShear ? 'n/a' : (parseFloat(amp2.value) * 20).toFixed(1) + '%';
           if (!isShear && rm && rm.setDeformAmp) rm.setDeformAmp(parseFloat(amp2.value));
         }
       }
@@ -1545,9 +1551,7 @@ function renderDesignGrid(){
       for (var sb = 0; sb < siblings.length; sb++){
         var sibAxis = siblings[sb].dataset.axis;
         var isActive = (sibAxis === axis);
-        siblings[sb].style.background = isActive ? '#c8f542' : 'transparent';
-        siblings[sb].style.borderColor = isActive ? '#c8f542' : 'rgba(255,255,255,0.18)';
-        siblings[sb].style.color = isActive ? '#0a0a0a' : 'rgba(255,255,255,0.55)';
+        siblings[sb].classList.toggle('active', isActive);   /* selected = accent (ui-lab.css .load-axis-btn.active) */
       }
     });
   }
@@ -1567,7 +1571,10 @@ function drawersEffectiveOpen(){
 function toggleMetricsDrawers(){
   METRICS_OPEN = !drawersEffectiveOpen();
   var open = METRICS_OPEN, ds = document.querySelectorAll('.dc-drawer'), i;
-  for (i = 0; i < ds.length; i++) ds[i].classList.toggle('collapsed', !open);
+  for (i = 0; i < ds.length; i++){
+    ds[i].classList.toggle('collapsed', !open);
+    var bar = ds[i].querySelector('.dc-drawer-bar'); if (bar) bar.setAttribute('aria-expanded', open);
+  }
 }
 
 function buildSummary(stats, d){
@@ -1597,7 +1604,7 @@ function buildSummary(stats, d){
     var wraw = s.warn || (dcls === 'warn' ? dtxt : '');
     if (!s.warn && dcls === 'warn') dtxt = '';
     var wtxt = wraw ? String(wraw).replace(/<[^>]*>/g, '').replace(/"/g, '&quot;') : '';
-    var wmark = wtxt ? '<span class="rwm" role="button" tabindex="0" title="' + wtxt + '" aria-label="Warning: ' + wtxt + '" onclick="this.closest(\'.dc-row\').classList.toggle(\'show-warn\'); event.stopPropagation();">' + LAB_WARN_ICON + '</span>' : '';
+    var wmark = wtxt ? '<button type="button" class="rwm" title="' + wtxt + '" aria-label="Warning: ' + wtxt + '" onclick="this.closest(\'.dc-row\').classList.toggle(\'show-warn\'); event.stopPropagation();">' + LAB_WARN_ICON + '</button>' : '';
     rows += '<div class="dc-row' + (s.wide ? ' wide' : '') + '">' +
               '<span class="rl"'+(s.tip ? ' title="'+s.tip+'"' : '')+'>'+s.lbl+'</span>' +
               '<span class="rr">' +
@@ -1610,10 +1617,10 @@ function buildSummary(stats, d){
 
   var collapsed = !drawersEffectiveOpen();
   return '<div class="dc-drawer'+(collapsed ? ' collapsed' : '')+'">' +
-           '<div class="dc-drawer-bar" onclick="toggleMetricsDrawers()">' +
-             '<span class="db-left"><span class="chev">\u25be</span> Metrics</span>' +
+           '<button type="button" class="dc-drawer-bar" aria-expanded="'+(!collapsed)+'" onclick="toggleMetricsDrawers()">' +
+             '<span class="db-left"><span class="chev">'+LAB_CARD_ICONS.chev+'</span> Metrics</span>' +
              '<span class="db-teaser">'+teaserLbl+' <b>'+teaserVal+'</b></span>' +
-           '</div>' +
+           '</button>' +
            '<div class="dc-drawer-panel"><div class="dc-rows">'+rows+'</div></div>' +
          '</div>';
 }
@@ -1658,7 +1665,7 @@ function buildBuckleControl(designId, exagPct, axis){
     '<div class="load-axis-toggle">' + btn('xx') + btn('yy') + btn('zz') + '</div>' +
     '<label>exag</label>' +
     '<input type="range" min="0" max="30" step="1" value="'+exagPct+'" data-design-id="'+designId+'" class="buckle-exag-slider">' +
-    '<span class="v">'+exagPct.toFixed(0)+'% cell</span>' +
+    '<span class="v">'+exagPct.toFixed(0)+'%</span>' +
     '</div>';
 }
 
@@ -1706,10 +1713,10 @@ function buildStressControl(designId, sat, axis, amp){
     '</div>' +
     '<span class="vp-sl"><label>sat</label>' +
     '<input type="range" min="0" max="2" step="0.05" value="'+sat+'" data-design-id="'+designId+'" class="sat-slider">' +
-    '<span class="v">×'+sat.toFixed(2)+' auto</span></span>' +
+    '<span class="v">×'+sat.toFixed(2)+'</span></span>' +
     '<span class="vp-sl'+(shear ? ' dis' : '')+'" title="'+(shear ? 'Shear load cases have no displacement field' : 'Deformation: largest displacement as a share of the cell')+'"><label>deform</label>' +
     '<input type="range" min="0" max="1" step="0.01" value="'+amp+'" data-design-id="'+designId+'" class="amp-slider"'+(shear ? ' disabled' : '')+'>' +
-    '<span class="v">'+(shear ? 'n/a' : (amp*20).toFixed(1)+'% cell')+'</span></span>' +
+    '<span class="v">'+(shear ? 'n/a' : (amp*20).toFixed(1)+'%')+'</span></span>' +
     '</div>';
 }
 

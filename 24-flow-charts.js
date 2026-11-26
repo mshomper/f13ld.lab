@@ -31,12 +31,6 @@ function _fcDesigns() {
   return out;
 }
 
-function _fcSwitch() {
-  var v = VIEW_STATE.flowView;
-  function vb(id, txt) { return '<button class="th-btn' + (v === id ? ' active' : '') + '" onclick="onFlowViewPick(\'' + id + '\')">' + txt + '</button>'; }
-  return '<div class="th-toggle">' + vb('particles', 'flow') + vb('speed', 'speed') + vb('shear', 'shear') + vb('surface', 'K(n)') + vb('orient', 'orient') + vb('charts', 'charts') + '</div>';
-}
-
 function _fcLayout(xTitle, yTitle, extra) {
   var mono = (typeof CURVE_MONO !== 'undefined') ? CURVE_MONO : "'JetBrains Mono', monospace", grid = 'rgba(120,120,170,0.08)';
   var L = {
@@ -64,7 +58,7 @@ function renderFlowCharts() {
   var tg = cfg0 && cfg0.targetInfo, fl = (typeof flowFluid === 'function') ? flowFluid() : null;
   var dirTxt = (typeof FLOW_STATE !== 'undefined' && FLOW_STATE.dir !== 'all') ? 'flow along ' + FLOW_STATE.dir.charAt(0).toUpperCase() : 'each design along its best direction';
   var sub = dirTxt + ' · ' + (fl ? fl.name.toLowerCase() : '') + ' · ' + (tg ? 'target ' + tg.label : 'no shear target');
-  var h = '<div class="fc-head"><div class="fc-title">Flow · comparison<small>' + sub + '</small></div>' + _fcSwitch() + '</div>';
+  var h = '<div class="fc-head"><div class="fc-title">Flow · comparison<small>' + sub + '</small></div>' + '</div>';   /* UI refresh stage 2: the flow switch is in the viewer row (it stays over the charts) */
   if (!ok.length) {
     var why = rows.length ? (rows[0].cp.why || 'No wall shear data') : 'No designs loaded';
     host.innerHTML = h + '<div class="fc-empty">' + why + '</div>';

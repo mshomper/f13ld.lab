@@ -1,14 +1,14 @@
 /* ============================================================
    F13LD.lab · 51-dock.js  (v0.22.0)
-   Bottom dock + Configure drawer (replaces the v0.21 controls panel).
+   Run settings: the control pane's Model and Physics sections and the
+   footer (designs / estimate / hardware, Run all).
 
-   The dock is one row: Configure · a tag per run setting (Model, Elastic,
-   Buckling, Crush, Thermal κ) · designs / estimate / hardware · Run.
-   Configure (or any tag) opens a drawer that slides up over the cards —
-   it does not resize them, so the viewports never stretch or re-render.
-   The drawer has a tab per physics mode with its on/off switch and only
-   that mode's settings, each with the help text the old pills hid in
-   hover tooltips.
+   UI refresh stage 2: the Configure drawer and the dock tags are gone.
+   The pane is docked on the right (sheet on a phone). Physics has one fold
+   per mode (Elastic, Buckling, Crush, Thermal κ, Flow): the run toggle and
+   a one-line summary in the header, that mode's settings in the body.
+   (Before: a drawer that slid up over the cards, a tab per mode, a tag
+   per mode in the dock.)
 
    State lives where it always did (PHYS_STATE, GRID_STATE, BUCKLE_STATE,
    NONLIN_STATE, THERMAL_STATE, GEOM_STATE, MATERIAL_STATE in 50-controls.js);
@@ -46,13 +46,16 @@ LAB_ICONS.exportDoc = '<path d="M11 5 H24 L30 11 V35 H11 Z"' + LAB_ICON_SV + '/>
 LAB_ICONS.front = '<path d="M6 5 V34 H36"' + LAB_ICON_SV + ' opacity=".7"/><path d="M10 9 C 14 17, 20 24, 33 29"' + LAB_ICON_SV + ' stroke-width="2" opacity=".75"/><circle cx="14" cy="26" r="1.9" fill="currentColor"/><circle cx="21" cy="30" r="1.9" fill="currentColor"/><circle cx="27" cy="25" r="1.9" fill="currentColor" opacity=".7"/><circle cx="12" cy="18" r="1.9" fill="currentColor" opacity=".7"/><circle class="acc" cx="18" cy="19.5" r="3.2"/>';
 LAB_ICONS.slider = '<path d="M5 20 H35"' + LAB_ICON_SV + '/><path d="M5 12 V28 M35 12 V28"' + LAB_ICON_SV + ' stroke-width="2" opacity=".5"/><circle class="acc" cx="22" cy="20" r="4.2"/>';
 LAB_ICONS.help = '<circle cx="20" cy="20" r="15"' + LAB_ICON_SV + '/><path d="M15.2 15.5 C 15.2 12.2, 17.5 10.8, 20 10.8 C 22.8 10.8, 24.8 12.6, 24.8 15.1 C 24.8 18.4, 20 18.7, 20 22.5"' + LAB_ICON_SV + '/><circle cx="20" cy="28.6" r="1.9" fill="currentColor"/>';
+/* UI refresh stage 2 — Results tab (phone): a table of metrics by design */
+LAB_ICONS.results = '<path d="M6 7 H34 V33 H6 Z"' + LAB_ICON_SV + '/><path d="M6 15 H34 M16 15 V33"' + LAB_ICON_SV + ' stroke-width="2.2" opacity=".75"/><circle class="acc" cx="25" cy="24" r="3"/>';
 function labIconSvg(name){ return '<svg viewBox="0 0 40 40" aria-hidden="true">' + (LAB_ICONS[name] || '') + '</svg>'; }
 
 /* Run-button markup the solver code paints through (50-controls.js). */
 var DOCK_RUN_IDLE    = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1 L9 5 L2 9 Z" fill="currentColor"/></svg>Run all';
 var DOCK_RUN_RERUN   = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1 L9 5 L2 9 Z" fill="currentColor"/></svg>Re-run';
 var DOCK_RUN_CANCEL  = '<svg class="dock-spin" width="15" height="15" viewBox="0 0 40 40" aria-hidden="true"><path d="M20 3 L34 11 L34 29 L20 37 L6 29 L6 11 Z" fill="none" stroke="#2c4e30" stroke-width="2.5"/><g class="arcs"><path d="M20 5 A15 15 0 0 1 34 18" fill="none" stroke="#c8f542" stroke-width="3.5" stroke-linecap="round"/><path d="M20 35 A15 15 0 0 1 6 22" fill="none" stroke="#1D9E75" stroke-width="3.5" stroke-linecap="round"/></g><circle cx="20" cy="20" r="3.4" fill="#c8f542"/></svg>Cancel';
-var DOCK_RUN_DONE    = '✓ Run complete';
+var DOCK_TICK        = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.3 L5 8.8 L9.5 3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+var DOCK_RUN_DONE    = DOCK_TICK + 'Run complete';
 
 var DOCK_MODES = [
   { key: 'elastic', name: 'Elastic' },
@@ -62,9 +65,10 @@ var DOCK_MODES = [
   { key: 'flow',    name: 'Flow' }
 ];
 
-/* Drawer open/tab — a per-viewer convenience only (try/catch). */
-var DOCK_STATE = { open: false, tab: 'model' };
-var DOCK_STORE_KEY = 'f13ld.lab.dock.v1';
+/* UI refresh stage 2 — which folds of the control pane are open (the five physics folds, the Flow readout fold, the Model
+   defaults fold). A per-viewer convenience only (try/catch). */
+var DOCK_STATE = { open: { elastic: false, buckle: false, nonlin: false, thermal: false, flow: false, flowReadout: false, defaults: false } };
+var DOCK_STORE_KEY = 'f13ld.lab.physOpen';
 
 /* ============================================================
    INIT
@@ -140,10 +144,7 @@ function initDock(){
   labLoadSettings();   /* v0.24.0 — before the first paint */
   try {
     var saved = JSON.parse(localStorage.getItem(DOCK_STORE_KEY) || 'null');
-    if (saved && typeof saved === 'object'){
-      DOCK_STATE.open = !!saved.open;
-      if (document.querySelector('.dr-pane[data-pane="' + saved.tab + '"]')) DOCK_STATE.tab = saved.tab;
-    }
+    if (saved && typeof saved === 'object') for (var fk in DOCK_STATE.open) if (typeof saved[fk] === 'boolean') DOCK_STATE.open[fk] = saved[fk];
   } catch (e) {}
   var icons = document.querySelectorAll('[data-ico]');
   for (var i = 0; i < icons.length; i++) icons[i].innerHTML = labIconSvg(icons[i].getAttribute('data-ico'));
@@ -155,30 +156,31 @@ function initDock(){
 }
 
 function saveDockState(){
-  try { localStorage.setItem(DOCK_STORE_KEY, JSON.stringify({ open: DOCK_STATE.open, tab: DOCK_STATE.tab })); } catch (e) {}
+  try { localStorage.setItem(DOCK_STORE_KEY, JSON.stringify(DOCK_STATE.open)); } catch (e) {}
 }
 
 /* ============================================================
-   DRAWER
+   FOLDS (control pane, UI refresh stage 2)
+   The Configure drawer is the control pane now: always there, nothing to open. A fold's header holds the run
+   toggle and a one-line summary; the body opens on a tap and is remembered.
    ============================================================ */
-function toggleDrawer(force){
-  DOCK_STATE.open = (typeof force === 'boolean') ? force : !DOCK_STATE.open;
+function toggleDrawer(){ /* v0.36 — shim: the Configure button is gone; kept so old callers do nothing */ }
+function onFoldToggle(key, force){
+  if (!DOCK_STATE.open.hasOwnProperty(key)) return;
+  DOCK_STATE.open[key] = (typeof force === 'boolean') ? force : !DOCK_STATE.open[key];
   closeDropdowns();
   saveDockState();
-  paintDock();
+  paintFolds();
 }
-function onDrawerTab(tab){
-  DOCK_STATE.tab = tab;
-  saveDockState();
-  paintDock();
-}
-/* A dock tag opens the drawer at its tab; the same tag again closes it. */
-function onDockTag(tab){
-  if (DOCK_STATE.open && DOCK_STATE.tab === tab) DOCK_STATE.open = false;
-  else { DOCK_STATE.tab = tab; DOCK_STATE.open = true; }
-  closeDropdowns();
-  saveDockState();
-  paintDock();
+function paintFolds(){
+  var els = document.querySelectorAll('.fold[data-fold]'), i;
+  for (i = 0; i < els.length; i++){
+    var k = els[i].getAttribute('data-fold'), on = !!DOCK_STATE.open[k];
+    els[i].classList.toggle('open', on);
+    var b = els[i].querySelector('.fold-btn'), body = els[i].querySelector('.fold-b');
+    if (b) b.setAttribute('aria-expanded', on);
+    if (body) body.hidden = !on;
+  }
 }
 
 /* ============================================================
@@ -298,7 +300,7 @@ function renderDropdown(key){
       for (var j = 0; j < groups[i].items.length; j++){
         var it = groups[i].items[j], on = it.v === v;
         html += '<button type="button" role="option" aria-selected="' + on + '" class="dd-opt' + (on ? ' on' : '') + '" onclick="pickDropdown(\'' + key + '\', \'' + it.v + '\', event)">' +
-          '<span class="tick">' + (on ? '✓' : '') + '</span><span>' + escHtml(it.name) + (it.sub ? '<small>' + escHtml(it.sub) + '</small>' : '') + '</span></button>';
+          '<span class="tick">' + (on ? DOCK_TICK : '') + '</span><span>' + escHtml(it.name) + (it.sub ? '<small>' + escHtml(it.sub) + '</small>' : '') + '</span></button>';
       }
     }
     html += '</div>';
@@ -355,8 +357,14 @@ function dockSummary(key){
   if (key === 'elastic') return dockGridLabel();
   if (key === 'buckle')  return BUCKLE_STATE.N + '³';
   if (key === 'nonlin')  return NONLIN_STATE.N + '³ · ' + Math.round(NONLIN_STATE.cap * 100) + '% · ' + (NONLIN_STATE.axis === 'all' ? 'XYZ' : NONLIN_STATE.axis.toUpperCase());
-  if (key === 'thermal') return thermalFillersOn().map(function(f){ return f.id; }).join(' · ') || 'no filler';
-  if (key === 'flow')    return FLOW_STATE.N + '³' + (FLOW_STATE.tol < 1e-6 ? ' · high' : '') + ' · ' + (FLOW_STATE.dir === 'all' ? 'best' : FLOW_STATE.dir.charAt(0).toUpperCase());
+  if (key === 'thermal') return thermalFillersOn().map(function(f){ return f.id; }).join(', ') || 'no filler';
+  if (key === 'flow')    return FLOW_STATE.N + '³ · ' + (FLOW_STATE.tol < 1e-6 ? 'high' : 'standard');
+  if (key === 'flowReadout'){   /* the Readout fold: direction · fluid · target · units · chamber */
+    var fl = FLOW_STATE.fluid === 'water' ? 'water 37 °C' : (FLOW_STATE.fluid === 'medium' ? 'medium' : FLOW_STATE.muCustom + ' mPa·s');
+    var tg = 'no target', t = (typeof FLOW_SHEAR_TARGETS !== 'undefined') ? FLOW_SHEAR_TARGETS.filter(function(x){ return x.id === FLOW_STATE.target; })[0] : null;
+    if (t && t.id !== 'none') tg = t.id === 'custom' ? (FLOW_STATE.tLo + '–' + FLOW_STATE.tHi + ' mPa') : t.name.toLowerCase();
+    return (FLOW_STATE.dir === 'all' ? 'All' : FLOW_STATE.dir.charAt(0).toUpperCase()) + ' · ' + fl + ' · ' + tg + ' · ' + (FLOW_STATE.speedUnit === 'm' ? 'm/s' : 'mm/s') + ' · ' + FLOW_STATE.chamberMm + ' mm';
+  }
   return '';
 }
 function dockMaterialShort(){
@@ -421,26 +429,13 @@ function paintDock(){
   /* drop-downs */
   renderDropdown('material');
   renderDropdown('conn');
-  el = document.getElementById('drModelVal');
-  if (el) el.textContent = MATERIAL_STATE.id === F13LD_MATERIAL_RECIPE_ID ? 'per design' : dockMaterialShort().split(' (')[0];
-  /* drawer */
-  var dr = document.getElementById('cfgDrawer');
-  if (dr) dr.classList.toggle('open', DOCK_STATE.open);
-  el = document.getElementById('cfgBtn');
-  if (el){ el.classList.toggle('open', DOCK_STATE.open); el.setAttribute('aria-expanded', DOCK_STATE.open); }
-  els = document.querySelectorAll('.dr-tab');
-  for (i = 0; i < els.length; i++) els[i].classList.toggle('on', els[i].getAttribute('data-tab') === DOCK_STATE.tab);
-  els = document.querySelectorAll('.dr-pane');
-  for (i = 0; i < els.length; i++) els[i].classList.toggle('on', els[i].getAttribute('data-pane') === DOCK_STATE.tab);
-  /* dock tags */
-  var tags = document.getElementById('dockTags');
-  if (tags){
-    var h = '<button type="button" class="dock-tag" onclick="onDockTag(\'model\')" title="Material and voxel prep"><span class="ico ico-sm mdl">' + labIconSvg('model') + '</span><b>' + escHtml(dockMaterialShort()) + '</b></button>';
-    for (i = 0; i < DOCK_MODES.length; i++){
-      var md = DOCK_MODES[i], mon = !!PHYS_STATE[md.key];
-      h += '<button type="button" class="dock-tag' + (mon ? '' : ' off') + '" onclick="onDockTag(\'' + md.key + '\')" title="' + md.name + (mon ? ' — runs' : ' — off') + '">' +
-        '<span class="ico ico-sm">' + labIconSvg(md.key) + '</span><b>' + md.name + '</b>' + (mon ? escHtml(dockSummary(md.key)) : 'off') + '</button>';
-    }
-    tags.innerHTML = h;
+  /* folds: one-line summary in every header ("off" when the mode does not run), open state */
+  for (i = 0; i < DOCK_MODES.length; i++){
+    var md = DOCK_MODES[i];
+    el = document.querySelector('[data-fold-sum="' + md.key + '"]');
+    if (el) el.textContent = PHYS_STATE[md.key] ? dockSummary(md.key) : 'off';
   }
+  el = document.querySelector('[data-fold-sum="flowReadout"]');
+  if (el) el.textContent = dockSummary('flowReadout');
+  paintFolds();
 }

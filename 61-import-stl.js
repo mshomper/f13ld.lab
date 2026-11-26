@@ -620,8 +620,8 @@ function importCardPills(d) {
 
 function importCardButtons(d) {
   if (!d || d.family !== 'import') return '';
-  return '<button class="dc-icon-btn" title="Adjust wall offset" onclick="openImportDialogForDesign(\'' + d.id + '\')">⚙</button>' +
-         '<button class="dc-icon-btn" title="Save as JSON with the geometry inside (reload it with + Add Design)" onclick="exportImportDesign(\'' + d.id + '\')">⤓</button>';
+  return '<button class="dc-icon-btn" title="Adjust wall offset" aria-label="Adjust wall offset" onclick="openImportDialogForDesign(\'' + d.id + '\')">' + LAB_CARD_ICONS.gear + '</button>' +
+         '<button class="dc-icon-btn" title="Save as JSON with the geometry inside (reload it with + Add Design)" aria-label="Save as JSON" onclick="exportImportDesign(\'' + d.id + '\')">' + LAB_CARD_ICONS.save + '</button>';
 }
 
 /* ── Export / re-import with the grid embedded ────────────── */

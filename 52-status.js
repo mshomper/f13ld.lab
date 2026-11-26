@@ -90,7 +90,7 @@ function labStatusSet(text, classMod) {
   else if (classMod === 'warn') state = 'warn';
   LAB_STATUS.state = state;
   chip.className = 'lab-status ' + state;
-  txt.textContent = state === 'done' ? '✓ ' + t : (state === 'error' ? '✕ ' + t : t);
+  txt.textContent = t;   /* UI refresh stage 2: the done / error mark is drawn by CSS (ui-lab.css .lab-status .ls-txt::before) */
   return true;
 }
 /* run progress 0…1 (50-controls paintRunProgress) */
