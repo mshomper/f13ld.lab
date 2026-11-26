@@ -1491,8 +1491,10 @@ function renderDesignGrid(){
       }
       /* Re-render to refresh the colorbar overlay (its CSS-side labels
          show the new cap value).  This is a DOM rebuild, but stress
-         saturation isn't typically dragged at 60Hz — pulled or stepped. */
-      if (typeof renderDesignGrid === 'function') renderDesignGrid();
+         saturation isn't typically dragged at 60Hz — pulled or stepped.
+         Stage 3: the liquid slider sets LAB_SAT_DRAG while it is dragged (a rebuild would destroy the slider under
+         the finger); the release fires one more input without it, which rebuilds once. */
+      if (typeof renderDesignGrid === 'function' && !window.LAB_SAT_DRAG) renderDesignGrid();
     });
   }
 
@@ -2321,7 +2323,7 @@ function renderNonlinearViz(){
     axSw += '</span>';
   }
   scrub.innerHTML = axSw +
-    '<button class="nl-play" id="nlPlayBtn" title="Play / pause">\u275a\u275a</button>' +
+    '<button class="nl-play" id="nlPlayBtn" title="Play / pause" aria-label="Play / pause" aria-pressed="true">' + LAB_CARD_ICONS.pause + '</button>' +
     '<div class="nl-track-wrap">' +
       '<div class="nl-ticks" id="nlTicks"></div>' +
       '<input type="range" id="nlScrub" min="0" max="1000" value="0" step="1">' +
@@ -2352,11 +2354,11 @@ function renderNonlinearViz(){
       var kpi = function(v, k, warn){ return '<div class="nl-kpi' + (warn ? ' warn' : '') + '"><div class="v">' + v + '</div><div class="k">' + k + '</div></div>'; };
       var warns = '';
       if (typeof voidLimited === 'function' && voidLimited(nlm.E0, nlm.Es_MPa, nlm.voidContrast))
-        warns += '<div class="nl-mc-warn">⚠ void-limited · void ' + nlm.voidContrast.toExponential(0) + ' of solid</div>';
-      if (nlm.voidScaled === false) warns += '<div class="nl-mc-warn">⚠ void not scaled · run Elastic too</div>';
+        warns += '<div class="nl-mc-warn">' + LAB_WARN_ICON + ' void-limited · void ' + nlm.voidContrast.toExponential(0) + ' of solid</div>';
+      if (nlm.voidScaled === false) warns += '<div class="nl-mc-warn">' + LAB_WARN_ICON + ' void not scaled · run Elastic too</div>';
       if (nlm.lateralFloor > (typeof NL_LATERAL_FLAG !== 'undefined' ? NL_LATERAL_FLAG : 0.05))
-        warns += '<div class="nl-mc-warn" title="The side stress of this crush could only be resolved to about ' + Math.round(nlm.lateralFloor * 100) + '% of the axial stress at the solver\'s tolerance. The elastic slope and the yield onset hold; the curve past yield is approximate.">⚠ post-yield approximate · side stress ±' + Math.round(nlm.lateralFloor * 100) + '%</div>';
-      if (nlm.truncated) warns += '<div class="nl-mc-warn">⚠ partial curve' + (nlm.truncReason ? ' (' + nlm.truncReason + ')' : '') + '</div>';
+        warns += '<div class="nl-mc-warn" title="The side stress of this crush could only be resolved to about ' + Math.round(nlm.lateralFloor * 100) + '% of the axial stress at the solver\'s tolerance. The elastic slope and the yield onset hold; the curve past yield is approximate.">' + LAB_WARN_ICON + ' post-yield approximate · side stress ±' + Math.round(nlm.lateralFloor * 100) + '%</div>';
+      if (nlm.truncated) warns += '<div class="nl-mc-warn">' + LAB_WARN_ICON + ' partial curve' + (nlm.truncReason ? ' (' + nlm.truncReason + ')' : '') + '</div>';
       mh += '<div class="nl-metric-card nl-kpi-card" style="--c:' + em.design.color + '">' +
               '<div class="nl-mc-head"><span class="dot"></span><b>' + nlCubeLabel(em.design) + '</b>' +
                 '<span class="t">' + (em.design.title || '') + '</span><span class="ax">' + axU + ' crush</span></div>' +
@@ -2433,7 +2435,7 @@ function renderNonlinearViz(){
     slider.addEventListener('input', function(){
       NLVIZ.manual = true;
       NLVIZ.playing = false;
-      if (playBtn) playBtn.innerHTML = '\u25b6';
+      if (playBtn){ playBtn.innerHTML = LAB_CARD_ICONS.play; playBtn.setAttribute('aria-pressed', 'false'); }
       NLVIZ.frac = (+this.value) / 1000;
       nlvizApply(NLVIZ.frac);
     });
@@ -2442,7 +2444,8 @@ function renderNonlinearViz(){
     playBtn.addEventListener('click', function(){
       NLVIZ.pinned = false;
       NLVIZ.playing = !NLVIZ.playing;
-      this.innerHTML = NLVIZ.playing ? '\u275a\u275a' : '\u25b6';
+      this.innerHTML = NLVIZ.playing ? LAB_CARD_ICONS.pause : LAB_CARD_ICONS.play;
+      this.setAttribute('aria-pressed', String(!!NLVIZ.playing));
       if (NLVIZ.playing){
         NLVIZ.manual = false;
         NLVIZ.t0 = performance.now() - NLVIZ.frac * NLVIZ.periodMs;
@@ -2460,7 +2463,7 @@ function renderNonlinearViz(){
   if (NLVIZ.raf) cancelAnimationFrame(NLVIZ.raf);
   NLVIZ.raf = null;
   if (nlRunPaused){
-    if (playBtn) playBtn.innerHTML = '\u25b6';
+    if (playBtn){ playBtn.innerHTML = LAB_CARD_ICONS.play; playBtn.setAttribute('aria-pressed', 'false'); }
     for (var pz = 0; pz < entries.length; pz++){
       var pr = (typeof LAB_RM_REGISTRY !== 'undefined') ? LAB_RM_REGISTRY[entries[pz].id] : null;
       if (pr){ pr._nlPaused = false; pr._nlDrawOnce = true; }   /* one frame so the cube is not blank */
@@ -2487,7 +2490,7 @@ function nlvizScrubToEps(eps, kind){
   if (kind === 'pin'){ NLVIZ.pinned = true; NLVIZ.resumePlay = false; }
   NLVIZ.playing = false;
   NLVIZ.manual = true;
-  var pb = document.getElementById('nlPlayBtn'); if (pb) pb.innerHTML = '▶';
+  var pb = document.getElementById('nlPlayBtn'); if (pb){ pb.innerHTML = LAB_CARD_ICONS.play; pb.setAttribute('aria-pressed', 'false'); }
   NLVIZ.frac = Math.max(0, Math.min(1, eps / m));
   var sl = document.getElementById('nlScrub'); if (sl) sl.value = Math.round(NLVIZ.frac * 1000);
   nlvizApply(NLVIZ.frac);
@@ -2497,7 +2500,7 @@ function nlvizScrubRelease(){
   NLVIZ.hovering = false;
   if (NLVIZ.resumePlay && !NLVIZ.pinned){
     NLVIZ.playing = true; NLVIZ.manual = false;
-    var pb = document.getElementById('nlPlayBtn'); if (pb) pb.innerHTML = '❚❚';
+    var pb = document.getElementById('nlPlayBtn'); if (pb){ pb.innerHTML = LAB_CARD_ICONS.pause; pb.setAttribute('aria-pressed', 'true'); }
     NLVIZ.t0 = performance.now() - NLVIZ.frac * NLVIZ.periodMs;
     if (!NLVIZ.raf) NLVIZ.raf = requestAnimationFrame(nlvizTick);
   }

@@ -1,0 +1,200 @@
+/* ============================================================================
+   F13LD UI template · f13ui-style.css
+   Styles for the liquid widgets inside the F13LD shell. Everything is scoped to html.f13w,
+   which f13ui-wire.js adds only when WebGL works, so the native controls remain the fallback.
+   Inline as <style id="f13ui-style"> after the tool's main style.
+   ========================================================================== */
+html.f13w{--rail-w:72px}
+html.f13w [data-native]{display:none!important}
+
+/* header: the Recipe menu replaces Queue / Mesh / Lab / Export; the queue client's own buttons stay
+   mounted (invisible, no pointer) so its menus and feedback still work when a Recipe item triggers them */
+html.f13w #w-recipe{flex:none}
+html.f13w .fh-right>.f13ldq-split,html.f13w .fh-right>.f13ldq-main{position:absolute;right:14px;top:calc(env(safe-area-inset-top) + 8px);pointer-events:none;z-index:-1}
+html.f13w .fh-right>.f13ldq-split>.f13ldq-main,html.f13w .fh-right>.f13ldq-split>.f13ldq-caret,html.f13w .fh-right>.f13ldq-main{opacity:0}
+html.f13w .fh-right>.f13ldq-split>:not(.f13ldq-main):not(.f13ldq-caret){pointer-events:auto}
+html.f13w #f13ldq-fallback{display:none}
+html.f13w .fh-mesh-btn{display:none}
+@media (max-width:560px){
+  html.f13w .f13ld-header{flex-wrap:nowrap;padding:0 10px;padding-top:env(safe-area-inset-top);column-gap:8px}
+  html.f13w .f13ld-header::after{display:none}
+  html.f13w .fh-left{gap:8px;flex:none}
+  html.f13w .fh-right{display:flex;gap:6px}
+}
+@media (max-width:380px){
+  html.f13w .f13ld-header{column-gap:4px;padding-left:8px;padding-right:8px}
+  html.f13w .fh-divider{display:none}
+  html.f13w .fh-left{gap:6px}
+  html.f13w .fh-right{gap:3px}
+}
+
+/* sliders: the widget carries label · value · hint · track; the row keeps only .row-extra.
+   Hit geometry: the track's hit box runs 4px below the widget, the value's 4px above it. */
+/* The block rule is wrapped in :where() so it weighs (0,1,0) only: it still beats the shell's `.sc-group{display:flex}` (it comes
+   later) but a tool's own one-class hiding rule (.dr-off{display:none}, .hide, ...) at its own weight is not beaten.
+   Hiding hooks that always win: [hidden] and .f13-hide on the row. */
+:where(html.f13w) .sc-group:where(.sl){display:block}
+html.f13w .sc-group.sl{margin:6px 0 10px}
+html.f13w .sc-group.sl[hidden],html.f13w .sc-group.sl.f13-hide{display:none}
+html.f13w .sc-group.sl>:not(.f13w-slider):not(.row-extra){display:none}
+html.f13w .f13w-slider{width:100%}
+html.f13w .sl>.row-extra{margin-top:2px}
+.f13w-lab{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px}
+.f13w-lab>label{font-size:13px;font-weight:550;line-height:18px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.lq-sl-head .f13h-i{pointer-events:auto;flex:none;z-index:3}   /* z: its 44px hit box sits above the track's hit box */
+/* the help engine may append the (i) inside the <label>: a clipping label would cut its 44x44 ::after to the label box
+   (31x20 measured). overflow:clip keeps the ellipsis, and overflow-clip-margin lets the hit box reach past the label */
+.f13w-lab>label{overflow:clip;overflow-clip-margin:16px}
+.f13w-lab .f13h-i{position:relative;flex:none}
+/* (i) hit boxes never cover a neighbour (round 4). 44 px only where free space allows, else shrunk toward the glyph:
+   slider head: 46 wide; 5 px above (the row above's track hit box ends there) and 5 below (stops above the track's bar at 626 of 628), so 28 tall
+   label beside a control (dropdown, segmented, clip radio): the 8 px flex gap to the control is the right limit, the label side on the left is free: 44 x 44 */
+/* insets are measured from the padding box: the (i) is 18 px with a 1 px border (shell.css), so 16 px + insets */
+.f13w-lab .f13h-i::after{content:'';position:absolute;inset:-6px -15px -6px -15px}
+.sc-group>label .f13h-i::after,.sc-group>.f13h-i::after,.clip-lbl .f13h-i::after{inset:-14px -9px -14px -19px}
+/* fraction labels (⅛ ¼ …): mono faces lack the glyphs, so use the UI face for those sliders */
+.f13w-frac .lq-sl-num{font-family:var(--lq-font);font-size:15px}
+
+/* widget canvases bleed 24px for glow; clip where the column clips anyway (no sideways overflow) */
+html.f13w .sec{overflow-x:clip}
+@media (max-width:899px){html.f13w .sec{overflow-clip-margin:16px}}
+
+/* mounts */
+html.f13w .f13w-seg{flex:1 1 auto;min-width:0}
+html.f13w .f13w-dd{flex:1 1 120px;min-width:0}
+html.f13w .f13w-dd-c{flex:none}
+html.f13w #w-run{width:100%}
+html.f13w #w-clip{display:flex;align-items:center;gap:8px;height:44px;padding:0 6px 0 10px;background:oklch(0.13 0.012 265 / 0.72);border:1px solid var(--hair);border-radius:14px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+html.f13w #w-clip>.clip-lbl{margin:0}
+#w-recipe:not(.lq-wsd),#w-run:not(.lq-pb),#w-clip:empty{display:none}
+
+/* sections */
+html.f13w #sectionsRail>.f13w-rail{margin:14px 0 0 4px}
+html.f13w .sb-fallback,html.f13w #sectionsRail .sb-fallback,html.f13w #sectionsBar .sb-fallback{display:none}   /* id rules in a tool's stage-2 CSS would otherwise win */
+/* the clip overlay's native pills give way to the clip radio (the wire reuses its .clip-lbl) */
+html.f13w.f13w-clip #clipOverlay{display:none}
+html.f13w #sectionsBar{border-top:none;padding:0 8px env(safe-area-inset-bottom)}
+
+/* help: "show" jumps from a drawer card to its control */
+/* a real 44 px tall box (negative block margins keep the card header's height); the pill is drawn by ::before at 24 px, so no hit area reaches past the button */
+.f13w-show{position:relative;margin:-10px 0 -10px auto;display:inline-flex;align-items:center;gap:4px;height:44px;min-width:44px;padding:0 8px;border:0;background:none;color:var(--ink-dim);font:500 11px var(--lq-font);cursor:pointer;z-index:1}
+.f13w-show::before{content:'';position:absolute;left:0;right:0;top:10px;bottom:10px;border:1px solid var(--hair-strong);border-radius:999px;transition:color .15s,border-color .15s}
+.f13w-show>*{position:relative}
+.f13w-show:hover::before{border-color:var(--accent-line)}
+.f13w-show:hover{color:var(--accent);border-color:var(--accent-line)}
+.f13w-flash{border-radius:12px;animation:f13wFlash 1.4s var(--ease)}
+@keyframes f13wFlash{0%,60%{box-shadow:0 0 0 2px var(--accent-line),0 0 0 6px var(--accent-soft)}100%{box-shadow:0 0 0 0 transparent}}
+
+/* toggles (natives hidden as state) */
+.f13w-tg-sw{width:max-content;max-width:100%}
+.f13w-tg-menu{width:100%}
+html.f13w .f13v-p{padding:2px 10px 6px 12px;min-width:184px;gap:0}
+html.f13w .f13v-p .f13v-r{margin-top:4px;min-height:28px;padding:0 10px;position:relative}
+html.f13w .f13v-p .f13v-r::after{content:'';position:absolute;left:-6px;right:-6px;top:-8px;bottom:-12px}   /* 31 px face + 20 = 51 px hit height; the extra reach is below, where only panel padding is, so the toggle above keeps its hit area */
+
+/* inline slider (F13UI.mount.slider {inline:true}, from F13LD.mesh's axis rows): label left, track middle, value right, one 36 px row.
+   The kit slider is a 52 px box (head over track, track bar centred at y 36): the row lets it hang 18 px above itself, moves the
+   track's hit area down inside the row, and lifts label and value out of the head to the sides. --f13w-il = label column width. */
+html.f13w .f13w-inline{--f13w-il:20px;position:relative;display:block;height:36px;padding:0 56px 0 var(--f13w-il)}
+html.f13w .f13w-inline>:not(.f13w-slider){display:none}
+html.f13w .f13w-inline .f13w-slider{margin-top:-18px;overflow:visible;pointer-events:none}
+html.f13w .f13w-inline .lq-sl canvas{pointer-events:none}
+html.f13w .f13w-inline .lq-sl-track{top:18px;pointer-events:auto}
+html.f13w .f13w-inline .lq-sl-ring{margin-top:-6px}
+html.f13w .f13w-inline .lq-sl-label,html.f13w .f13w-inline .f13w-lab{position:absolute;right:calc(100% + 4px);top:27px;width:calc(var(--f13w-il) - 4px);overflow:visible;text-align:left;font:600 13px var(--lq-mono);color:var(--ink-faint)}
+html.f13w .f13w-inline .lq-sl-val{position:absolute;left:calc(100% + 6px);top:27px;width:46px;padding:0;text-align:right}
+html.f13w .f13w-inline .lq-sl-val::before{right:0;width:100%;top:-4px;bottom:-4px}
+
+/* ============================================================================
+   F13LD.lab rules (stage 3). Everything above is the template, verbatim.
+   ========================================================================== */
+/* control pane: the .dd menus and the state <select>s give way to the dropdown widgets */
+.st-sel{display:none}
+html.f13w .dd{display:none}
+html.f13w .sc-group.col>.ctl .f13w-dd,html.f13w .sc-group.col>.ctl .f13w-seg{width:100%;flex:1 1 100%}
+html.f13w .ctl{min-width:0}
+.lab-segrow{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%;flex-wrap:nowrap}
+.lab-segl{flex:none;font:500 11px var(--lq-mono);color:var(--ink-faint);letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+.lab-segrow .f13w-seg{flex:0 1 auto;min-width:0}
+
+/* the phone's peek sheet is short: the section note gives its room to the controls */
+@media (max-width:899px){html.f13w .sec-note{display:none}}
+/* fold headers: the run toggle is the kit toggle; the (i) sits before it */
+html.f13w .fold-h .f13w-tg-phys{flex:none;margin:0 6px 0 0;width:auto}
+html.f13w .fold-h>.f13h-i{align-self:center}
+html.f13w .chipset{display:flex;flex-wrap:wrap;gap:2px 16px}
+.f13w-tg-chip{flex:none;width:auto;min-width:0}
+html.f13w .at-seg:has(>.f13w-tg){background:none;border:0;padding:0;gap:6px;display:inline-flex}
+html.f13w .sw-phys .f13w-tg{flex:none}
+html.f13w .sw-phys,html.f13w .sw-phys .at-seg{flex-wrap:wrap;row-gap:2px}
+html.f13w .cp-controls .f13w-tg-chip{margin:0}
+
+/* view bar: the VIEW tabs widget, the rows under it (widget canvases bleed 24 px for glow: the viewer clips them, so it never scrolls sideways) */
+html.f13w .vw-bar{overflow-x:clip}
+html.f13w .view-strip>.lab-vtabs{flex:0 1 auto;min-width:0;max-width:100%}
+html.f13w .vw-tools .vw-grp .f13w-seg,html.f13w .vw-tools .lab-segrow .f13w-seg{flex:0 1 auto}
+@media (max-width:899px){html.f13w .view-strip>.lab-vtabs{flex:1 1 100%;width:100%!important}}
+html.f13w #w-clip[hidden]{display:none}
+html.f13w .vw-tools .fa-sl.f13w-inline,html.f13w .geom-view-row .fa-sl.f13w-inline{flex:0 1 270px;width:270px;min-width:190px;height:36px;padding-right:56px}
+html.f13w .geom-view-row .geom-sl.f13w-inline .fa-v{display:none}
+html.f13w .vw-tools .flow-anim-group.show{flex-wrap:wrap;gap:0 14px}
+
+/* tile overlays: axis segmented, inline sat / deform / exag rows; on a phone the sliders fold behind one button */
+html.f13w .vp-deform-control{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;padding:6px 8px}
+html.f13w .vp-deform-control .f13w-seg{flex:1 1 100%;min-width:0}
+html.f13w .vp-deform-control .vp-sl,html.f13w .vp-deform-control .f13w-inline{flex:1 1 100%;width:auto;min-width:0}
+html.f13w .vp-stress-control .vp-sl.f13w-inline{flex:1 1 100%}
+html.f13w .vp-sl.dis{opacity:.4}
+.vp-fold{display:none;flex:none;width:44px;height:44px;place-items:center;padding:0;border:0;border-radius:12px;background:var(--input);color:var(--ink-dim);cursor:pointer}
+.vp-fold svg{width:16px;height:16px}
+.vp-fold[aria-expanded=true]{color:var(--accent);background:var(--accent-soft)}
+@media (max-width:899px){
+  html.f13w .vp-stress-control{flex-wrap:nowrap;flex-direction:row;align-items:flex-start;flex-wrap:wrap}
+  html.f13w .vp-stress-control .f13w-seg{flex:1 1 0}
+  html.f13w .vp-stress-control .vp-fold{display:grid;margin-left:6px}
+  html.f13w .vp-stress-control:not(.open) .vp-sl{display:none}
+  html.f13w .vp-stress-control.open .vp-sl{flex:1 1 100%}
+}
+
+/* the crush scrubber: a play toggle, the time slider, the ticks under it */
+html.f13w #nlScrub{display:none}
+html.f13w .lab-scrub{position:relative;min-width:0}
+html.f13w .nl-play{display:none}
+html.f13w .merged-scrubber .f13w-tg{flex:none}
+
+/* one bar per run: the stage and the time left are on the Run all button, Cancel beside it; the status chip keeps its state text */
+html.f13w #progRow{display:none!important}
+html.f13w .lab-status .ls-bar,html.f13w .fh-prog,html.f13w .dock-spin{display:none}
+html.f13w .dock{flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px}
+html.f13w .dock-meta{flex:1 1 100%}
+html.f13w #w-run{flex:1 1 0;width:auto;min-width:0}
+.run-cancel{display:none;flex:none;height:44px;padding:0 18px;border-radius:12px;border:1px solid var(--hair-strong);background:transparent;color:var(--ink);font:600 14px var(--lq-font);cursor:pointer}
+.run-cancel:hover{border-color:var(--accent-line);color:var(--accent)}
+html.f13w .run-cancel.on{display:inline-flex;align-items:center;justify-content:center}
+
+/* sweep: Run sweep is the second progress button; Stop is native beside it */
+.sw-pb{flex:0 1 240px;min-width:170px}
+html.f13w .sw-actions{align-items:center}
+html.f13w .sw-dialog select,html.f13w .at-page select,html.f13w .imp-dialog select{display:none}
+html.f13w .imp-settings .f13w-dd,html.f13w .imp-sub .f13w-dd,html.f13w .at-ctl .f13w-dd{vertical-align:middle}
+html.f13w .imp-sub .f13w-dd-c,html.f13w .imp-settings .f13w-dd-c{display:inline-block}
+html.f13w #swTabs.sw-tabs{background:none;border:0;padding:0}
+html.f13w .at-slider{display:flex;align-items:center;gap:10px;min-width:0}
+html.f13w .at-slider>input[type=range]{display:none}
+html.f13w .at-slider .f13w-slider{flex:1 1 220px;min-width:0}
+html.f13w #impOffsetRow{display:flex;align-items:center;gap:10px}
+html.f13w #impOffsetRow>label,html.f13w #impOffsetRow>input,html.f13w #impOffsetVal{display:none}
+html.f13w #impOffsetRow .f13w-slider{flex:1 1 auto;min-width:0}
+.dc-icon-btn svg,.sw-x svg,.sw-rename svg,.fh-action-btn svg[viewBox="0 0 16 16"]{width:15px;height:15px;vertical-align:-3px;flex:none}
+.sw-x,.sw-rename{display:inline-flex;align-items:center;gap:4px}
+.nl-mc-warn svg,.cp-flag svg{width:13px;height:13px;vertical-align:-2px;margin-right:3px}
+.cp-flag{display:inline-flex;align-items:center;min-width:44px;min-height:44px;justify-content:center;cursor:pointer}
+.cp-flag svg{margin:0}
+
+/* help (i) on card metric rows */
+.dc-row .rl .f13h-i{margin-left:6px;vertical-align:middle}
+
+/* a short note over the viewer: the wire's message path (a control that is not shown, a warning's text) */
+.lab-note{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 24px);transform:translate(-50%,12px);max-width:min(440px,calc(100vw - 32px));padding:10px 16px;border-radius:12px;background:var(--card);border:1px solid var(--hair-strong);color:var(--ink);font:13px/1.4 var(--lq-font);box-shadow:0 8px 28px oklch(0 0 0 / .45);opacity:0;pointer-events:none;transition:opacity .18s var(--ease),transform .18s var(--ease);z-index:1000}
+.lab-note.on{opacity:1;transform:translate(-50%,0)}
+@media (prefers-reduced-motion:reduce){.lab-note{transition:none}}

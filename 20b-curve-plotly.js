@@ -261,9 +261,10 @@ function _cpHeadHtml(data){
     CURVE_AXES.forEach(function(a){ h += '<button data-v="' + a + '" class="' + (foc === a ? 'on' : '') + '"' + (axSeen[a] ? '' : ' disabled') + '>' + CURVE_AXL[a] + '</button>'; });
     h += '<button data-v="all" class="' + (foc === 'all' ? 'on' : '') + '">All</button></div>';
   }
-  h += '<span class="cp-chip' + (CURVE_STATE.offset ? ' on' : '') + '" data-c="offset">0.2% offset</span>' +
-       '<span class="cp-chip' + (CURVE_STATE.buckle ? ' on' : '') + '" data-c="buckle">buckling</span>' +
-       '<span class="cp-chip' + (CURVE_STATE.labels ? ' on' : '') + '" data-c="labels">labels</span></div></div>';
+  /* stage 3: the chips are buttons with aria-pressed (the Crush header's toggles mount over them) */
+  h += '<button type="button" class="cp-chip' + (CURVE_STATE.offset ? ' on' : '') + '" data-c="offset" aria-pressed="' + !!CURVE_STATE.offset + '">0.2% offset</button>' +
+       '<button type="button" class="cp-chip' + (CURVE_STATE.buckle ? ' on' : '') + '" data-c="buckle" aria-pressed="' + !!CURVE_STATE.buckle + '">buckling</button>' +
+       '<button type="button" class="cp-chip' + (CURVE_STATE.labels ? ' on' : '') + '" data-c="labels" aria-pressed="' + !!CURVE_STATE.labels + '">labels</button></div></div>';
   return h;
 }
 
@@ -290,7 +291,7 @@ function _cpLegendHtml(data){
       });
       h += '</span>';
     }
-    if (flags.length) h += '<span class="cp-flag" title="' + flags.join('\n').replace(/"/g, '&quot;') + '">⚠</span>';
+    if (flags.length) h += '<span class="cp-flag" title="' + flags.join('\n').replace(/"/g, '&quot;') + '" role="button" tabindex="0" aria-label="Warning">' + (typeof LAB_WARN_ICON !== 'undefined' ? LAB_WARN_ICON : '!') + '</span>';
     h += '</div>';
   });
   return h;

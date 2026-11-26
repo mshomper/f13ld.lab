@@ -9,6 +9,9 @@
 <link rel="stylesheet" href="lab.css?v=0.35.1-ui2">
 <link rel="stylesheet" href="ui-shell.css?v=0.35.1-ui2">
 <link rel="stylesheet" href="ui-lab.css?v=0.35.1-ui2">
+<!-- UI refresh stage 3: liquid widgets (f13ui.css = template widget styles + lab rules) and the shared help drop-in (help.css) -->
+<link rel="stylesheet" href="f13ui.css?v=0.35.1-ui3">
+<link rel="stylesheet" href="help.css?v=0.35.1-ui3">
 </head>
 <body>
 <!-- v0.24.0 — startup splash: the wordmark resolves from scrambled glyphs
@@ -198,9 +201,9 @@
         <section class="sec" id="sec-model" data-section="model">
           <h2 class="sec-h"><span class="sec-n">01</span>Model</h2>
           <p class="sec-note">Material and voxel prep. They apply to every design in the comparison.</p>
-          <div class="sc-group col" id="grp-material"><label>Material</label><div class="ctl"><div class="dd" id="materialDd"></div></div>
+          <div class="sc-group col" id="grp-material"><label>Material</label><div class="ctl"><div class="dd" id="materialDd"></div><select id="materialSel" class="st-sel" aria-label="Material" tabindex="-1" onchange="pickDropdown('material', this.value)"></select><div id="w-material"></div></div>
             <div class="hint help-src">AM library (docs/MATERIALS.md). “From design” keeps each design’s own material. Changing it re-solves on the next run.</div></div>
-          <div class="sc-group col" id="grp-conn"><label>Connectivity</label><div class="ctl"><div class="dd" id="connDd"></div></div>
+          <div class="sc-group col" id="grp-conn"><label>Connectivity</label><div class="ctl"><div class="dd" id="connDd"></div><select id="connSel" class="st-sel" aria-label="Connectivity" tabindex="-1" onchange="pickDropdown('conn', this.value)"><option value="networks">All networks</option><option value="largest">Largest network only</option><option value="off">Keep everything</option></select><div id="w-conn"></div></div>
             <div class="hint help-src">Which connected pieces of the voxelized cell are analyzed.</div></div>
           <div class="sc-group col" id="grp-pv"><label>Surface voxels</label><div class="ctl"><div class="seg" data-seg="pv"><button type="button" data-v="pv" onclick="onSegClick(this)">Partial volume</button><button type="button" data-v="binary" onclick="onSegClick(this)">0/1 cube</button></div></div>
             <div class="hint help-src">Partial volume: each surface voxel carries its true solid fraction — exact solid fraction, stiffness grid-converged by 64³ on thin walls and struts. 0/1 cube reproduces results from before v0.19.0. Crush and buckling always use the 0/1 cube.</div></div>
@@ -322,7 +325,7 @@
                     <div class="hint help-src">Viscosity only scales the shear; permeability does not depend on it. Water 0.69 mPa·s, culture medium with 10 % serum 0.93 mPa·s, both at 37 °C.</div></div>
                   <div class="sc-group col" id="flowMuRow"><label>Viscosity · mPa·s</label><div class="ctl"><input class="dr-num" type="number" min="0.01" step="0.01" data-k="muCustom" onchange="onFlowNum(this)" aria-label="Custom viscosity in mPa·s"></div>
                     <div class="hint help-src">Dynamic viscosity of your fluid. Water at 20 °C is 1.0.</div></div>
-                  <div class="sc-group col"><label>Shear target</label><div class="ctl"><div class="dd" id="shearTargetDd"></div></div>
+                  <div class="sc-group col"><label>Shear target</label><div class="ctl"><div class="dd" id="shearTargetDd"></div><select id="shearTargetSel" class="st-sel" aria-label="Shear target" tabindex="-1" onchange="pickDropdown('shearTarget', this.value)"></select><div id="w-shearTarget"></div></div>
                     <div class="hint help-src">The wall shear range you want the surface in. The cards then give the share of wall in it, the flow speed that maximizes it and the range of speeds that keeps at least half. No target reports shear per unit speed only.</div></div>
                   <div class="sc-group col" id="flowTargetRow"><label>Custom target · mPa</label><div class="ctl dr-pair"><input class="dr-num" type="number" min="0.001" step="0.1" data-k="tLo" onchange="onFlowNum(this)" aria-label="Lowest target shear in mPa"><span>to</span><input class="dr-num" type="number" min="0.001" step="0.1" data-k="tHi" onchange="onFlowNum(this)" aria-label="Highest target shear in mPa"></div>
                     <div class="hint help-src">1 mPa = 0.001 Pa.</div></div>
@@ -351,6 +354,8 @@
           </div>
           <div id="w-run"></div>
           <button type="button" class="run" id="runBtn" data-native="run" onclick="onRunClick()">Run all</button>
+          <!-- Stage 3: one bar per run (stage and time left on the Run all button); Cancel sits beside it while a run solves. Shown only with the liquid button (html.f13w). -->
+          <button type="button" class="run-cancel" id="cancelBtn" onclick="cancelRun()" hidden>Cancel</button>
         </div>
       </footer>
 
@@ -368,6 +373,8 @@
 
 <!-- ===== JS load order: lower numbers load first ===== -->
 <script src="00-mock-data.js"></script>
+<!-- UI refresh stage 3: the liquid-ui kit (liquid-ui main 57db3ff, web/dist/liquid-ui.js, byte-exact; never edit here). No dependencies, no DOM work at load. -->
+<script src="03-liquid-ui.js?v=0.35.1-ui3"></script>
 <script src="10-hardware.js"></script>
 <script src="11-webgpu-device.js"></script>
 <script src="12-fft-plan.js"></script>
@@ -400,7 +407,7 @@
 <script src="19g-flow-lbm.js?v=0.32.0"></script>
 <script src="19h-flow-wss.js?v=0.32.0"></script>
 <script src="20-svg-mocks.js"></script>
-<script src="20b-curve-plotly.js"></script>
+<script src="20b-curve-plotly.js?v=0.35.1-ui3"></script>
 <script src="20c-f13-shade.js"></script>
 <script src="21-raymarcher.js?v=0.35.1"></script>
 <script src="22-stiffness-viz.js?v=0.31.0"></script>
@@ -408,7 +415,7 @@
 <script src="24-flow-charts.js?v=0.35.1-ui2"></script>
 <script src="30-view-tabs.js?v=0.31.0"></script>
 <script src="31-geom-views.js?v=0.35.1"></script>
-<script src="40-design-grid.js?v=0.35.1-ui2"></script>
+<script src="40-design-grid.js?v=0.35.1-ui3"></script>
 <script src="50-controls.js?v=0.34.0"></script>
 <script src="51-dock.js?v=0.35.1-ui2"></script>
 <script src="52-status.js?v=0.35.1-ui2"></script>
@@ -416,10 +423,14 @@
      glue (folds, Results table, design switch, shared view tools). Both before 60 (they wrap renderDesignGrid) and 99-init. -->
 <script src="53-layout.js?v=0.35.1-ui2"></script>
 <script src="53b-lab-shell.js?v=0.35.1-ui2"></script>
+<!-- Stage 3: the template wire (CONFIG only) waits for the DOM itself. The lab widgets and the help drop-in come after 63 (they wrap the sweep and atlas renders) and before 99-init. -->
+<script src="54-f13ui-wire.js?v=0.35.1-ui3"></script>
 <script src="60-add-design.js?v=0.29.2"></script>
-<script src="61-import-stl.js?v=0.35.1-ui2"></script>
-<script src="62-sweep.js?v=0.34.0"></script>
+<script src="61-import-stl.js?v=0.35.1-ui3"></script>
+<script src="62-sweep.js?v=0.35.1-ui3"></script>
 <script src="63-sweep-atlas.js?v=0.34.0"></script>
+<script src="64-lab-widgets.js?v=0.35.1-ui3"></script>
+<script src="65-help.js?v=0.35.1-ui3"></script>
 <script src="99-init.js"></script>
 
 </body>

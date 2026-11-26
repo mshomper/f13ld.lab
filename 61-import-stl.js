@@ -245,7 +245,7 @@ function impMountDialog() {
     '<div class="imp-dialog" role="dialog" aria-label="Import STL unit cell">' +
       '<div class="imp-head">' +
         '<div class="imp-title">' + (edit ? 'Adjust imported cell' : 'Import STL unit cell') + '</div>' +
-        '<button class="dc-icon-btn" title="Close" onclick="closeImportDialog()">×</button>' +
+        '<button class="dc-icon-btn" title="Close" onclick="closeImportDialog()" aria-label="Close">' + LAB_CARD_ICONS.x + '</button>' +
       '</div>' +
       (edit ? '<div class="imp-note">Units and cell size are fixed at import. To change them, import the STL again.</div>' :
       '<div class="imp-drop" id="impDrop">' +
@@ -267,7 +267,7 @@ function impMountDialog() {
         '<label for="impOffset">Wall offset</label>' +
         '<input id="impOffset" type="range" min="-1" max="1" step="0.001" value="0" oninput="impOffsetChanged(this.value)">' +
         '<span id="impOffsetVal">0.000 mm</span>' +
-        '<button class="dc-icon-btn" title="Reset to the imported walls" onclick="impOffsetReset()">↺</button>' +
+        '<button class="dc-icon-btn" title="Reset to the imported walls" onclick="impOffsetReset()" aria-label="Reset the wall offset">' + LAB_CARD_ICONS.reset + '</button>' +
       '</div>' +
       '<div class="imp-foot">' +
         '<button class="fh-action-btn ghost" onclick="closeImportDialog()">Cancel</button>' +

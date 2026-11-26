@@ -961,8 +961,8 @@ function openSweepPanel() {
   ov.innerHTML =
     '<div class="imp-dialog sw-dialog" role="dialog" aria-label="Parameter sweep">' +
       '<div class="imp-head"><div class="imp-title">Parameter sweep</div><div class="sw-headbtns">' +
-        '<button class="fh-action-btn ghost" onclick="sweepNew()" title="Start over: no runs, empty builder, default run settings">↺ New sweep</button>' +
-        '<button class="dc-icon-btn" title="Close (a running sweep keeps going)" onclick="closeSweepPanel()">×</button></div></div>' +
+        '<button class="fh-action-btn ghost" onclick="sweepNew()" title="Start over: no runs, empty builder, default run settings">' + LAB_CARD_ICONS.reset + ' New sweep</button>' +
+        '<button class="dc-icon-btn" title="Close (a running sweep keeps going)" onclick="closeSweepPanel()" aria-label="Close">' + LAB_CARD_ICONS.x + '</button></div></div>' +
       '<section class="sw-sec"><div class="sw-sec-t"><span class="sw-num">1</span>Define runs<div class="sw-tabs" id="swTabs"></div></div>' +
         '<div class="sw-build" id="swPaneBuild"><div id="swBuilder"></div></div>' +
         '<div id="swPaneCsv" hidden></div></section>' +
@@ -1380,7 +1380,7 @@ function sweepRenderBar() {
   var tierBtns = Object.keys(tiers).sort().map(function (t) { return '<a href="#" onclick="sweepSelect(\'' + t + '\');return false;">tier ' + t + '</a>'; }).join(' · ');
   el.innerHTML = strip +
     '<div class="sw-bar-row sw-runs-head"><div class="sw-title-blk"><div class="sw-title"><span>' + swEsc(sweepTitle()) + '</span>' +
-        '<button class="sw-rename" onclick="sweepRename()"' + (SWEEP_STATE.running ? ' disabled' : '') + ' title="Rename this study (also names the exported CSV)">✎ rename</button></div>' +
+        '<button class="sw-rename" onclick="sweepRename()"' + (SWEEP_STATE.running ? ' disabled' : '') + ' title="Rename this study (also names the exported CSV)">' + LAB_CARD_ICONS.edit + ' rename</button></div>' +
       '<div class="imp-sub">' + runs.length + ' runs · ' + nDone + ' done · ' + nSel + ' selected' +
       '<span class="sw-sel"> &nbsp;Select: <a href="#" onclick="sweepSelect(\'all\');return false;">all</a>' + (tierBtns ? ' · ' + tierBtns : '') +
       ' · <a href="#" onclick="sweepSelect(\'pending\');return false;">not run</a> · <a href="#" onclick="sweepSelect(\'none\');return false;">none</a></span>' +
@@ -1439,7 +1439,7 @@ function sweepRenderSources() {
   var isCsv = SWEEP_STATE.source === 'csv' && SWEEP_STATE.runs.length;
   pc.innerHTML = '<div class="sw-csvrow">' +
     (isCsv
-      ? '<span class="sw-file">' + swEsc(SWEEP_STATE.name) + ' · ' + SWEEP_STATE.runs.length + ' runs <button class="sw-x" onclick="sweepRemoveRuns()"' + dis + ' title="Remove this run list (asks first if there are results)">✕ remove</button></span>' +
+      ? '<span class="sw-file">' + swEsc(SWEEP_STATE.name) + ' · ' + SWEEP_STATE.runs.length + ' runs <button class="sw-x" onclick="sweepRemoveRuns()"' + dis + ' title="Remove this run list (asks first if there are results)">' + LAB_CARD_ICONS.x + ' remove</button></span>' +
         '<button class="fh-action-btn ghost" onclick="sweepPickCsv()"' + dis + '>Replace CSV…</button>'
       : '<button class="fh-action-btn" onclick="sweepPickCsv()"' + dis + '>Load CSV…</button>' +
         (SWEEP_STATE.runs.length ? '<span class="imp-sub">Loading a CSV replaces the current builder runs.</span>' : '')) +
