@@ -1,6 +1,6 @@
 # F13LD.lab
 
-**Status:** v0.29.1 · alpha · **Flow view: animated tracer particles and a speed map on the section plane; streak length and size sliders** · **Flow: lattice Boltzmann permeability on the GPU (tensor, tortuosity, open and sealed pores)** · **load paths read straight along each axis (tilted sheets no longer count as spanning)** · **stretched cells flagged (Lab still solves a cube)** · **recipes built exactly as F13LD.mesh prints them: noise rebuilt, anisotropic shell walls, geometry shared with F13LD.sweep** · **shear stresses paint; Stress tab with deformation; VIEW tabs with icons** · **no more freezes on load or on Run; startup animation and status chip; settings remembered** · **thermal in the sweep, surface area density and porosity columns, revised material conductivities** · **new bottom dock + Configure drawer in the Lab red** · **3-D temperature map with a section plane** · **thermal conductivity on the GPU (air / water / tissue in the pores)** · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
+**Status:** v0.36.0 · alpha · **new layout: liquid controls, Model / Physics pane, compact phone view; results hide when their settings change** · **Flow view: animated tracer particles and a speed map on the section plane; streak length and size sliders** · **Flow: lattice Boltzmann permeability on the GPU (tensor, tortuosity, open and sealed pores)** · **load paths read straight along each axis (tilted sheets no longer count as spanning)** · **stretched cells flagged (Lab still solves a cube)** · **recipes built exactly as F13LD.mesh prints them: noise rebuilt, anisotropic shell walls, geometry shared with F13LD.sweep** · **shear stresses paint; Stress tab with deformation; VIEW tabs with icons** · **no more freezes on load or on Run; startup animation and status chip; settings remembered** · **thermal in the sweep, surface area density and porosity columns, revised material conductivities** · **new bottom dock + Configure drawer in the Lab red** · **3-D temperature map with a section plane** · **thermal conductivity on the GPU (air / water / tissue in the pores)** · **normal runs on the fast elastic path** · **feature size in mm (sweep CSV and builder)** · **partial-volume voxels (grid-converged by N = 64)** · **three-axis crush with an interactive stress–strain plot** · **F13LD.foam family + foam calibration** · fast elastic sweeps · void scaled to each design · **parameter sweep** · **STL unit-cell import** · PI-TPMS parity · connectivity selector · fast nonlinear crush · **Sprint B — voxel-FE buckling** · buckling now by matrix-free voxel finite elements (void removed) · yield- vs buckling-limited on every card · AM material library · axis-convention fix
 **License:** [PolyForm Noncommercial 1.0.0](./LICENSE.md): free for research and non-commercial use; anyone may run it to reproduce published results (see [NOTICE](./NOTICE)). Commercial licences: matt@notarobot-eng.com. The geometry code between `F13LD-GEOM` markers (recipe → voxels; byte-identical in the MIT-licensed [F13LD.sweep](https://github.com/mshomper/f13ld.sweep)) is MIT; the solvers are not.
 
 🔗 **[Launch the tool](https://mshomper.github.io/f13ld.lab)**
@@ -8,7 +8,9 @@
 
 GPU-accelerated qualification tool for deep structural evaluation of metamaterial scaffolds. Browser-resident, statically hosted, designed for side-by-side comparison of up to three designs from F13LD.vault.
 
-Part of the [F13LD](https://f13ld.app) computational design suite.
+Part of the [F13LD](https://f13ld.app) computational design suite. The full tool list and how recipes move between them: **[f13ld.app](https://f13ld.app)**.
+
+<img width="1440" height="900" alt="F13LD.lab" src="docs/screenshot.png" />
 
 ---
 
@@ -38,6 +40,15 @@ Where design tools answer *"what does this look like?"*, lab answers *"is this d
 **Linear buckling** runs on a CPU Web Worker pool, independent of the GPU grid above. The Buckling grid (Configure → Buckling) offers **16³ / 32³ / 64³** — 8³ was dropped (too coarse for thin-wall shells) and all options are powers of two because the radix-2 FFT requires it (48³ is not available). Cost scales steeply with grid: Schwarz P three-axis is seconds at N=16 and minutes at N=64 on an 8-core desktop, one axis per worker. A complete GPU buckling solver (`16d`) exists and is numerically validated, but is **off by default** — see *What's new in v0.7.1*. See [`docs/BUCKLING.md`](./docs/BUCKLING.md).
 
 **Nonlinear crush** runs at its own resolution (Configure → Crush → Grid, default 32³ — not the elastic grid) and to a user strain cap (default 5%), along one axis or all three (Load axis = All). Compliant designs that cannot resolve the crush's side stress at the default tolerance are re-run at a tighter one automatically (v0.17.1). Per-mode timing and a self-calibrating estimate now scale each mode by its own grid (and nonlinear by the crush cap), with a live ETA. See [`docs/NONLINEAR.md`](./docs/NONLINEAR.md).
+
+## What's new in v0.36.0
+
+- **New layout** (same standard as the other F13LD tools, liquid-ui controls): the Configure drawer and dock tags are replaced by a docked control pane on the right with **01 Model** (material, connectivity, surface voxels) and **02 Physics** (one fold per mode, each with its run switch and a one-line summary). Run all sits in the footer: one bar with the stage, design and time left, and Cancel beside it (Run sweep works the same way, with Stop).
+- **View bar** above the cards: VIEW tabs plus the controls for that tab, shown once instead of on every tile.
+- **Phone:** one design at a time (A / B / C), a Results table in the bottom sheet, compact 32 px controls, a ⋯ menu for Import / Sweep / Atlas / PDF / Mesh, and per-tab extras behind one button. The tile gets most of the screen.
+- **Results follow the settings:** change the grid, material, connectivity, strain cap or tolerance and that mode's numbers, maps and plots hide ("settings changed · Run"), Export PDF and Mesh turn off; set it back and they return without solving again.
+- **Help:** an (i) beside each control opens its card in the field guide; "show" jumps to the control.
+- **Lighter on the GPU:** one on-demand render loop for every viewer, nothing drawn while idle (was ~380 frames a second) and almost nothing during a solve.
 
 ## What's new in v0.35.1
 
