@@ -453,3 +453,165 @@ button:focus-visible,.seg button:focus-visible,.view-tab:focus-visible,.fold-btn
 .lsp-wm .n{color:#c8f542}
 .lsp-tool{color:var(--accent)}
 .lsp-sub{font-size:11px;color:var(--ink-faint)}
+
+/* ============================================================================
+   COMPACT DENSITY (Matt, click test: 44 px is too big on a high-density screen; compact liquid everywhere).
+   Visible size is the target: buttons, segmented, dropdowns, toggles and chips are 32 px (Run 40 px). Nothing is grown to make a
+   hit area; no hit boxes overlap. Text 12–13 px (mono values 11–12 px), nothing under 11. Loaded last: it overrides the 44 px rules above.
+   ============================================================================ */
+/* native controls and the fallbacks the widgets replace */
+input[type=range]{height:32px}
+.fld,.fld-num,select.fld,.dr-num,.imp-settings select,.imp-settings input,.sw-prow select,.sw-prow input,.sw-build .imp-settings select,.sw-build .imp-settings input,.sw-bar-row select,.at-page select{height:32px;min-width:32px;padding:0 8px;border-radius:999px;font-size:12px}
+.imp-settings input,.sw-prow input,.sw-build .imp-settings input,.sw-sec .imp-settings input{width:64px;text-align:center;font-family:var(--lq-mono)}
+.th-btn,.stress-norm-btn,.load-axis-btn,.cp-seg button,.seg button{min-width:32px;min-height:32px;padding:0 10px;font-size:12px}
+.chip,.cp-chip,.dr-reset,.run-cancel{min-height:32px;height:32px;padding:0 12px;font-size:12px;border-radius:999px}
+.run{height:40px;border-radius:999px;font-size:14px}
+html.f13w .run-cancel{height:40px;padding:0 14px;font-size:13px}
+.sw{width:40px;height:32px}
+.dd-btn{height:32px;font-size:12px;border-radius:999px}
+.dd-opt{min-height:34px;font-size:12px}
+.dc-icon-btn{width:32px;height:32px;border-radius:999px}
+.dc-icon-btn svg{width:15px;height:15px}
+.dc-drawer-bar{min-height:36px}
+.fold-btn,.fold.sub .fold-btn{min-height:40px;padding:4px 8px 4px 10px}
+.fa-sl{height:32px}
+.fa-sl input[type=range]{height:32px}
+html.f13w .vw-tools .fa-sl.f13w-inline,html.f13w .geom-view-row .fa-sl.f13w-inline{height:32px}
+.geom-view-row .geom-sl{height:32px}
+.view-tab{height:32px}
+.lab-clip-pill{min-width:32px;min-height:32px;padding:0 10px;font-size:12px}
+.vp-deform-control input[type=range],.merged-scrubber input[type=range]{height:32px}
+.merged-scrubber .nl-play,.merged-scrubber .nl-axis-btn{min-height:32px}
+.cp-lg .dn{min-height:32px}
+.dc-row:has(.rwm){min-height:32px}
+.res-tab .rv,.dc-row .rv{font-size:13px}
+/* header: 36 px round buttons on desktop, the ⋯ menu below */
+.fh-action-btn{height:32px;font-size:12px}
+.fh-action-btn::after{height:36px}
+#f13ViewHost{height:32px !important}
+#f13ViewHost .f13v>button{height:32px;padding:0 12px;border-radius:999px;font-size:12px}
+#f13ViewHost .f13v-p label{min-height:32px}
+#f13ViewHost .f13v-p .f13v-r{min-height:32px;border-radius:999px}
+.lab-status{height:28px;border-radius:999px}
+.vw-bar{padding:6px 12px 6px}
+.view-strip{gap:6px 8px}
+.vw-tools{gap:4px 12px;margin-top:4px}
+.sec{padding-top:12px}
+.sc-group.col{margin-bottom:2px;gap:2px}
+.sc-group.col>label{font-size:12px}
+.sc-group>label,.lbl{font-size:12px}
+.dc-name .title{font-size:14px}
+/* Sweep / Atlas / Import forms: compact controls, the pickers fill their row */
+.imp-settings label,.sw-prow label{min-height:32px}
+.imp-drop a,.imp-note a,.sw-bar a,.sw-bar a{min-height:32px}
+.imp-foot .fh-action-btn,.sw-actions .fh-action-btn,.sw-rfoot .fh-action-btn,.sw-headbtns .fh-action-btn,.sw-runs-head .fh-action-btn,.sw-csvrow .fh-action-btn,.sw-bar-row .fh-action-btn{height:32px}
+.sw-cta{min-height:36px;border-radius:999px}
+.at-guide .ft button{min-height:32px;border-radius:999px}
+.at-tabs button,.sw-tabs button,.at-seg button,.at-modes button,.at-lkb,.sw-x,.sw-rename,.sw-done-x,.at-close,.sw-close,.imp-close{min-height:32px;min-width:32px}
+.sw-tabs button,.at-seg button{padding:0 12px;font-size:12px}
+.at-chip{min-height:32px;font-size:12px}
+.at-help{width:32px;height:32px}
+.at-slider input[type=range],.imp-offset input[type=range]{height:32px}
+.sw-table td,.at-tab td,.at-rtab td{padding-top:5px;padding-bottom:5px}
+html.f13w .imp-settings label:has(>.f13w-dd:not(.f13w-dd-c)),html.f13w .sw-prow label:has(>.f13w-dd:not(.f13w-dd-c)){flex:0 1 360px;min-width:0}
+html.f13w .imp-settings label>.f13w-dd:not(.f13w-dd-c),html.f13w .sw-prow label>.f13w-dd:not(.f13w-dd-c){flex:1 1 140px;min-width:140px}
+html.f13w .imp-settings,html.f13w .sw-prow{gap:6px 10px}
+.imp-settings,.sw-bar,.sw-prow,.sw-box,.imp-row{font-size:12px}
+.imp-settings label,.sw-prow label,.sw-bar-row,.sw-bar-row label{font-size:12px}
+@media (max-width:899px){.sw-prow,.imp-settings{gap:6px 6px}.sw-prow .imp-sub{font-size:11px}
+  .sw-box .imp-settings input,.sw-sec .imp-settings input,.imp-settings input{width:50px;padding:0 4px}
+  .sw-sec .imp-settings label{gap:4px}}
+.fh-more{display:none}
+@media (max-width:899px){.fh-more{display:inline-flex}}
+html.f13w .sw-prow .imp-settings{padding:0;border:0}
+
+/* (the help drawer's compact header lives in help.css) */
+
+/* ── PHONE (< 900 px): chrome budget at 390 px = header 40 + VIEW tabs 32 + sub-row 32 (+ paddings) ── */
+@media (max-width:899px){
+  /* header, one row: mark · LAB · status dot · A B C   …   ? + ⋯ */
+  .f13ld-header{height:40px;min-height:0;padding:0 8px;gap:6px;flex-wrap:nowrap}
+  .fh-left{gap:6px;min-width:0;flex:1 1 auto}
+  .fh-brand{min-height:32px;min-width:32px}
+  .fh-divider,.fh-version,.fh-icon{display:none}
+  .fh-tool-name{font-size:13px}
+  .fh-right{flex:0 0 auto;gap:6px}
+  .f13ld-header .f13h-trigger{width:32px;height:32px}
+  .f13ld-header .f13h-trigger::after{inset:-2px}
+  .fh-ib,.fh-more{width:32px;height:32px;padding:0;border-radius:999px;font-size:0;gap:0}
+  .fh-ib::after,.fh-more::after{display:none}
+  .fh-more svg{width:16px;height:16px}
+  .fh-more.busy{border-color:var(--accent-line);color:var(--accent)}
+  #addDesignBtn{margin:0}
+  /* the status chip is a dot */
+  .f13ld-header .lab-status{height:auto;padding:0;border:0;background:none;flex:none;gap:0;max-width:none}
+  .f13ld-header .lab-status .ls-mark,.f13ld-header .lab-status .ls-bar{display:none !important}
+  .f13ld-header .lab-status .ls-txt{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .f13ld-header .lab-status::before{content:'';width:10px;height:10px;border-radius:50%;background:var(--ink-faint);box-shadow:0 0 0 2px var(--panel)}
+  .f13ld-header .lab-status.solving::before{background:var(--accent);animation:labDot 1.1s ease-in-out infinite}
+  .f13ld-header .lab-status.done::before{background:var(--good)}
+  .f13ld-header .lab-status.warn::before{background:var(--warn)}
+  .f13ld-header .lab-status.error::before{background:var(--bad)}
+  @keyframes labDot{50%{opacity:.35}}
+  /* A / B / C in the header */
+  .f13ld-header .vw-dsw:not([hidden]){margin-left:auto;padding:2px;border-radius:999px}
+  .vw-dbtn{min-width:30px;min-height:28px;height:28px;padding:0;border-radius:999px;font-size:12px}
+  /* the ⋯ menu */
+  .f13ld-header{position:relative}
+  .hdr-menu{position:absolute;right:8px;top:calc(100% + 4px);z-index:80;min-width:190px;padding:6px;display:flex;flex-direction:column;gap:2px;background:var(--card);border:1px solid var(--hair-strong);border-radius:14px;box-shadow:0 10px 28px oklch(0 0 0 / 0.5)}
+  .hdr-menu[hidden]{display:none}
+  .hdr-menu .fh-action-btn{width:100%;height:36px;justify-content:flex-start;gap:10px;padding:0 12px;border:0;border-radius:10px;background:transparent;font-size:13px;color:var(--ink)}
+  .hdr-menu .fh-action-btn:hover:not(:disabled){background:oklch(1 0 0 / 0.06)}
+  .hdr-menu .fh-action-btn:disabled,.hdr-menu .fh-atlas[aria-disabled=true]{opacity:.4}
+  .hdr-menu .fh-ib .fh-lbl{display:inline}
+  .hdr-menu #meshHandoffBtn{font-size:13px;color:var(--accent);height:36px;padding:0 12px}
+  .hdr-menu #meshHandoffBtn::after{content:none}
+  /* VIEW tabs: one 32 px row; the sub-control row is 32 px with ◐ view (icon only) at its right end */
+  .vw-bar{padding:4px 8px 4px;display:flex;flex-direction:column;gap:4px}
+  .view-strip{gap:0;position:static}
+  .view-tabs{gap:0}
+  html.f13w .view-strip>.lab-vtabs{flex:1 1 100%;width:100% !important}
+  #viewStrip #f13ViewHost{position:absolute !important;right:8px;bottom:4px;width:32px !important;min-width:32px;height:32px !important;z-index:36}
+  #f13ViewHost .f13v>button{position:relative;width:32px;padding:0;font-size:11px;color:transparent;overflow:hidden;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center}   /* the words stay for screen readers; the drawn icon is the label */
+  #f13ViewHost .f13v>button::before{content:'';position:absolute;left:8px;top:8px;width:16px;height:16px;background:var(--ink-dim);-webkit-mask:var(--lab-ic-view) center/16px no-repeat;mask:var(--lab-ic-view) center/16px no-repeat}
+  #f13ViewHost .f13v>button:hover::before,#f13ViewHost .f13v>button[aria-expanded=true]::before{background:var(--ink)}
+  .vw-tools{margin-top:0;min-height:32px;padding-right:38px;gap:0 8px;flex-wrap:nowrap;align-items:center}
+  .vw-tools:not(:has(.show)):not(.geom-view-row.show):not(:has(.vw-dyn.show)){min-height:32px}
+  .vw-bar .f13h-i{display:none}
+  .vw-tools .stress-norm-label,.vw-tools .vw-l,.vw-tools .lab-segl,.vw-tools .lab-segrow>.lab-segl{display:none}
+  .vw-tools .lbl{display:none}
+  .view-strip .right{display:none}
+  /* sheet: slim handle, compact tabs */
+  #sheetHandle{flex:0 0 22px;padding-top:7px}
+  #ctrlScroll{padding:0 12px}
+  .sec{padding:0 0 12px}
+  .sec-h{margin:0 0 4px;font-size:14px}
+  .compare:not(.merged){padding:4px 8px 6px}
+  .dc-head{padding:0 4px 0 12px;min-height:34px}
+  .dc-name .title{font-size:13px}
+  /* the tile overlay: one slim row at the bottom edge, settings button small */
+  html.f13w .vp-stress-control{left:6px;right:6px;bottom:6px;top:auto;padding:2px;gap:4px;flex-wrap:wrap;align-items:center}
+  html.f13w .vp-stress-control .f13w-seg{flex:1 1 0}
+  html.f13w .vp-stress-control .vp-fold{width:32px;height:32px;margin-left:4px;border-radius:999px}
+  html.f13w .vp-stress-control.open .vp-sl{flex:1 1 100%}
+  html.f13w .vp-deform-control{padding:2px 4px}
+  .dc-viewport:has(.vp-stress-control) .stress-colorbar{bottom:48px}
+  .dc-viewport:has(.vp-stress-control) .stress-colorbar-label-bot{bottom:44px}
+  /* Results table: one line per value */
+  .res-tab{font-size:12px}
+  .res-tab th,.res-tab td{padding:4px 4px;white-space:normal;overflow-wrap:anywhere}
+  .res-tab .rv{white-space:nowrap}
+  .res-tab thead th{font-size:12px}
+  .res-tab tbody th{font-size:11px;white-space:normal}
+  .res-tab td.na{white-space:nowrap}
+  .res-tab .rv{font-size:12px}
+  .res-empty{font-size:12px;padding:4px 0}
+  html:not(.sheet-full) .res-tab .rd:not(.rwt){display:none}
+  html:not(.sheet-full) .res-tab tr.res-grp th{padding-top:6px}
+  .res-tab td{vertical-align:middle}
+  html.f13w .vp-stress-control{background:none;border:0;-webkit-backdrop-filter:none;backdrop-filter:none;padding:0}
+  /* footer */
+  .dock{padding:4px 12px 6px;gap:4px}
+  .dock-meta{font-size:11px}
+}
+:root{--lab-ic-view:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='5.6'/%3E%3Cpath d='M8 2.4v11.2' stroke-width='0'/%3E%3Cpath d='M8 2.4a5.6 5.6 0 0 1 0 11.2z' fill='black'/%3E%3C/svg%3E")}

@@ -76,7 +76,8 @@ function labResultsHtml(){
       var c = row.cells[cj];
       if (!c){ h += '<td class="na">—</td>'; continue; }
       var wraw = c.warn || ((c.delta && c.delta[1] === 'warn') ? c.delta[0] : ''), wtxt = wraw ? String(wraw).replace(/<[^>]*>/g, '').replace(/"/g, '&quot;') : '';
-      var dtxt = (c.delta && c.delta[0] && !(c.delta[1] === 'warn')) ? '<span class="rd ' + (c.delta[1] || 'neut') + '">' + c.delta[0] + '</span>' : '';
+      var none = /^\s*(—|–|-)\s*$/.test(String(c.val == null ? '' : c.val).replace(/<[^>]*>/g, ''));   /* nothing computed yet: just the dash, one line */
+      var dtxt = (!none && c.delta && c.delta[0] && !(c.delta[1] === 'warn')) ?'<span class="rd ' + (c.delta[1] || 'neut') + '">' + c.delta[0] + '</span>' : '';
       h += '<td><span class="rv' + (c.valcls ? ' ' + c.valcls : '') + '">' + c.val + '</span>' +
         (wtxt ? '<button type="button" class="rwm" aria-label="Warning: ' + wtxt + '" title="' + wtxt + '" onclick="this.closest(\'td\').classList.toggle(\'show-warn\')">' + (typeof LAB_WARN_ICON !== 'undefined' ? LAB_WARN_ICON : '!') + '</button>' : '') +
         dtxt + (wtxt ? '<span class="rd warn rwt">' + wtxt + '</span>' : '') + '</td>';
@@ -145,6 +146,88 @@ function labShellResized(){
     for (var i = 0; i < gds.length; i++) { try { Plotly.Plots.resize(gds[i]); } catch (e) {} }
   }
 }
+
+/* ── Phone chrome budget (Matt, click test): header 40 px, VIEW tabs 32 px, one sub-control row 32 px ──
+   Phone (< 900 px): the existing elements MOVE (ids and handlers kept), each leaving a comment marker so the desktop layout comes back:
+     · import / sweep / atlas / PDF / Mesh go into one ⋯ overflow menu (#hdrMore, #hdrMenu) in the header,
+     · the A / B / C switch (#designSw) and the status chip (#labStatus, drawn as a dot) sit in the header's left group. */
+var LAB_CHROME = { phone: null, marks: [], menuIds: ['importStlBtn', 'sweepBtn', 'atlasBtn', 'exportPdfBtn', 'meshHandoffBtn'] };
+var LAB_CHROME_PEEK = 0.36;
+function labChromeBuildMenu(){
+  var right = document.querySelector('.f13ld-header .fh-right');
+  if (!right || document.getElementById('hdrMore')) return;
+  var more = document.createElement('button');
+  more.type = 'button'; more.id = 'hdrMore'; more.className = 'fh-action-btn ghost fh-more';
+  more.setAttribute('aria-label', 'More actions'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false'); more.title = 'More actions';
+  more.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><circle cx="3.2" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="12.8" cy="8" r="1.4"/></svg>';
+  var menu = document.createElement('div');
+  menu.id = 'hdrMenu'; menu.className = 'hdr-menu'; menu.setAttribute('role', 'menu'); menu.hidden = true;
+  right.appendChild(more);
+  document.querySelector('.f13ld-header').appendChild(menu);
+  function close(){ menu.hidden = true; more.setAttribute('aria-expanded', 'false'); }
+  more.addEventListener('click', function(e){ e.stopPropagation(); menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); });
+  menu.addEventListener('click', function(e){ if (e.target.closest && e.target.closest('button')) setTimeout(close, 0); });
+  document.addEventListener('click', function(e){ if (!menu.hidden && !menu.contains(e.target)) close(); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && !menu.hidden){ close(); more.focus(); } });
+  window.labHdrMenuClose = close;
+}
+function labChromeMove(id, target){
+  var el = document.getElementById(id);
+  if (!el || !target) return;
+  var mk = document.createComment(id);
+  el.before(mk);
+  LAB_CHROME.marks.push({ id: id, mk: mk });
+  target.appendChild(el);
+}
+function labChromeSync(){
+  var phone = labShellPhone() || window.innerWidth < 900;
+  if (phone === LAB_CHROME.phone) return;
+  LAB_CHROME.phone = phone;
+  labChromeBuildMenu();
+  var menu = document.getElementById('hdrMenu'), left = document.querySelector('.f13ld-header .fh-left');
+  if (phone){
+    LAB_CHROME.menuIds.forEach(function(id){ labChromeMove(id, menu); });
+    labChromeMove('labStatus', left);
+    labChromeMove('designSw', left);
+  } else {
+    LAB_CHROME.marks.forEach(function(m){ var el = document.getElementById(m.id); if (el && m.mk.parentNode) m.mk.replaceWith(el); });
+    LAB_CHROME.marks = [];
+    if (menu) menu.hidden = true;
+  }
+  document.documentElement.classList.toggle('lab-phone', phone);
+  if (window.F13UI){
+    F13UI.peekRatio = phone ? LAB_CHROME_PEEK : 0.45;
+    if (phone && F13UI.setSheet && F13UI.sheetState && F13UI.sheetState() === 'peek') F13UI.setSheet('peek');   /* layout.js already set its --sheet-h from 0.45 */
+  }
+  /* the status chip's words live on its title (the dot has no text) */
+  labChromeStatusTitle();
+}
+function labChromeStatusTitle(){
+  var s = document.getElementById('labStatus'), t = document.getElementById('solverPill');
+  if (s && t) s.title = t.textContent;
+}
+(function(){
+  var t = document.getElementById('solverPill');
+  if (t && window.MutationObserver) new MutationObserver(labChromeStatusTitle).observe(t, { childList: true, characterData: true, subtree: true });
+  /* a running sweep or an Atlas ready count shows on the ⋯ button, since their own buttons are in the menu */
+  function badge(){
+    var more = document.getElementById('hdrMore'); if (!more) return;
+    var sw = document.getElementById('sweepBtn');
+    more.classList.toggle('busy', !!(sw && (sw.classList.contains('sw-running'))));
+  }
+  var sw = document.getElementById('sweepBtn');
+  if (sw && window.MutationObserver) new MutationObserver(badge).observe(sw, { attributes: true, attributeFilter: ['class'] });
+  window.addEventListener('resize', labChromeSync);
+  labChromeSync();
+  /* html.sheet-full while the phone sheet is open wide: the Results table shows its delta lines there, one line per row in the peek */
+  var pane = document.getElementById('ctrlPane');
+  function sheetClass(){
+    var full = !!(window.F13UI && F13UI.sheetState && F13UI.sheetState() === 'full');
+    document.documentElement.classList.toggle('sheet-full', full);
+  }
+  if (pane && window.MutationObserver){ new MutationObserver(sheetClass).observe(pane, { attributes: true, attributeFilter: ['style'] }); }
+  sheetClass();
+})();
 
 /* start on Model (Results is the phone's first tab but has nothing before a run) */
 if (window.F13UI && F13UI.showSection) F13UI.showSection('model');

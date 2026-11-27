@@ -319,7 +319,7 @@
         cbs.forEach(function(cb){
           var row = cb.closest('label') || cb, host = document.createElement('div'); host.className = 'f13w-tg f13w-tg-menu';
           row.before(host); row.setAttribute('data-native', 'toggle');
-          var quiet = function(fn){ fn(); }, w = Liquid.ui.toggle(host, { size: 'sm', accent: ACC, checked: cb.checked, label: txt(row), labelFirst: true,
+          var quiet = function(fn){ fn(); }, w = Liquid.ui.toggle(host, { size: 'xs', accent: ACC, checked: cb.checked, label: txt(row), labelFirst: true,
             onChange: function(v){ quiet(function(){ cb.checked = v; }); fire(cb, 'change'); } });
           quiet = M.mirror(cb, HTMLInputElement.prototype, function(v){ w.set(!!v); }, 'checked');
         });
@@ -379,7 +379,7 @@
       if (!PB || !PB.host.isConnected){
         if (PB) try { PB.w.destroy(); } catch (e) {}
         var host = document.createElement('div'); host.className = 'sw-pb';
-        PB = { host: host, w: Liquid.ui.progressButton(host, { label: 'Run', accent: ACC, onClick: function(){
+        PB = { host: host, w: Liquid.ui.progressButton(host, { label: 'Run', accent: ACC, size: 'sm', onClick: function(){
           var n = $('swBar').querySelector('[onclick^="sweepStart"]'); if (n && !n.disabled) n.click();
         } }), running: false };
       }

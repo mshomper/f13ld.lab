@@ -63,6 +63,7 @@
     // Results is the phone's first tab: 64-lab-widgets.js rebuilds the desktop rail without it
     sections:[{id:'results',label:'Results',icon:'lab-results'},{id:'model',label:'Model',icon:'lab-model'},{id:'physics',label:'Physics',icon:'lab-elastic'}],
     analyzeSection:'results',          // the results badge (F13UI.onAnalyze) sits on the Results tab
+    density:'compact',                 // Matt: compact liquid everywhere (dropdown / segmented / toggle xs, Run all 40 px), desktop and phone
     sliders:{},                        // no static slider rows: every lab slider is mounted by 64-lab-widgets.js
     segmented:[],                      // lab's choices are mounted by 64-lab-widgets.js (the buttons have no ids)
     selects:[
@@ -88,6 +89,9 @@
   }
   Liquid.setTheme({fillTop:tok('--card',{L:0.215,C:0.016,h:265}),fillBot:tok('--panel',{L:0.17,C:0.014,h:265})});
   const ACC=tok('--accent',Liquid.ACCENTS.lime);
+  const DEN=CONFIG.density==='compact';                              // CONFIG.density:'compact': every F13UI.mount.* and CONFIG widget defaults to the compact sizes (dropdown / segmented / toggle 'xs', run button 'sm'); a per-widget size still wins
+  const SZ={seg:DEN?'xs':undefined,dd:DEN?'xs':undefined,tg:DEN?'xs':'sm',run:DEN?'sm':undefined};
+  F13UI.density=DEN?'compact':'default';
   document.documentElement.classList.add('f13w');
 
   // ---- bridge helpers ----
@@ -179,7 +183,7 @@
   CONFIG.segmented.forEach(s=>{
     const host=$(s.host);if(!host)return;host.classList.add('f13w-seg');
     const w=Liquid.ui.segmented(host,{options:s.options.map(x=>({value:x.value,label:x.label})),value:s.current(),
-      accent:ACC,ariaLabel:s.ariaLabel,onChange:v=>{const x=s.options.find(y=>y.value===v);if(x&&$(x.btn))$(x.btn).click();}});
+      accent:ACC,ariaLabel:s.ariaLabel,size:s.size||SZ.seg,onChange:v=>{const x=s.options.find(y=>y.value===v);if(x&&$(x.btn))$(x.btn).click();}});
     s.options.forEach(x=>{const b=$(x.btn);if(b)new MutationObserver(()=>w.set(s.current())).observe(b,{attributes:true,attributeFilter:s.syncOn||['class','aria-checked','aria-pressed']});});
     W[s.host]=w;
   });
@@ -199,8 +203,8 @@
   }
   function faceWidth(labels){                                         // fits the longest label on the button face
     const c=faceWidth.c||(faceWidth.c=document.createElement('canvas').getContext('2d'));
-    c.font='650 15px '+(css.getPropertyValue('--lq-font').trim()||'system-ui');
-    return Math.ceil(Math.max(...labels.map(l=>c.measureText(l).width)))+18+14+8+18+4;
+    c.font='650 '+(DEN?12:15)+'px '+(css.getPropertyValue('--lq-font').trim()||'system-ui');
+    return Math.ceil(Math.max(...labels.map(l=>c.measureText(l).width)))+(DEN?14+10+8+16+4:18+14+8+18+4);
   }
   mount.select=function(sel,o){
     o=o||{};
@@ -213,7 +217,7 @@
     const groups=selectGroups(sel,o.relabel);
     if(o.compact)host.style.width=faceWidth(groups.flatMap(g=>g.options.map(x=>x.label)))+'px';
     let quiet=fn=>fn();
-    const w=Liquid.ui.dropdown(host,{groups,value:sel.value,accent:ACC,ariaLabel:o.ariaLabel,minPanelWidth:o.compact?112:undefined,
+    const w=Liquid.ui.dropdown(host,{groups,value:sel.value,accent:ACC,ariaLabel:o.ariaLabel,size:o.size||SZ.dd,minPanelWidth:o.compact?112:undefined,
       onChange:v=>{quiet(()=>{sel.value=v;});fire(sel,'change');if(o.after)o.after(v);}});
     quiet=mirrorValue(sel,HTMLSelectElement.prototype,v=>{w.set(v);if(o.after)o.after(v);});
     // the tool rebuilding the <select>'s options (or toggling option disabled) rebuilds the widget's list
@@ -236,7 +240,7 @@
     const on=o.on||(b=>b.classList.contains('on')||b.getAttribute('aria-pressed')==='true'||b.getAttribute('aria-checked')==='true'||b.getAttribute('aria-selected')==='true');
     const idx=()=>btns.findIndex(on);
     const w=Liquid.ui.segmented(host,{options:btns.map((b,i)=>({value:i,label:(b.textContent||'').trim()||b.getAttribute('aria-label')||String(i),disabled:!!b.disabled})),
-      value:idx()>=0?idx():null,none:true,accent:ACC,ariaLabel:o.ariaLabel||'',
+      value:idx()>=0?idx():null,none:true,accent:ACC,ariaLabel:o.ariaLabel||'',size:o.size||SZ.seg,
       onChange:v=>{const b=btns[v];if(b&&!b.disabled)b.click();setTimeout(sync,0);}});   // a disabled option: the pill stays on the real choice
     function sync(){
       if(!host.isConnected)return;
@@ -248,13 +252,13 @@
   };
 
   // ---- switches (role=switch / aria-pressed buttons) → toggles ----
-  const TG={size:'sm',accent:ACC};
+  const TG={size:SZ.tg,accent:ACC};
   function tgHost(cls,id){const h=document.createElement('div');h.className='f13w-tg '+cls;if(id)h.id=id;return h;}
   mount.toggle=function(nat,o){
     o=o||{};
     const host=o.host||tgHost('f13w-tg-sw'+(o.cls?' '+o.cls:''),o.id);
     if(!o.host)nat.before(host);nat.setAttribute('data-native','toggle');
-    const w=Liquid.ui.toggle(host,{...TG,checked:swOn(nat),label:o.label||nat.textContent.trim(),ariaLabel:o.ariaLabel||nat.getAttribute('aria-label')||undefined,
+    const w=Liquid.ui.toggle(host,{...TG,size:o.size||TG.size,checked:swOn(nat),label:o.label||nat.textContent.trim(),ariaLabel:o.ariaLabel||nat.getAttribute('aria-label')||undefined,
       onChange:v=>{if(swOn(nat)!==v)nat.click();}});
     const mo=watch(nat,()=>w.set(swOn(nat)),SW_ATTRS);
     return {host,w,destroy(){mo.disconnect();w.destroy();if(!o.host)host.remove();}};
@@ -290,7 +294,7 @@
   let running=false;
   if(CONFIG.run&&$(CONFIG.run.btn)&&$(CONFIG.run.host)){
     const rb=$(CONFIG.run.btn);rb.setAttribute('data-native','run');
-    W.run=Liquid.ui.progressButton($(CONFIG.run.host),{label:rb.textContent.trim(),accent:ACC,onClick(){
+    W.run=Liquid.ui.progressButton($(CONFIG.run.host),{label:rb.textContent.trim(),accent:ACC,size:CONFIG.run.size||SZ.run,onClick(){
       running=true;W.run.setBusy(true);W.run.setLabel('Running…');
       requestAnimationFrame(()=>requestAnimationFrame(()=>rb.click()));   // let the slosh paint before the solver blocks
     }});

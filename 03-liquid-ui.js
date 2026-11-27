@@ -1,4 +1,4 @@
-/* liquid-ui (mshomper/liquid-ui @ 0258a0c) — core + widgets bundle. Do not edit here; edit the kit and rebuild. */
+/* liquid-ui (mshomper/liquid-ui @ 57db3ff) — core + widgets bundle. Do not edit here; edit the kit and rebuild. */
 /* ============================================================================
    Liquid UI core — SDF-shaded "liquid" controls for the web.
    One shared WebGL context renders every component into its own 2D canvas.
@@ -499,7 +499,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
   const INK = 'var(--lq-ink, var(--ink, oklch(0.97 0.01 290)))', DIM = 'var(--lq-ink-dim, var(--ink-dim, oklch(0.78 0.02 290)))',
     FAINT = 'var(--lq-ink-faint, var(--ink-faint, oklch(0.62 0.02 290)))';
   const css = `
-.lq-wd{ position:relative; height:44px; font-family:var(--lq-font, inherit); }
+.lq-wd{ position:relative; height:var(--lq-wd-h, 44px); font-family:var(--lq-font, inherit); }
 .lq-wd-btn{ position:absolute; inset:0; border:0; padding:0 14px 0 18px; background:none; border-radius:22px; cursor:pointer; font:inherit;
   color:${DIM}; -webkit-tap-highlight-color:transparent; }
 .lq-wd-btn:disabled{ cursor:default; opacity:.45; }
@@ -522,7 +522,12 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
 .lq-wd-open .lq-wd-scroll{ pointer-events:auto; }
 .lq-wd-hdr{ height:30px; display:flex; align-items:flex-end; padding:0 0 6px 36px; font-size:11px; font-weight:650; letter-spacing:.08em;
   text-transform:uppercase; color:${FAINT}; white-space:nowrap; opacity:0; transition: opacity 90ms ease-out; }
-.lq-wd-opt{ position:relative; height:44px; display:flex; align-items:center; padding:0 12px 0 36px; border-radius:12px; font-size:15px; font-weight:550;
+.lq-wd.xs .lq-wd-btn, .lq-wd.xs .lq-wd-face, .lq-wd-ov.xs .lq-wd-face{ padding:0 10px 0 14px; }
+.lq-wd.xs .lq-wd-face, .lq-wd-ov.xs .lq-wd-face, .lq-wd-ov.xs .lq-wd-opt{ font-size:12px; }
+.lq-wd-ov.xs .lq-wd-opt{ padding-left:30px; }
+.lq-wd.xs .lq-wd-chev, .lq-wd-ov.xs .lq-wd-chev{ width:16px; height:16px; }
+.lq-wd-ov.xs .lq-wd-hdr{ height:26px; padding-left:30px; font-size:11px; }
+.lq-wd-opt{ position:relative; height:var(--lq-wd-row, 44px); display:flex; align-items:center; padding:0 12px 0 36px; border-radius:12px; font-size:15px; font-weight:550;
   color:${DIM}; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   opacity:0; transform:translateY(calc(-6px * var(--dir, 1))); filter:blur(3px);
   transition: opacity 90ms ease-out, transform 90ms ease-out, filter 90ms ease-out, color 150ms ease-out, background 150ms ease-out; }
@@ -558,7 +563,8 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
     let value = opts.value ?? null, disabled = false, open = false, active = false, ready = false, destroyed = false;
     const id = 'lq-wd' + (++uid);
 
-    host.classList.add('lq-wd');
+    const XS = opts.size === 'xs', ROW = XS ? 34 : 44, BH = XS ? 32 : 44;   // xs: 32 px button, 34 px menu rows, 12 px text
+    host.classList.add('lq-wd'); host.classList.toggle('xs', XS); host.style.setProperty('--lq-wd-h', BH + 'px'); host.style.setProperty('--lq-wd-row', ROW + 'px');
     const faceHTML = () => `<span class="t">${prefix ? `<span class="p"></span>` : ''}<b></b></span><span class="lq-wd-chev">${Liquid.icon('chevron')}</span>`;
     const btn = document.createElement('button');
     btn.type = 'button'; btn.className = 'lq-wd-btn';
@@ -568,7 +574,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
     host.appendChild(btn);
 
     // overlay: face clone + panel list
-    const ov = document.createElement('div'); ov.className = 'lq-wd-ov';
+    const ov = document.createElement('div'); ov.className = 'lq-wd-ov' + (XS ? ' xs' : ''); ov.style.setProperty('--lq-wd-row', ROW + 'px');
     const face2 = document.createElement('div'); face2.className = 'lq-wd-face'; face2.setAttribute('aria-hidden', 'true'); face2.innerHTML = faceHTML();
     const scroller = document.createElement('div'); scroller.className = 'lq-wd-scroll';
     scroller.id = id + '-l'; scroller.setAttribute('role', 'listbox');
@@ -583,7 +589,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
         const wrap = document.createElement('div'); wrap.setAttribute('role', 'group');
         if (g.label) {
           const h = document.createElement('div'); h.className = 'lq-wd-hdr'; h.id = `${id}-g${gi}`; h.textContent = g.label;
-          h.setAttribute('role', 'presentation'); wrap.setAttribute('aria-labelledby', h.id); wrap.appendChild(h); y += 30;
+          h.setAttribute('role', 'presentation'); wrap.setAttribute('aria-labelledby', h.id); wrap.appendChild(h); y += XS ? 26 : 30;
         }
         g.options.forEach(() => {
           const i = optEls.length, o = flat[i];
@@ -591,7 +597,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
           el.id = `${id}-o${i}`; el.textContent = o.label;
           if (o.disabled) el.setAttribute('aria-disabled', 'true');
           el.addEventListener('click', () => choose(i, true));
-          wrap.appendChild(el); optEls.push(el); rowTop.push(y); y += 44;
+          wrap.appendChild(el); optEls.push(el); rowTop.push(y); y += ROW;
         });
         scroller.appendChild(wrap);
       });
@@ -618,7 +624,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
     const tail = new Liquid.Spring(0, { k: 340, zeta: 0.9 });
     const vis = new Liquid.Spring(0, { k: 520, zeta: 0.75 });
     let clock = 0, pending = null, closeAt = -1;
-    const W0 = 40, GAP = 22, PAD = 6, BH = 44, INSET = 8;
+    const W0 = 40, GAP = XS ? 14 : 22, PAD = 6, INSET = 8;
 
     // ---- host surface: the button alone ----
     const hostGlsl = `
@@ -689,7 +695,7 @@ float accentSDF(vec2 p){
     const onScroll = e => { if (e.target !== scroller) reposition(); };
     const onResizeWin = () => { if (open) setOpen(false); };
 
-    const rowY = i => rowTop[i] + 22;   // content coords
+    const rowY = i => rowTop[i] + ROW / 2;   // content coords
     function fades() {
       const t = scroller.scrollTop, max = scroller.scrollHeight - scroller.clientHeight;
       scroller.classList.toggle('ft', t > 1); scroller.classList.toggle('fb', t < max - 1);
@@ -786,8 +792,8 @@ float accentSDF(vec2 p){
         fades();
         const top = scroller.scrollTop;
         for (const el of [...optEls, ...hdrEls]) {
-          const off = el.offsetTop - top, dd = Lo.dir > 0 ? off : sh - off - 44;
-          el.style.setProperty('--d', (90 + Math.max(0, Math.min(10, Math.round(dd / 44))) * 22) + 'ms');
+          const off = el.offsetTop - top, dd = Lo.dir > 0 ? off : sh - off - ROW;
+          el.style.setProperty('--d', (90 + Math.max(0, Math.min(10, Math.round(dd / ROW))) * 22) + 'ms');
         }
         desc.target = 1; ph.target = Lo.PH; pw.target = Lo.PW;
         if (sel >= 0) { head.set(rowY(sel)); tail.set(rowY(sel)); }
@@ -824,8 +830,8 @@ float accentSDF(vec2 p){
     });
     function ensureVisible(i) {
       const t = rowTop[i], top = scroller.scrollTop, h = scroller.clientHeight, pad = 26;
-      if (t < top + pad) scroller.scrollTop = Math.max(0, t - pad - (i === 0 ? 30 : 0));
-      else if (t + 44 > top + h - pad) scroller.scrollTop = t + 44 - h + pad;
+      if (t < top + pad) scroller.scrollTop = Math.max(0, t - pad - (i === 0 ? (XS ? 26 : 30) : 0));
+      else if (t + ROW > top + h - pad) scroller.scrollTop = t + ROW - h + pad;
     }
     let ta = '', taT = 0;
     scroller.addEventListener('keydown', e => {
@@ -944,7 +950,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
   const INK = 'var(--lq-ink, var(--ink, oklch(0.97 0.01 290)))';
   const DIM = 'var(--lq-ink-dim, var(--ink-dim, oklch(0.78 0.02 290)))';
   const CSS = `
-.lq-pb{ position:relative; height:44px; overflow-x:clip; user-select:none; -webkit-user-select:none; font-family:var(--lq-font, inherit); }
+.lq-pb{ position:relative; height:var(--lq-pb-h, 44px); overflow-x:clip; user-select:none; -webkit-user-select:none; font-family:var(--lq-font, inherit); }
 .lq-pb-btn{ position:absolute; inset:0; margin:0; padding:0 18px; border:0; background:none; border-radius:999px; font:inherit; color:${INK};
   cursor:pointer; outline:none; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
 .lq-pb-btn:focus-visible{ box-shadow:0 0 0 2px oklch(var(--al) var(--ac) var(--ah) / .5); }
@@ -952,6 +958,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
   font-size:15px; font-weight:620; letter-spacing:-.01em; white-space:nowrap; pointer-events:none; transition:opacity 160ms ease-out, filter 160ms ease-out; }
 .lq-pb-lab > span, .lq-pb-ink > span{ overflow:hidden; text-overflow:ellipsis; }
 .lq-pb-ink{ color:oklch(0.24 0.06 var(--ah)); }
+.lq-pb.sm .lq-pb-lab, .lq-pb.sm .lq-pb-ink{ font-size:14px; padding:0 12px; }
 .lq-pb .lq-i{ flex:none; width:18px; height:18px; stroke-width:2; }
 .lq-pb-lab.swap, .lq-pb-ink.swap{ opacity:0; filter:blur(4px); }
 .lq-pb-sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
@@ -999,12 +1006,13 @@ float floodSDF(vec2 p){
   Liquid.ui.progressButton = function progressButton(host, opts = {}) {
     injectCSS();
     const o = { label: '', icon: null, accent: Liquid.ACCENTS.lime, onClick: null, onDone: null, ariaLabel: '', ...opts };
-    host.classList.add('lq-pb');
-    host.style.height = '44px';
+    const H = o.size === 'sm' ? 40 : 44;   // sm: 40 px, 14 px label (phone)
+    host.classList.add('lq-pb'); host.classList.toggle('sm', o.size === 'sm');
+    host.style.height = H + 'px'; host.style.setProperty('--lq-pb-h', H + 'px');
     host.innerHTML = `<button type="button" class="lq-pb-btn"><span class="lq-pb-lab"></span><span class="lq-pb-ink" aria-hidden="true"></span><span class="lq-pb-sr" aria-live="polite"></span></button>`;
     const btn = host.firstChild, lab = btn.children[0], inkEl = btn.children[1], sr = btn.children[2];
 
-    const G = { cx: 0, cy: 22, hw: 0, hh: 22, inset: 3.5, xl: 0, xr: 0, w: 0 };
+    const G = { cx: 0, cy: H / 2, hw: 0, hh: H / 2, inset: 3.5, xl: 0, xr: 0, w: 0 };
     const back = new Liquid.Spring(0, { k: 240, zeta: 0.9 });
     const front = new Liquid.Spring(0, { k: 240, zeta: 0.85 });
     const scale = new Liquid.Spring(1, { k: 520, zeta: 0.42, fixed: true });
@@ -1020,7 +1028,7 @@ float floodSDF(vec2 p){
       }
     });
     surf.setAccent(resolveAccent(o.accent));
-    edgeMask(surf.canvas, surf.bleed, 1 + 22, 22, 23.5);
+    edgeMask(surf.canvas, surf.bleed, 1 + H / 2, H / 2, H / 2 + 1.5);
 
     function renderLabel() {
       const html = (o.icon ? Liquid.icon(o.icon) : '') + `<span>${esc(label)}</span>`;
@@ -1046,7 +1054,7 @@ float floodSDF(vec2 p){
       surf.draw();
       // dark label copy clipped to the liquid
       if (vis) {
-        const rr = Math.min(hh - G.inset * sy, (xf - xb) / 2), t = G.cy - rr, b = 44 - (G.cy + rr);
+        const rr = Math.min(hh - G.inset * sy, (xf - xb) / 2), t = G.cy - rr, b = H - (G.cy + rr);
         inkEl.style.clipPath = `inset(${t.toFixed(2)}px ${(G.w - xf).toFixed(2)}px ${b.toFixed(2)}px ${xb.toFixed(2)}px round ${Math.max(rr, 0).toFixed(2)}px)`;
         lab.style.webkitMaskImage = lab.style.maskImage = `linear-gradient(90deg,#000 ${xb.toFixed(2)}px,transparent ${xb.toFixed(2)}px,transparent ${xf.toFixed(2)}px,#000 ${xf.toFixed(2)}px)`;
       } else { inkEl.style.clipPath = 'inset(50%)'; lab.style.webkitMaskImage = lab.style.maskImage = 'none'; }
@@ -1857,6 +1865,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
   font-size:13px; font-weight:620; letter-spacing:-.005em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .lq-seg-ink{ position:absolute; inset:0; pointer-events:none; }
 .lq-seg-ink span{ color:oklch(0.24 0.06 var(--ah)); }
+.lq-seg.xs .lq-seg-lab, .lq-seg.xs .lq-seg-ink span{ font-size:12px; padding:0 4px; }
 .lq-seg.dis{ opacity:.45; }
 .lq-seg.dis .lq-seg-opt{ cursor:default; }
 .lq-seg-opt[data-off]{ opacity:.4; cursor:default; }
@@ -1905,8 +1914,8 @@ float accentSDF(vec2 p){ return pillSDF(p); }`;
     const OPTS = o.options.map(x => (typeof x === 'object' ? { ...x } : { value: x, label: String(x) }));
     const N = Math.max(OPTS.length, 1);
     const tabs = o.role === 'tablist';
-    const S = o.size === 'sm' ? { H: 44, bh: 38, pad: 3 } : { H: 48, bh: 48, pad: 4 };
-    host.classList.add('lq-seg');
+    const S = o.size === 'xs' ? { H: 32, bh: 28, pad: 2 } : o.size === 'sm' ? { H: 44, bh: 38, pad: 3 } : { H: 48, bh: 48, pad: 4 };   // xs: 32 px host, 28 px body, 24 px pill, 12 px text (dense phone rows)
+    host.classList.add('lq-seg'); host.classList.toggle('xs', o.size === 'xs');
     host.style.height = S.H + 'px';
     host.style.setProperty('--lq-seg-ph', (S.bh - 2 * S.pad + 4) + 'px');
     host.innerHTML = `<div class="lq-seg-list" role="${tabs ? 'tablist' : 'radiogroup'}"></div><div class="lq-seg-ink" aria-hidden="true"></div>`;
@@ -3039,19 +3048,20 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
   const INK = 'var(--lq-ink, var(--ink, oklch(0.97 0.01 290)))';
   const DIM = 'var(--lq-ink-dim, var(--ink-dim, oklch(0.78 0.02 290)))';
   const CSS = `
-.lq-tg{ position:relative; height:44px; font-family:var(--lq-font, inherit); -webkit-tap-highlight-color:transparent; }
-.lq-tg-btn{ position:relative; display:inline-flex; align-items:center; gap:8px; height:44px; max-width:100%; margin:0; padding:0 8px 0 0; border:0;
+.lq-tg{ position:relative; height:var(--lq-tg-h, 44px); font-family:var(--lq-font, inherit); -webkit-tap-highlight-color:transparent; }
+.lq-tg-btn{ position:relative; display:inline-flex; align-items:center; gap:8px; height:var(--lq-tg-h, 44px); max-width:100%; margin:0; padding:0 8px 0 0; border:0;
   background:none; font:inherit; color:${DIM}; cursor:pointer; text-align:left; border-radius:12px; outline:none; user-select:none; -webkit-user-select:none; }
 .lq-tg-btn.nolab{ padding:0; }
 .lq-tg.first .lq-tg-btn{ display:flex; width:100%; padding:0 0 0 2px; justify-content:space-between; }
 .lq-tg.first .lq-tg-sw{ order:2; }
-.lq-tg-sw{ position:relative; flex:none; height:44px; touch-action:pan-y; }
+.lq-tg-sw{ position:relative; flex:none; height:var(--lq-tg-h, 44px); touch-action:pan-y; }
 .lq-tg-ring{ position:absolute; pointer-events:none; border-radius:999px; opacity:0; transition:opacity 140ms ease-out;
   box-shadow:0 0 0 2px oklch(var(--al) var(--ac) var(--ah) / .45); }
 .lq-tg-btn:focus-visible .lq-tg-ring{ opacity:1; }
 .lq-tg-lab{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:550; line-height:18px;
   transition:color 140ms ease-out; }
 .lq-tg-btn[aria-checked=true] .lq-tg-lab{ color:${INK}; }
+.lq-tg.xs .lq-tg-lab{ font-size:12px; }
 .lq-tg-btn:disabled{ cursor:default; opacity:.45; }`;
   function injectCSS() {
     if (document.getElementById('lq-ui-toggle-css')) return;
@@ -3078,7 +3088,7 @@ float floodSDF(vec2 p){
   vec2 a = vec2(uT.x + uT.w, uT.y), e = vec2(max(uKb.z, a.x), uT.y);
   return max(sdCapsule(p, a, e, uT.w - 2.5), bodySDF(p) + 2.);
 }`;
-  const SIZES = { sm: { TW: 34, HH: 8, R: 8.6, gap: 1.6 }, md: { TW: 46, HH: 11, R: 11.8, gap: 2 } };   // knob just overhangs the track
+  const SIZES = { sm: { TW: 34, HH: 8, R: 8.6, gap: 1.6 }, md: { TW: 46, HH: 11, R: 11.8, gap: 2 }, xs: { TW: 28, HH: 6.5, R: 7, gap: 1.3, H: 32 } };   // xs: 32 px row (dense phone)   // knob just overhangs the track
   const resolveAccent = a => (typeof a === 'string' ? Liquid.ACCENTS[a] : a) || Liquid.ACCENTS.lime;
   const clampN = (x, a, b) => (x > a ? (x < b ? x : b) : a);
 
@@ -3086,14 +3096,14 @@ float floodSDF(vec2 p){
     injectCSS();
     const o = { checked: false, label: '', size: 'sm', labelFirst: false, onChange: null, ariaLabel: '', accent: Liquid.ACCENTS.lime, ...opts };
     const S = SIZES[o.size] || SIZES.sm;
-    const pad = Math.max((44 - S.TW) / 2, S.R - S.HH + 4);
-    const G = { ...S, L: pad, cy: 22, W: S.TW + 2 * pad, x0: pad + S.HH, x1: pad + S.TW - S.HH };
+    const H = S.H || 44, pad = Math.max((H - S.TW) / 2, S.R - S.HH + 4);
+    const G = { ...S, L: pad, cy: H / 2, W: S.TW + 2 * pad, x0: pad + S.HH, x1: pad + S.TW - S.HH };
     let on = !!o.checked, disabled = false, dead = false, ready = false;
     let accent = resolveAccent(o.accent);
     const neutral = () => ({ L: 0.8, C: 0.015, h: accent.h });
 
     host.classList.add('lq-tg'); host.classList.toggle('first', !!o.labelFirst);
-    host.style.height = '44px';
+    host.style.height = H + 'px'; host.style.setProperty('--lq-tg-h', H + 'px'); host.classList.toggle('xs', o.size === 'xs');
     host.innerHTML = `<button type="button" class="lq-tg-btn" role="switch"><span class="lq-tg-sw"><span class="lq-tg-ring"></span></span><span class="lq-tg-lab"></span></button>`;
     const btn = host.firstChild, sw = btn.firstChild, ring = sw.firstChild, lab = btn.lastChild;
     sw.style.width = G.W + 'px';

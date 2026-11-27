@@ -51,7 +51,7 @@ html.f13w .sl>.row-extra{margin-top:2px}
    label beside a control (dropdown, segmented, clip radio): the 8 px flex gap to the control is the right limit, the label side on the left is free: 44 x 44 */
 /* insets are measured from the padding box: the (i) is 18 px with a 1 px border (shell.css), so 16 px + insets */
 .f13w-lab .f13h-i::after{content:'';position:absolute;inset:-6px -15px -6px -15px}
-.sc-group>label .f13h-i::after,.sc-group>.f13h-i::after,.clip-lbl .f13h-i::after{inset:-14px -9px -14px -19px}
+.sc-group>label .f13h-i::after,.sc-group>.f13h-i::after,.clip-lbl .f13h-i::after{inset:-8px -9px -8px -19px}   /* compact: 34 px tall, clear of the 32 px control under the label */
 /* fraction labels (⅛ ¼ …): mono faces lack the glyphs, so use the UI face for those sliders */
 .f13w-frac .lq-sl-num{font-family:var(--lq-font);font-size:15px}
 

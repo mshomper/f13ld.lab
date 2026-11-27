@@ -71,7 +71,7 @@ window.F13UI.viewMenuSelector='#f13ViewHost .f13v>button';
   const handle=document.getElementById('sheetHandle');
   let sheetState='peek';
   const vh=()=>window.innerHeight;
-  const snapH=s=>Math.round(vh()*(s==='full'?0.88:0.45));
+  const snapH=s=>Math.round(vh()*(s==='full'?(UI.fullRatio||0.88):(UI.peekRatio||0.45)));   // F13UI.peekRatio / fullRatio: a tool with a compact sheet sets them (read at call time; keep the shell's --peek in step)
   function setSheet(s,animate){
     sheetState=s;
     if(!animate)pane.classList.add('dragging');
