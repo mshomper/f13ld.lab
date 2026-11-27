@@ -583,6 +583,26 @@ html.f13w .sw-prow .imp-settings{padding:0;border:0}
   /* the section-plane radio (aria-label "Clip plane") fits left of the ◐ view button: no word label, tighter box (its Z used to lie under ◐ view) */
   html.f13w .vw-tools #w-clip{gap:0;padding:0 3px}
   html.f13w .vw-tools #w-clip>.clip-lbl{display:none}
+  html.f13w.f13w-dense .vw-tools #w-clip{height:32px;border:0;border-radius:12px;flex:none}   /* exactly the 32 px row (it was 36 px with a border) */
+  .vw-tools>*{min-width:0}
+  .vw-tools .vw-dyn.show{flex-wrap:nowrap;gap:0 8px;min-width:0;flex:0 1 auto}
+  .vw-tools .vw-grp{flex:0 1 auto;min-width:0}
+  .vw-tools .vw-grp .f13w-dd{flex:0 1 auto;min-width:0}
+  /* the thermal / flow options: one 32 px drawn-icon button at the row's right end, the settings in a popover over the card */
+  .vw-more{display:inline-flex;flex:none;margin-left:auto;width:32px;height:32px;padding:0;align-items:center;justify-content:center;border-radius:999px;border:1px solid var(--hair);background:var(--input);color:var(--ink-dim);cursor:pointer}
+  .vw-more[hidden]{display:none}
+  .vw-more svg{width:16px;height:16px;display:block}
+  .vw-more[aria-expanded=true]{color:var(--ink);border-color:var(--accent)}
+  .vw-pop{position:absolute;left:8px;right:8px;top:calc(100% + 4px);z-index:70;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px;background:var(--card);border:1px solid var(--hair-strong);border-radius:14px;box-shadow:0 10px 28px oklch(0 0 0 / 0.5);visibility:hidden;pointer-events:none;max-height:60dvh;overflow-y:auto}
+  .vw-pop:empty{display:none}
+  .vw-pop.open{visibility:visible;pointer-events:auto}
+  .vw-pop .vw-grp,.vw-pop .stress-norm-toggle-group.show,.vw-pop .flow-anim-group.show{display:flex;align-items:center;gap:8px;min-height:32px;flex-wrap:nowrap}
+  .vw-pop .flow-anim-group.show{flex-direction:column;align-items:stretch;gap:4px;order:2}
+  .vw-pop .flow-anim-group .stress-norm-label{display:none}
+  .vw-pop .stress-norm-label,.vw-pop .vw-l{flex:0 0 78px;display:block}
+  .vw-pop .fa-sl.f13w-inline{flex:none;width:100%;min-width:0;height:32px;padding-right:56px}
+  .vw-pop .f13w-seg,.vw-pop .f13w-dd{flex:0 1 auto;min-width:0}
+  .vw-pop .flow-anim-group .f13w-tg{align-self:flex-start}
   .view-strip .right{display:none}
   /* sheet: slim handle, compact tabs */
   #sheetHandle{flex:0 0 22px;padding-top:7px}
@@ -617,4 +637,7 @@ html.f13w .sw-prow .imp-settings{padding:0;border:0}
   .dock{padding:4px 12px 6px;gap:4px}
   .dock-meta{font-size:11px}
 }
+/* Atlas controls: a long option (the material's name on "Stiffness as") wraps under its label and shrinks with an ellipsis instead of running past the panel */
+html.f13w .at-ctl:has(.f13w-seg){flex-wrap:wrap;min-width:0;max-width:100%}
+html.f13w .at-ctl .f13w-seg{max-width:100%;min-width:0}
 :root{--lab-ic-view:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='8' cy='8' r='5.6'/%3E%3Cpath d='M8 2.4v11.2' stroke-width='0'/%3E%3Cpath d='M8 2.4a5.6 5.6 0 0 1 0 11.2z' fill='black'/%3E%3C/svg%3E")}

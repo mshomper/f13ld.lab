@@ -407,6 +407,11 @@
     UI.revealControl = function(sel, id){
       var t = (sel == null && id != null) ? UI.helpTargets[id] : sel, spec = t && typeof t === 'object' && !t.nodeType ? t.sel : t;
       var els = typeof spec === 'string' ? spec.split(',').map(function(s){ return document.querySelector(s.trim()); }).filter(Boolean) : (spec ? [spec] : []);
+      /* a row the current mode hides (its own display is none, as the viscosity row when the fluid is not Custom): say its note.
+         Opening the fold would only flash the fold body, since the wire lands on the parent of a hidden row. */
+      var nt = (t && typeof t === 'object' && !t.nodeType && t.note) || (id != null && UI.helpTargets[id] && UI.helpTargets[id].note);
+      if(nt && els.length && els.every(function(e){ return e.nodeType === 1 && getComputedStyle(e).display === 'none'; }))
+        return base.call(this, {sel:'#f13-no-such-control', note:nt}, id);
       els.forEach(function(e){
         for(var f = e.closest && e.closest('.fold:not(.open)'); f; f = f.parentElement && f.parentElement.closest('.fold:not(.open)')){
           if(typeof onFoldToggle === 'function') onFoldToggle(f.getAttribute('data-fold'), true);

@@ -115,7 +115,7 @@
   /* ── what the app rebuilds by innerHTML: one observer on the page (a microtask, so before the next paint). The help (i)
         buttons follow every rebuild, also without WebGL; the widgets mount once the wire has (scanFn, set below). ── */
   var scanFn = null;
-  var OVERLAYS = '#compareGrid, #viewToolsDyn, #geomViewRow, #mergedView, #swOverlay, #atOverlay, .imp-overlay, #resTable';
+  var OVERLAYS = '#compareGrid, #viewToolsDyn, #vwPop, #geomViewRow, #mergedView, #swOverlay, #atOverlay, .imp-overlay, #resTable';
   function helpRefresh(){ if (window.F13Help) try { window.F13Help.refresh(); } catch (e) { console.error(e); } }
   new MutationObserver(function(recs){
     var roots = [];
@@ -204,7 +204,18 @@
       /* tile overlays: stress / buckling axis */
       { sel: '.load-axis-toggle', fn: function(g){ return seg({ group: g, btns: g.querySelectorAll('.load-axis-btn'), label: 'Load axis', on: isActive }); } },
       /* thermal / flow row (rebuilt by labViewToolsBuild) */
-      { sel: '.th-toggle', fn: function(g){ return seg({ group: g, btns: g.querySelectorAll('.th-btn'), label: vwl(g), on: isActive, width: true }); } },
+      { sel: '.th-toggle', fn: function(g){
+          /* phone: six flow views plus the section radio do not fit one 32 px row as a segmented, so the view is a dropdown */
+          var vb = g.querySelectorAll('.th-btn');
+          if (vb.length >= 5 && g.closest('#viewToolsDyn') && UI.isPhone && UI.isPhone()){
+            var sel = document.createElement('select'); sel.className = 'lab-vsel'; sel.setAttribute('aria-label', 'Flow view');
+            [].forEach.call(vb, function(b, i){ var o = document.createElement('option'); o.value = String(i); o.textContent = txt(b); o.selected = isActive(b); sel.appendChild(o); });
+            g.before(sel); g.setAttribute('data-native', 'seg');
+            var dm = dd(sel, true);
+            sel.addEventListener('change', function(){ var b = vb[+sel.value]; if (b) b.click(); });
+            return { host: dm.host, destroy: function(){ dm.destroy(); sel.remove(); } };
+          }
+          return seg({ group: g, btns: g.querySelectorAll('.th-btn'), label: vwl(g), on: isActive, width: true }); } },
       /* geometry row and crush header: label + buttons, drawn as one row */
       { sel: '.cp-seg', fn: function(g){
           var turn = g.querySelector('.geom-turn');                       /* Turn again sits after the segmented, not inside it */
@@ -353,7 +364,7 @@
     function clipHost(){
       var host = $('w-clip'); if (!host) return;
       var dyn = $('viewToolsDyn'), g = dyn && dyn.querySelector('.lab-clip');
-      var want = !!g;
+      var want = !!g || !!(dyn && dyn.classList.contains('show') && dyn.getAttribute('data-clip') === '1');   /* the pills move into the radio on the first pass; later passes must not hide it */
       if (g){ var grp = g.closest('.vw-grp'); (grp || g).remove(); }
       host.hidden = !want;
       if (want && UI.onClipChange && typeof LAB_CLIP !== 'undefined') UI.onClipChange(LAB_CLIP.axis);

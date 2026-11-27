@@ -8,7 +8,7 @@
      No web fonts: system-ui and the system mono face (aliased in ui-shell.css). -->
 <link rel="stylesheet" href="lab.css?v=0.35.1-ui2">
 <link rel="stylesheet" href="ui-shell.css?v=0.35.1-ui6">
-<link rel="stylesheet" href="ui-lab.css?v=0.35.1-ui6">
+<link rel="stylesheet" href="ui-lab.css?v=0.35.1-ui7">
 <!-- UI refresh stage 3: liquid widgets (f13ui.css = template widget styles + lab rules) and the shared help drop-in (help.css) -->
 <link rel="stylesheet" href="f13ui.css?v=0.35.1-ui6">
 <link rel="stylesheet" href="help.css?v=0.35.1-ui6">
@@ -156,7 +156,10 @@
           <!-- v0.35.0 — Geometry tab views (31-geom-views.js), shared by every tile -->
           <div class="geom-view-row" id="geomViewRow"></div>
           <div id="w-clip" hidden></div>   <!-- shown only by clipHost (64) when the tab has a section plane; an empty box showed as a stray line on iPhone -->
+          <!-- phone only (53b labViewOptsSync): the thermal / flow settings behind one 32 px button; hidden until a tab has some -->
+          <button type="button" id="vwMore" class="vw-more" hidden aria-label="More view options" aria-haspopup="true" aria-expanded="false" aria-controls="vwPop" title="More view options"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4.5h12M2 11.5h12"/><circle cx="10.5" cy="4.5" r="1.9" fill="var(--card)"/><circle cx="5.5" cy="11.5" r="1.9" fill="var(--card)"/></svg></button>
         </div>
+        <div class="vw-pop" id="vwPop" role="group" aria-label="View options"></div>
       </div>
 
       <!-- ============ COMPARISON AREA ============ -->
@@ -321,7 +324,7 @@
                 <div class="fold-b" id="foldb-flowReadout" hidden>
                   <div class="sc-group col"><label>Flow direction</label><div class="ctl"><div class="seg" data-seg="flowDir"><button type="button" data-v="zz" onclick="onSegClick(this)">Z</button><button type="button" data-v="xx" onclick="onSegClick(this)">X</button><button type="button" data-v="yy" onclick="onSegClick(this)">Y</button><button type="button" data-v="all" onclick="onSegClick(this)">All</button></div></div>
                     <div class="hint help-src">The direction the wall shear rows report. All picks the best one: the most wall at your shear target, or the most permeable direction with no target. No extra solve — all three directions already run for permeability.</div></div>
-                  <div class="sc-group col"><label>Fluid</label><div class="ctl"><div class="seg" data-seg="flowFluid"><button type="button" data-v="water" onclick="onSegClick(this)">Water 37 °C</button><button type="button" data-v="medium" onclick="onSegClick(this)">Culture medium</button><button type="button" data-v="custom" onclick="onSegClick(this)">Custom</button></div></div>
+                  <div class="sc-group col"><label>Fluid</label><div class="ctl"><div class="seg" data-seg="flowFluid"><button type="button" data-v="water" onclick="onSegClick(this)">Water 37 °C</button><button type="button" data-v="medium" title="Culture medium, 10 % serum" onclick="onSegClick(this)">Medium</button><button type="button" data-v="custom" onclick="onSegClick(this)">Custom</button></div></div>
                     <div class="hint help-src">Viscosity only scales the shear; permeability does not depend on it. Water 0.69 mPa·s, culture medium with 10 % serum 0.93 mPa·s, both at 37 °C.</div></div>
                   <div class="sc-group col" id="flowMuRow"><label>Viscosity · mPa·s</label><div class="ctl"><input class="dr-num" type="number" min="0.01" step="0.01" data-k="muCustom" onchange="onFlowNum(this)" aria-label="Custom viscosity in mPa·s"></div>
                     <div class="hint help-src">Dynamic viscosity of your fluid. Water at 20 °C is 1.0.</div></div>
@@ -422,15 +425,15 @@
 <!-- UI refresh stage 2: the template layout (sections, phone sheet) runs once the markup above exists; 53b-lab-shell.js is lab's
      glue (folds, Results table, design switch, shared view tools). Both before 60 (they wrap renderDesignGrid) and 99-init. -->
 <script src="53-layout.js?v=0.35.1-ui6"></script>
-<script src="53b-lab-shell.js?v=0.35.1-ui6"></script>
+<script src="53b-lab-shell.js?v=0.35.1-ui7"></script>
 <!-- Stage 3: the template wire (CONFIG only) waits for the DOM itself. The lab widgets and the help drop-in come after 63 (they wrap the sweep and atlas renders) and before 99-init. -->
 <script src="54-f13ui-wire.js?v=0.35.1-ui6"></script>
 <script src="60-add-design.js?v=0.29.2"></script>
 <script src="61-import-stl.js?v=0.35.1-ui3"></script>
 <script src="62-sweep.js?v=0.35.1-ui3"></script>
 <script src="63-sweep-atlas.js?v=0.34.0"></script>
-<script src="64-lab-widgets.js?v=0.35.1-ui6"></script>
-<script src="65-help.js?v=0.35.1-ui4"></script>
+<script src="64-lab-widgets.js?v=0.35.1-ui7"></script>
+<script src="65-help.js?v=0.35.1-ui7"></script>
 <script src="66-results.js?v=0.35.1-ui4"></script>
 <script src="99-init.js"></script>
 

@@ -102,19 +102,73 @@ function labAnyData(map){
 function labViewToolsBuild(){
   var host = document.getElementById('viewToolsDyn');
   if (!host) return;
-  var mode = VIEW_STATE.mode, h = '';
+  var mode = VIEW_STATE.mode, h = '', clip = false;
+  var oldPop = document.getElementById('vwPop');
+  if (oldPop) [].slice.call(oldPop.querySelectorAll(':scope>.vw-grp')).forEach(function(g){ g.remove(); });   /* last build's phone groups */
   if (mode === 'thermal' && labAnyData(typeof THERMAL_BY_DESIGN !== 'undefined' ? THERMAL_BY_DESIGN : null) && typeof buildThermalControl === 'function'){
     h = buildThermalControl();
-    if (VIEW_STATE.thermalView !== 'kappa' && typeof buildClipPills === 'function') h += '<div class="vw-grp"><span class="vw-l">section</span>' + buildClipPills() + '</div>';
+    if (VIEW_STATE.thermalView !== 'kappa' && typeof buildClipPills === 'function'){ h += '<div class="vw-grp"><span class="vw-l">section</span>' + buildClipPills() + '</div>'; clip = true; }
   } else if (mode === 'flow' && labAnyData(typeof FLOW_BY_DESIGN !== 'undefined' ? FLOW_BY_DESIGN : null) && typeof buildFlowControl === 'function'){
     h = buildFlowControl();
     var fv = VIEW_STATE.flowView;
-    if ((fv === 'particles' || fv === 'speed' || fv === 'shear') && typeof buildClipPills === 'function') h += '<div class="vw-grp"><span class="vw-l">section</span>' + buildClipPills() + '</div>';
+    if ((fv === 'particles' || fv === 'speed' || fv === 'shear') && typeof buildClipPills === 'function'){ h += '<div class="vw-grp"><span class="vw-l">section</span>' + buildClipPills() + '</div>'; clip = true; }
   }
   host.innerHTML = h;
   host.classList.toggle('show', !!h);
+  host.setAttribute('data-clip', clip ? '1' : '0');   /* clipHost (64) shows #w-clip from this, not from whether the pills are still in the row */
   if (h && typeof labUpdateClipPills === 'function') labUpdateClipPills();
+  if (h && labViewOptsPhone()){   /* phone: the second group (thermal gradient axis, flow direction) goes behind the options button */
+    var pop = document.getElementById('vwPop'), gs = host.querySelectorAll(':scope>.vw-grp');
+    for (var i = 1; i < gs.length; i++) if (pop && !gs[i].querySelector('.lab-clip')) pop.appendChild(gs[i]);
+  }
+  labViewOptsSync();
 }
+
+/* ── Phone: thermal / flow settings behind one 32 px button (#vwMore) → popover (#vwPop) ──
+   The main choice (thermal view, flow view) and the section-plane radio stay in the one 32 px row. The rest move into the popover
+   (ids and handlers kept, a comment marker remembers each static element's place for desktop). */
+var LAB_VOPT = { homes: {}, mode: '' };
+function labViewOptsPhone(){ return labShellPhone() || window.innerWidth < 900; }
+function labViewOptsPlace(id, toPop){
+  var el = document.getElementById(id), pop = document.getElementById('vwPop');
+  if (!el || !pop) return;
+  var home = LAB_VOPT.homes[id];
+  if (toPop){
+    if (el.parentNode === pop) return;
+    if (!home){ home = document.createComment(id); el.before(home); LAB_VOPT.homes[id] = home; }
+    pop.appendChild(el);
+  } else if (home && el.parentNode === pop && home.parentNode){
+    home.parentNode.insertBefore(el, home.nextSibling);
+  }
+}
+function labViewOptsClose(){
+  var pop = document.getElementById('vwPop'), btn = document.getElementById('vwMore');
+  if (pop) pop.classList.remove('open');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+function labViewOptsSync(){
+  var pop = document.getElementById('vwPop'), btn = document.getElementById('vwMore'), dyn = document.getElementById('viewToolsDyn');
+  if (!pop || !btn || !dyn) return;
+  var phone = labViewOptsPhone(), mode = VIEW_STATE.mode, tv = (mode === 'thermal' || mode === 'flow'), has = dyn.classList.contains('show');
+  labViewOptsPlace('stressNormToggle', phone && tv && has);
+  labViewOptsPlace('thermalFillerToggle', phone && mode === 'thermal' && has);
+  labViewOptsPlace('flowAnimToggle', phone && mode === 'flow');
+  var any = phone && [].some.call(pop.children, function(c){ return c.getClientRects().length > 0; });
+  btn.hidden = !any;
+  if (!any || LAB_VOPT.mode !== mode) labViewOptsClose();
+  LAB_VOPT.mode = mode;
+}
+(function(){
+  var btn = document.getElementById('vwMore'), pop = document.getElementById('vwPop');
+  if (!btn || !pop) return;
+  btn.addEventListener('click', function(e){
+    e.stopPropagation();
+    var open = !pop.classList.contains('open');
+    pop.classList.toggle('open', open); btn.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', function(e){ if (pop.classList.contains('open') && e.composedPath().indexOf(pop) < 0 && e.composedPath().indexOf(btn) < 0) labViewOptsClose(); });   /* composedPath: a tap that rebuilds the row removes its target before this runs */
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && pop.classList.contains('open')){ labViewOptsClose(); btn.focus(); } });
+})();
 
 /* ── After every grid render ─────────────────────────────── */
 function labShellAfterGrid(){
@@ -201,6 +255,7 @@ function labChromeSync(){
   }
   /* the status chip's words live on its title (the dot has no text) */
   labChromeStatusTitle();
+  try { labViewToolsBuild(); } catch (e) { console.error('[shell]', e); }   /* thermal / flow options: popover on phone, inline on desktop */
 }
 function labChromeStatusTitle(){
   var s = document.getElementById('labStatus'), t = document.getElementById('solverPill');
