@@ -65,6 +65,7 @@ html.f13w .f13w-dd{flex:1 1 120px;min-width:0}
 html.f13w .f13w-dd-c{flex:none}
 html.f13w #w-run{width:100%}
 html.f13w #w-clip{display:flex;align-items:center;gap:8px;height:44px;padding:0 6px 0 10px;background:oklch(0.13 0.012 265 / 0.72);border:1px solid var(--hair);border-radius:14px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+html.f13w.f13w-dense #w-clip{height:36px;border-radius:12px}   /* CONFIG.density:'compact': the clip radio's options are 32 px */
 html.f13w #w-clip>.clip-lbl{margin:0}
 #w-recipe:not(.lq-wsd),#w-run:not(.lq-pb),#w-clip:empty{display:none}
 

@@ -1,4 +1,4 @@
-/* liquid-ui (mshomper/liquid-ui @ 57db3ff) — core + widgets bundle. Do not edit here; edit the kit and rebuild. */
+/* liquid-ui (mshomper/liquid-ui @ e31ef39) — core + widgets bundle. Do not edit here; edit the kit and rebuild. */
 /* ============================================================================
    Liquid UI core — SDF-shaded "liquid" controls for the web.
    One shared WebGL context renders every component into its own 2D canvas.
@@ -1216,7 +1216,8 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
     const base = acc(opts.accent);
     const accOf = i => (O[i] && O[i].accent ? acc(O[i].accent) : base);
     const inside = opts.labels ? opts.labels === 'inside' : O.every(o => String(o.label).length <= 2);
-    const G = md ? { RR: 14.5, TH: 0.7, gap: 2, trackH: 44, slot: 48, fs: 15 } : { RR: 12, TH: 0.7, gap: 2, trackH: 36, slot: 44, fs: 13 };
+    const xs = opts.size === 'xs';   // xs: 32 px options / host, 12 px labels (dense phone rows)
+    const G = md ? { RR: 14.5, TH: 0.7, gap: 2, trackH: 44, slot: 48, fs: 15 } : xs ? { RR: 10, TH: 0.7, gap: 2, trackH: 32, slot: 34, fs: 12 } : { RR: 12, TH: 0.7, gap: 2, trackH: 36, slot: 44, fs: 13 };
     G.R0 = G.RR - G.gap - G.TH;
     const idx = v => (v == null ? -1 : O.findIndex(o => o.value === v));
     let sel = idx(opts.value), disabled = false, ready = false;
@@ -1243,7 +1244,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
       const pad = G.trackH / 2 - G.RR;                 // ring concentric with the track's end cap
       const lw = els.map(b => b.firstChild.offsetWidth);
       if (horiz) {
-        let x = 0; L.H = Math.max(44, G.trackH);
+        let x = 0; L.H = xs ? G.trackH : Math.max(44, G.trackH);
         const cy = L.H / 2;
         L.cs = O.map((_, i) => {
           let cx, w;
@@ -1474,6 +1475,10 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
 .lq-ws.v .lq-ws-tab.lifted .lq-ws-ic{ opacity:0; filter:blur(4px); transform:translateX(10px) scale(.7); }
 .lq-ws-bead{ position:absolute; left:0; top:0; width:22px; height:22px; margin:-11px 0 0 -11px; pointer-events:none; color:oklch(0.25 0.06 var(--ah)); }
 .lq-ws.v .lq-ws-bead{ width:18px; height:18px; margin:-9px 0 0 -9px; }
+.lq-ws.xs .lq-ws-ic{ width:18px; height:18px; margin:-9px 0 0 -9px; }
+.lq-ws.xs .lq-ws-lab{ font-size:12px; }
+.lq-ws.h.xs .lq-ws-bead{ width:18px; height:18px; margin:-9px 0 0 -9px; }
+.lq-ws.h.xs .lq-ws-tab.lifted .lq-ws-ic{ transform:translateY(-9px) scale(.7); }
 .lq-ws-bead span{ position:absolute; inset:0; opacity:0; filter:blur(5px); transform:scale(.6);
   transition: opacity 150ms ease-out, filter 150ms ease-out, transform 150ms cubic-bezier(.3,1.6,.5,1); }
 .lq-ws-bead span.on{ opacity:1; filter:none; transform:scale(1); }
@@ -1496,6 +1501,7 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
     const T = opts.items || [];
     const N = T.length;
     const horiz = opts.orientation !== 'vertical';
+    const xs = horiz && opts.size === 'xs';   // size 'xs' (tab bar only): 56 px instead of 84
     const base = acc(opts.accent);
     const accOf = i => (T[i] && T[i].accent ? acc(T[i].accent) : base);
     let badgeAcc = acc(opts.badgeAccent || 'coral');
@@ -1505,10 +1511,11 @@ Liquid.ui = Liquid.ui || {}; Liquid.uiDemo = Liquid.uiDemo || [];
     const dis = T.map(t => !!t.disabled);   // per-item disabled: dimmed (tab and bead), aria-disabled, but still selectable
 
     const G = horiz
-      ? { M: 2, R: 22, gap: 5, barT: 24, barH: 58, corner: 22, iconOff: 21, labOff: 43, H: 84 }
+      ? (xs ? { M: 2, R: 14, gap: 4, barT: 14, barH: 40, corner: 20, iconOff: 12, labOff: 30, H: 56, bdg: 9 }   // xs: 56 px total with the bead rise, 18 px icon, 12 px label
+             : { M: 2, R: 22, gap: 5, barT: 24, barH: 58, corner: 22, iconOff: 21, labOff: 43, H: 84, bdg: 11 })
       : { bw: 44, R: 14, gap: 4, slot: 52, pad: 6, corner: 18, iconX: 20, W: 58 };
     G.cs = []; G.slotW = 0;
-    host.classList.add('lq-ws', horiz ? 'h' : 'v');
+    host.classList.add('lq-ws', horiz ? 'h' : 'v'); host.classList.toggle('xs', xs);
     if (horiz) host.style.height = G.H + 'px';
     else { host.style.width = G.W + 'px'; host.style.height = (N * G.slot + 2 * G.pad) + 'px'; }
 
@@ -1651,7 +1658,7 @@ void accentAt(vec2 p, inout vec3 A, inout vec3 AD){   // each pixel takes the co
       const d = Math.SQRT1_2, red = Liquid.state.reduce;
       const bc = [bx + (G.R * sc) * 0.72, by - (G.R * sc) * 0.72];
       B.forEach((b, i) => {
-        const ic = horiz ? [G.cs[i] + 11, G.barT + G.iconOff - 10] : [G.iconX + 10, G.cs[i] - 10];
+        const ic = horiz ? [G.cs[i] + G.bdg, G.barT + G.iconOff - G.bdg + 1] : [G.iconX + 10, G.cs[i] - 10];
         // a badge rides onto the bead as the bead arrives over its item
         let u = Math.min(Math.max(1 - Math.abs(head.x - G.cs[i]) / (0.5 * G.slotW), 0), 1);
         u = u * u * (3 - 2 * u);

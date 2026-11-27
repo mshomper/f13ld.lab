@@ -7,11 +7,11 @@
 <!-- UI refresh stage 2: lab.css (the app's own rules, tokens remapped in ui-shell.css) · ui-shell.css (template tokens + shell) · ui-lab.css (lab's layout rules).
      No web fonts: system-ui and the system mono face (aliased in ui-shell.css). -->
 <link rel="stylesheet" href="lab.css?v=0.35.1-ui2">
-<link rel="stylesheet" href="ui-shell.css?v=0.35.1-ui5">
-<link rel="stylesheet" href="ui-lab.css?v=0.35.1-ui5">
+<link rel="stylesheet" href="ui-shell.css?v=0.35.1-ui6">
+<link rel="stylesheet" href="ui-lab.css?v=0.35.1-ui6">
 <!-- UI refresh stage 3: liquid widgets (f13ui.css = template widget styles + lab rules) and the shared help drop-in (help.css) -->
-<link rel="stylesheet" href="f13ui.css?v=0.35.1-ui5">
-<link rel="stylesheet" href="help.css?v=0.35.1-ui5">
+<link rel="stylesheet" href="f13ui.css?v=0.35.1-ui6">
+<link rel="stylesheet" href="help.css?v=0.35.1-ui6">
 </head>
 <body>
 <!-- v0.24.0 — startup splash: the wordmark resolves from scrambled glyphs
@@ -374,7 +374,7 @@
 <!-- ===== JS load order: lower numbers load first ===== -->
 <script src="00-mock-data.js"></script>
 <!-- UI refresh stage 3: the liquid-ui kit (liquid-ui main 57db3ff, web/dist/liquid-ui.js, byte-exact; never edit here). No dependencies, no DOM work at load. -->
-<script src="03-liquid-ui.js?v=0.35.1-ui5"></script>
+<script src="03-liquid-ui.js?v=0.35.1-ui6"></script>
 <script src="10-hardware.js"></script>
 <script src="11-webgpu-device.js"></script>
 <script src="12-fft-plan.js"></script>
@@ -421,15 +421,15 @@
 <script src="52-status.js?v=0.35.1-ui2"></script>
 <!-- UI refresh stage 2: the template layout (sections, phone sheet) runs once the markup above exists; 53b-lab-shell.js is lab's
      glue (folds, Results table, design switch, shared view tools). Both before 60 (they wrap renderDesignGrid) and 99-init. -->
-<script src="53-layout.js?v=0.35.1-ui5"></script>
-<script src="53b-lab-shell.js?v=0.35.1-ui5"></script>
+<script src="53-layout.js?v=0.35.1-ui6"></script>
+<script src="53b-lab-shell.js?v=0.35.1-ui6"></script>
 <!-- Stage 3: the template wire (CONFIG only) waits for the DOM itself. The lab widgets and the help drop-in come after 63 (they wrap the sweep and atlas renders) and before 99-init. -->
-<script src="54-f13ui-wire.js?v=0.35.1-ui5"></script>
+<script src="54-f13ui-wire.js?v=0.35.1-ui6"></script>
 <script src="60-add-design.js?v=0.29.2"></script>
 <script src="61-import-stl.js?v=0.35.1-ui3"></script>
 <script src="62-sweep.js?v=0.35.1-ui3"></script>
 <script src="63-sweep-atlas.js?v=0.34.0"></script>
-<script src="64-lab-widgets.js?v=0.35.1-ui5"></script>
+<script src="64-lab-widgets.js?v=0.35.1-ui6"></script>
 <script src="65-help.js?v=0.35.1-ui4"></script>
 <script src="66-results.js?v=0.35.1-ui4"></script>
 <script src="99-init.js"></script>

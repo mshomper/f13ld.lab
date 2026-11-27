@@ -37,7 +37,7 @@
   --hdr-h:48px;
   --pane-w:clamp(340px,26vw,400px);
   --rail-w:56px;
-  --peek:36dvh;   /* compact phone sheet; 53b sets F13UI.peekRatio to match */
+  --peek:34dvh;  /* compact phone sheet; 53b sets F13UI.peekRatio to match */
   --full:88dvh;
   --ease:cubic-bezier(.4,0,.2,1);
 

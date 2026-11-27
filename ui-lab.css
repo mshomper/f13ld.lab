@@ -580,6 +580,9 @@ html.f13w .sw-prow .imp-settings{padding:0;border:0}
   .vw-bar .f13h-i{display:none}
   .vw-tools .stress-norm-label,.vw-tools .vw-l,.vw-tools .lab-segl,.vw-tools .lab-segrow>.lab-segl{display:none}
   .vw-tools .lbl{display:none}
+  /* the section-plane radio (aria-label "Clip plane") fits left of the ◐ view button: no word label, tighter box (its Z used to lie under ◐ view) */
+  html.f13w .vw-tools #w-clip{gap:0;padding:0 3px}
+  html.f13w .vw-tools #w-clip>.clip-lbl{display:none}
   .view-strip .right{display:none}
   /* sheet: slim handle, compact tabs */
   #sheetHandle{flex:0 0 22px;padding-top:7px}

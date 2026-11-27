@@ -152,7 +152,7 @@ function labShellResized(){
      · import / sweep / atlas / PDF / Mesh go into one ⋯ overflow menu (#hdrMore, #hdrMenu) in the header,
      · the A / B / C switch (#designSw) and the status chip (#labStatus, drawn as a dot) sit in the header's left group. */
 var LAB_CHROME = { phone: null, marks: [], menuIds: ['importStlBtn', 'sweepBtn', 'atlasBtn', 'exportPdfBtn', 'meshHandoffBtn'] };
-var LAB_CHROME_PEEK = 0.36;
+var LAB_CHROME_PEEK = 0.34;   // the 56 px tab bar (was 84) gives the sheet 28 px back, so the peek can be shorter
 function labChromeBuildMenu(){
   var right = document.querySelector('.f13ld-header .fh-right');
   if (!right || document.getElementById('hdrMore')) return;

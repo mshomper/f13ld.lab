@@ -90,8 +90,9 @@
   Liquid.setTheme({fillTop:tok('--card',{L:0.215,C:0.016,h:265}),fillBot:tok('--panel',{L:0.17,C:0.014,h:265})});
   const ACC=tok('--accent',Liquid.ACCENTS.lime);
   const DEN=CONFIG.density==='compact';                              // CONFIG.density:'compact': every F13UI.mount.* and CONFIG widget defaults to the compact sizes (dropdown / segmented / toggle 'xs', run button 'sm'); a per-widget size still wins
-  const SZ={seg:DEN?'xs':undefined,dd:DEN?'xs':undefined,tg:DEN?'xs':'sm',run:DEN?'sm':undefined};
+  const SZ={seg:DEN?'xs':undefined,dd:DEN?'xs':undefined,tg:DEN?'xs':'sm',run:DEN?'sm':undefined,bar:DEN?'xs':undefined,clip:DEN?'xs':'sm'};   // bar: phone tab bar 56 px (84 default); clip: radio options 32 px (44)
   F13UI.density=DEN?'compact':'default';
+  if(DEN)document.documentElement.classList.add('f13w-dense');       // CSS hook: html.f13w-dense #w-clip is 36 px (44 default)
   document.documentElement.classList.add('f13w');
 
   // ---- bridge helpers ----
@@ -329,7 +330,7 @@
     document.documentElement.classList.add('f13w-clip');                  // hides the native #clipOverlay pills
     const AX=['x','y','z'];
     W.clip=Liquid.ui.radio(host.lastChild,{options:AX.map((a,i)=>({value:i+1,label:a.toUpperCase(),accent:Liquid.ACCENTS['axis'+a.toUpperCase()]})),
-      value:c.get()||null,allowNone:true,orientation:'horizontal',size:'sm',ariaLabel:'Clip plane',
+      value:c.get()||null,allowNone:true,orientation:'horizontal',size:c.size||SZ.clip,ariaLabel:'Clip plane',
       onChange:v=>c.set(v||0)});
     hook('onClipChange',n=>W.clip.set(n||null));
   }
@@ -397,7 +398,7 @@
   });
   W.rail=Liquid.ui.sections(mk($('sectionsRail'),'f13w-rail'),{items:CONFIG.sections,value:UI.active,orientation:'vertical',
     accent:ACC,ariaLabel:'Sections',onChange:id=>UI.showSection(id)});
-  W.bar=Liquid.ui.sections(mk($('sectionsBar'),'f13w-bar'),{items:CONFIG.sections,value:UI.active,orientation:'horizontal',
+  W.bar=Liquid.ui.sections(mk($('sectionsBar'),'f13w-bar'),{items:CONFIG.sections,value:UI.active,orientation:'horizontal',size:SZ.bar,
     accent:ACC,ariaLabel:'Sections',onChange:id=>UI.showSection(id)});
   // per-section disabled: dimmed, still opens (the section shows its own note). CONFIG.sections[i].disabled for the initial state.
   UI.setSectionDisabled=(id,on)=>{W.rail.setItemState(id,{disabled:!!on});W.bar.setItemState(id,{disabled:!!on});};
